@@ -3,8 +3,10 @@ import { deleteRecord, loadRecords, recordSignature, type SavedPayrollRecord } f
 import { amountOrMissing } from './storage/payrollValidation';
 import { calculateAnnualForecast, type MonthEstimate, type AnnualForecast } from './forecast/annualForecast';
 import { fiscalYearOfTargetMonth } from './forecast/payrollCalendar';
+import { calendarYearOfPaymentDate, calculateCalendarForecast, type CalendarForecast } from './forecast/calendarForecast';
 
 type Job = 'main' | 'side';
+type PeriodMode = 'fiscal' | 'calendar';
 type SummaryKey = 'gross' | 'net' | 'incomeTax' | 'residentTax' | 'socialInsurance' | 'transportation' | 'reimbursedExpenses' | 'workDays';
 
 function required<T extends HTMLElement>(selector: string): T {
@@ -13,47 +15,77 @@ function required<T extends HTMLElement>(selector: string): T {
   return node;
 }
 const yearSelect = required<HTMLSelectElement>('#fiscal-year');
+const fiscalModeButton = required<HTMLButtonElement>('#mode-fiscal');
+const calendarModeButton = required<HTMLButtonElement>('#mode-calendar');
+const yearLabel = required<HTMLElement>('#year-label');
+const forecastLabel = required<HTMLElement>('#forecast-toggle-label');
 const periodLabel = required<HTMLElement>('#fiscal-period');
 const bonusToggle = required<HTMLInputElement>('#include-bonus');
 const forecastToggle = required<HTMLInputElement>('#include-forecast');
 const forecastPanel = required<HTMLElement>('#forecast-panel');
 const forecastStatus = required<HTMLElement>('#forecast-status');
 const forecastDetails = required<HTMLElement>('#forecast-details');
+const forecastHeading = required<HTMLElement>('#forecast-heading');
 const yen = (amount: number): string => `${amount.toLocaleString('ja-JP')}円`;
-// 選択年度はURLで引き継ぐ。ブラウザの戻る・再読み込み・編集後の戻りにも対応する。
-function fiscalYearFromUrl(): number | null {
-  const raw = new URLSearchParams(window.location.search).get('fy');
+// 編集ページと相互に引き継ぐ。旧リンク ?fy=2025 にも後方互換性を残す。
+const searchParams = new URLSearchParams(window.location.search);
+let periodMode: PeriodMode = searchParams.get('mode') === 'calendar' ? 'calendar' : 'fiscal';
+function selectedYearFromUrl(): number | null {
+  const raw = searchParams.get('year') ?? searchParams.get('fy');
   if (!raw || !/^\d{4}$/.test(raw)) return null;
   const year = Number(raw);
   return year >= 1900 && year <= 2200 ? year : null;
 }
-const initialFiscalYear = fiscalYearFromUrl();
+const initialYear = selectedYearFromUrl();
 function currentFiscalYear(): number {
   const today = new Date();
   return today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+}
+function currentPeriodYear(): number {
+  return periodMode === 'fiscal' ? currentFiscalYear() : new Date().getFullYear();
+}
+function persistPeriodSelection(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set('mode', periodMode);
+  url.searchParams.set('year', yearSelect.value);
+  url.searchParams.delete('fy');
+  window.history.replaceState(window.history.state, '', url);
+}
+function editPeriodQuery(): string {
+  return `mode=${encodeURIComponent(periodMode)}&year=${encodeURIComponent(yearSelect.value)}`;
 }
 let saved: SavedPayrollRecord[] = [];
 let pdfUrls: string[] = [];
 const deletingRecordIds = new Set<number>();
 
 function updateYearOptions(): void {
-  const currentYear = currentFiscalYear();
+  const currentYear = currentPeriodYear();
   const years = new Set<number>([currentYear, currentYear + 1]);
   for (const item of saved) {
-    const year = fiscalYearOfTargetMonth(item.form.targetMonth);
+    const year = periodMode === 'fiscal'
+      ? fiscalYearOfTargetMonth(item.form.targetMonth)
+      : calendarYearOfPaymentDate(item.form.paymentDate);
     if (year !== null) years.add(year);
   }
-  const active = yearSelect.value === '' ? (initialFiscalYear ?? currentYear) : Number(yearSelect.value);
-  // 編集後にその年度の最後の明細が移動しても、選択中の年度を勝手に変えない。
+  const active = yearSelect.value === '' ? (initialYear ?? currentYear) : Number(yearSelect.value);
   years.add(active);
   yearSelect.replaceChildren();
   [...years].sort((a, b) => b - a).forEach(year => {
     const option = document.createElement('option');
     option.value = String(year);
-    option.textContent = `${year}年度`;
+    option.textContent = periodMode === 'fiscal' ? `${year}年度` : `${year}年分`;
     yearSelect.append(option);
   });
-  yearSelect.value = String(years.has(active) ? active : currentYear);
+  yearSelect.value = String(active);
+  yearLabel.textContent = periodMode === 'fiscal' ? '対象年度' : '対象年';
+  yearSelect.setAttribute('aria-label', yearLabel.textContent);
+  forecastLabel.textContent = periodMode === 'fiscal' ? '3月まで見込み' : '12月まで見込み';
+  forecastToggle.title = periodMode === 'fiscal'
+    ? '対象月基準で3月までの未登録給与と本業賞与を概算します。'
+    : '支給日基準で、最後の実績支給月の翌月から12月までを概算します。';
+  forecastToggle.closest('label')?.setAttribute('title', forecastToggle.title);
+  fiscalModeButton.setAttribute('aria-pressed', String(periodMode === 'fiscal'));
+  calendarModeButton.setAttribute('aria-pressed', String(periodMode === 'calendar'));
 }
 interface Summary {
   sums: Record<SummaryKey, number>;
@@ -112,7 +144,7 @@ function withEstimates(actual: Summary, estimates: readonly MonthEstimate[]): Su
   }
   return { sums, observed, partial };
 }
-function renderForecastExplanation(plan: AnnualForecast): void {
+function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): void {
   forecastPanel.hidden = false;
   forecastDetails.replaceChildren();
   const salaryCount = plan.jobs.main.estimates.length + plan.jobs.side.estimates.length;
@@ -121,7 +153,9 @@ function renderForecastExplanation(plan: AnnualForecast): void {
   forecastStatus.textContent = estimatedCount ? `実績＋給与${salaryCount}か月分・本業賞与${bonusCount}回分の見込み` : '実績のみ（見込み対象なし）';
   const explanation = document.createElement('p');
   explanation.className = 'forecast-note';
-  explanation.textContent = '月給は当月以降の未登録月を、直近最大3件の中央値で推計。立替経費は翌月以降に繰り越しません。本業賞与は8月・翌2月の未登録分のみ、月給から交通費と経費を除いた額を参考に加算します。副業賞与の見込みは加算しません。';
+  explanation.textContent = periodMode === 'fiscal'
+    ? '通常給与は未登録対象月を直近最大3件の中央値で推計。立替経費は翌月以降に繰り越しません。本業の未登録賞与（8月・翌2月）は最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含みません。副業賞与の見込みは加算しません。'
+    : '通常給与は、勤務先ごとに最後の実績支給月の翌月から12月までを直近最大3件の中央値で推計します。過去の未登録給与月は補完しません。立替経費・年末調整の還付や追徴を繰り越しません。本業の未登録賞与（2月・8月）は過去月も含め、最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含めず、副業賞与の見込みは加算しません。';
   forecastDetails.append(explanation);
   if (estimatedCount) {
     const deltaLine = document.createElement('p');
@@ -151,7 +185,7 @@ function renderForecastExplanation(plan: AnnualForecast): void {
       const total = item.estimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
       const sample = item.sampleMonths.map(month => month.replace('-', '/')).join('・');
       const months = item.pendingMonths.map(month => month.replace('-', '/')).join('、');
-      detail.textContent = `${item.estimates.length}か月分の推計（${months}）｜月額総支給 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜年度への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
+      detail.textContent = `${item.estimates.length}か月分の推計（${months}）｜月額総支給 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
     }
     line.append(title, detail);
     forecastDetails.append(line);
@@ -164,11 +198,13 @@ function renderForecastExplanation(plan: AnnualForecast): void {
       if (item.bonusReason) {
         bonusDetail.textContent = item.bonusReason;
       } else if (!item.bonusEstimates.length) {
-        bonusDetail.textContent = '8月・2月とも登録済み、または対象外です。';
+        bonusDetail.textContent = '8月・2月の見込み対象はありません（登録済み、または対象期間外）。';
       } else {
         const months = item.bonusEstimates.map(e => e.month.replace('-', '/')).join('、');
         const total = item.bonusEstimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
-        bonusDetail.textContent = `${item.bonusEstimates.length}回（${months}）｜賞与額面の見込み ${yen(total)}｜交通費を除いた月給を参考`;
+        const first = item.bonusEstimates[0];
+        const sample = item.bonusSampleMonth ? item.bonusSampleMonth.replace('-', '/') : '不明';
+        bonusDetail.textContent = `${item.bonusEstimates.length}回（${months}）｜額面合計 ${yen(total)}｜1回あたり額面 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}・手取り ${first.values.net === null ? '算出不可' : yen(first.values.net)}｜参照：最新の通常給与 ${sample}（交通費・経費除外）`;
       }
       bonusLine.append(bonusTitle, bonusDetail);
       forecastDetails.append(bonusLine);
@@ -176,7 +212,7 @@ function renderForecastExplanation(plan: AnnualForecast): void {
   }
   const caution = document.createElement('p');
   caution.className = 'forecast-caution';
-  caution.textContent = '賞与見込みの手取り・所得税・社会保険料は直近の月給を使った概算で、実際の賞与明細と異なる場合があります。業績手当は将来分に加算しません。登録済みの副業賞与は「賞与を含む」ON時に実績として集計します。※は未入力のある部分集計。PDFとIndexedDBは変更しません。';
+  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。登録済みの副業賞与は「賞与を含む」ON時に実績として集計します。※は未入力のある部分集計。保存データは変更しません。';
   forecastDetails.append(caution);
 }
 function updateSummary(prefix: 'total' | Job, result: Summary, count: number): void {
@@ -253,7 +289,7 @@ function renderList(job: Job, records: SavedPayrollRecord[]): void {
     download.title = '原本PDFをダウンロード';
     const edit = document.createElement('a');
     edit.className = 'btn btn--icon';
-    edit.href = `./edit/index.html?id=${encodeURIComponent(String(record.id))}&fy=${encodeURIComponent(yearSelect.value)}`;
+    edit.href = `./edit/index.html?id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}`;
     edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg>';
     edit.setAttribute('aria-label', `${record.fileName} の保存情報を編集`);
     edit.title = '保存情報を確認・編集';
@@ -289,17 +325,30 @@ function renderList(job: Job, records: SavedPayrollRecord[]): void {
 }
 function render(): void {
   const year = Number(yearSelect.value);
-  periodLabel.textContent = `${year}年4月〜${year + 1}年3月 ・ 給与対象年月基準 / ※は未入力のある部分集計`;
-  const yearRecords = saved.filter(item => fiscalYearOfTargetMonth(item.form.targetMonth) === year &&
+  const isCalendar = periodMode === 'calendar';
+  periodLabel.textContent = isCalendar
+    ? `${year}年1月〜12月 ・ 支給日基準 / ※は未入力のある部分集計`
+    : `${year}年4月〜${year + 1}年3月 ・ 給与対象年月基準 / ※は未入力のある部分集計`;
+  const yearRecords = saved.filter(item =>
+    (isCalendar ? calendarYearOfPaymentDate(item.form.paymentDate) : fiscalYearOfTargetMonth(item.form.targetMonth)) === year &&
     (bonusToggle.checked || item.form.kind !== 'bonus'));
   const main = yearRecords.filter(item => item.form.job === 'main');
   const side = yearRecords.filter(item => item.form.job === 'side');
-  const forecast = forecastToggle.checked ? calculateAnnualForecast(saved, year, new Date(), bonusToggle.checked) : null;
+  const forecast = forecastToggle.checked
+    ? isCalendar ? calculateCalendarForecast(saved, year, new Date(), bonusToggle.checked)
+      : calculateAnnualForecast(saved, year, new Date(), bonusToggle.checked)
+    : null;
   const projected = forecast?.estimates ?? [];
   periodLabel.textContent += forecastToggle.checked ? ' / 見込みは画面表示のみ' : '';
   forecastPanel.hidden = !forecast;
   forecastStatus.hidden = !forecast;
+  forecastHeading.textContent = isCalendar ? '12月までの見込み計算根拠' : '3月までの見込み計算根拠';
   if (forecast) renderForecastExplanation(forecast);
+  for (const element of Array.from(document.querySelectorAll<HTMLElement>('[data-amount-period]'))) {
+    element.textContent = isCalendar ? '年間総支給額' : '年度総支給額';
+  }
+  const daysLabel = document.getElementById('side-days-label');
+  if (daysLabel) daysLabel.textContent = isCalendar ? '出勤日数（暦年累計）' : '出勤日数（年度累計）';
   updateSummary('total', withEstimates(summary(yearRecords), projected), yearRecords.length + projected.length);
   const mainProjected = projected.filter(item => item.job === 'main');
   const sideProjected = projected.filter(item => item.job === 'side');
@@ -309,13 +358,16 @@ function render(): void {
   renderList('main', main);
   renderList('side', side);
 }
-yearSelect.addEventListener('change', () => {
-  // 画面内で選択した年度をURLに残し、別ページから戻った際も復元可能にする。
-  const url = new URL(window.location.href);
-  url.searchParams.set('fy', yearSelect.value);
-  window.history.replaceState(window.history.state, '', url);
+function changeMode(mode: PeriodMode): void {
+  if (periodMode === mode) return;
+  periodMode = mode;
+  updateYearOptions();
+  persistPeriodSelection();
   render();
-});
+}
+fiscalModeButton.addEventListener('click', () => changeMode('fiscal'));
+calendarModeButton.addEventListener('click', () => changeMode('calendar'));
+yearSelect.addEventListener('change', () => { persistPeriodSelection(); render(); });
 bonusToggle.addEventListener('change', render);
 forecastToggle.addEventListener('change', render);
 window.addEventListener('pagehide', revokePdfUrls);

@@ -56,19 +56,29 @@
             </label>
             <label class="check-control" for="include-forecast" title="未登録の給与と本業8月・2月賞与を概算します。副業の将来賞与は加算せず、保存データは変更しません。">
               <input id="include-forecast" type="checkbox" disabled>
-              <span>3月まで見込み</span>
+              <span id="forecast-toggle-label">3月まで見込み</span>
             </label>
-            <div class="select-field">
-              <label for="fiscal-year">対象年度</label>
-              <select class="select" id="fiscal-year" aria-label="対象年度"></select>
-            </div>
+
           </div>
         </div>
 
+        <div class="period-switcher" aria-label="集計期間の切り替え">
+          <div class="period-switcher__group">
+            <span class="period-switcher__caption">集計期間</span>
+            <div class="period-switcher__options" role="group" aria-label="集計基準">
+              <button type="button" id="mode-fiscal" class="period-switcher__option" aria-pressed="true">年度（4〜3月）</button>
+              <button type="button" id="mode-calendar" class="period-switcher__option" aria-pressed="false">暦年（1〜12月）</button>
+            </div>
+          </div>
+          <div class="select-field">
+            <label for="fiscal-year" id="year-label">対象年度</label>
+            <select class="select" id="fiscal-year" aria-label="対象年度"></select>
+          </div>
+        </div>
         <p class="forecast-status" id="forecast-status" role="status" hidden></p>
         <div class="total-card__hero">
           <div>
-            <p class="amount-label">年度総支給額 <span class="amount-label__hint">本業＋副業</span></p>
+            <p class="amount-label"><span data-amount-period>年度総支給額</span> <span class="amount-label__hint">本業＋副業</span></p>
             <p class="amount amount--hero" id="total-gross">--</p>
           </div>
           <div class="hero-net">
@@ -84,8 +94,8 @@
           <div class="metric"><span class="metric__label">交通費 <span class="metric__hint">支給内訳</span></span><strong class="metric__value" id="total-transportation">--</strong></div>
           <div class="metric"><span class="metric__label">立替経費 <span class="metric__hint">交通費と併記の分</span></span><strong class="metric__value" id="total-reimbursed-expenses">--</strong></div>
         </div>
-        <section class="forecast-panel" id="forecast-panel" aria-label="年度見込みの計算根拠" hidden>
-          <h3>見込みの計算根拠</h3>
+        <section class="forecast-panel" id="forecast-panel" aria-label="見込みの計算根拠" hidden>
+          <h3 id="forecast-heading">3月までの見込み計算根拠</h3>
           <div id="forecast-details"></div>
         </section>
       </section>
@@ -96,7 +106,7 @@
             <div class="job-card__title-group"><span class="job-dot job-dot--main"></span><h2 id="main-heading">本業収入</h2></div>
             <span class="tag">MAIN JOB</span>
           </div>
-          <p class="amount-label">年度総支給額</p>
+          <p class="amount-label"><span data-amount-period>年度総支給額</span></p>
           <p class="amount amount--job" id="main-gross">--</p>
           <dl class="details-list">
             <div><dt>所得税（年調含む）</dt><dd id="main-income-tax">--</dd></div>
@@ -113,7 +123,7 @@
             <div class="job-card__title-group"><span class="job-dot job-dot--side"></span><h2 id="side-heading">副業収入</h2></div>
             <span class="tag">SIDE JOB</span>
           </div>
-          <p class="amount-label">年度総支給額</p>
+          <p class="amount-label"><span data-amount-period>年度総支給額</span></p>
           <p class="amount amount--job" id="side-gross">--</p>
           <dl class="details-list">
             <div><dt>所得税（年調含む）</dt><dd id="side-income-tax">--</dd></div>
@@ -122,7 +132,7 @@
             <div><dt>社会保険料</dt><dd id="side-social-insurance">--</dd></div>
           </dl>
           <div class="job-card__footer"><span>手取り</span><strong id="side-net">--</strong></div>
-          <div class="job-card__supplement"><span>出勤日数（年度累計）</span><strong id="side-days">--</strong></div>
+          <div class="job-card__supplement"><span id="side-days-label">出勤日数（年度累計）</span><strong id="side-days">--</strong></div>
         </section>
       </div>
 

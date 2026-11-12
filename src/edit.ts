@@ -16,11 +16,14 @@ const saveButton = $<HTMLButtonElement>('edit-save');
 const deleteButton = $<HTMLButtonElement>('edit-delete');
 const confirmDiff = $<HTMLInputElement>('confirm-diff');
 const state = $<HTMLElement>('raw-state');
-// ホームから渡された年度を「戻る」リンクと編集保存後の遷移先に引き継ぐ。
-const originFiscalYear = new URLSearchParams(window.location.search).get('fy');
-const homeHref = originFiscalYear && /^\d{4}$/.test(originFiscalYear) &&
-  Number(originFiscalYear) >= 1900 && Number(originFiscalYear) <= 2200
-  ? `../index.html?fy=${encodeURIComponent(originFiscalYear)}`
+// ホームで選択した集計モードと年を、編集・削除後の戻り先にも引き継ぐ。
+// 旧形式の ?fy=2025 もそのまま利用できる。
+const originParams = new URLSearchParams(window.location.search);
+const originMode = originParams.get('mode') === 'calendar' ? 'calendar' : 'fiscal';
+const originYear = originParams.get('year') ?? originParams.get('fy');
+const homeHref = originYear && /^\d{4}$/.test(originYear) &&
+  Number(originYear) >= 1900 && Number(originYear) <= 2200
+  ? `../index.html?mode=${originMode}&year=${encodeURIComponent(originYear)}`
   : '../index.html';
 document.querySelectorAll<HTMLAnchorElement>('a[href="../index.html"]').forEach(link => {
   link.setAttribute('href', homeHref);

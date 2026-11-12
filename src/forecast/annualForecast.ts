@@ -17,7 +17,7 @@ const SOCIAL_KEYS = [
 
 export interface ForecastSource { form: Record<string, string> }
 export interface MonthEstimate {
-  /** 給与対象年月 (YYYY-MM)。賞与は支給月と同じ年月。 */
+  /** 推計対象年月 (YYYY-MM)。年度見込みは給与対象月、暦年見込みは支給月。 */
   month: string;
   job: ForecastJob;
   kind: ForecastKind;
@@ -34,6 +34,8 @@ export interface JobForecast {
   /** 本業だけ。既存賞与がある8月・2月は作らない。 */
   bonusEstimates: MonthEstimate[];
   pendingBonusMonths: string[];
+  /** 賞与見込みの参照元：直近登録済み通常給与の支給年月。 */
+  bonusSampleMonth?: string;
   bonusReason?: string;
   reason?: string;
 }
@@ -61,7 +63,7 @@ function fieldValue(form: Record<string, string>, key: ForecastKey): { value: nu
   }
   return { value: amountOrMissing(form[key]), incomplete: false };
 }
-function estimateFromSamples(job: ForecastJob, month: string, samples: ForecastSource[]): MonthEstimate {
+export function estimateFromSamples(job: ForecastJob, month: string, samples: ForecastSource[]): MonthEstimate {
   const values = {} as Record<ForecastKey, number | null>;
   const incomplete: Partial<Record<ForecastKey, boolean>> = {};
   for (const key of FORECAST_KEYS) {
@@ -87,8 +89,9 @@ function estimateFromSamples(job: ForecastJob, month: string, samples: ForecastS
 /**
  * 賞与額は本業の通常給与の「交通費・立替経費を除いた月額」をベースにする。
  * 保存フォームには基本給・固定残業手当が個別に残らないため、
- * 課税支給額と非課税支給額が整合するなら課税額を採用し、
- * そうでなければ総支給額-交通費-立替経費を採用する。手取りも同額を除く。
+ * 給与明細の課税支給額（PDF解析時に基本給＋固定残業代で検算）を参照する。
+ * 交通費・立替経費が分かる場合は総支給からその合計を除外して照合し、
+ * 手取りからも同額を除外する。
  * 交通費が記載されない月は、総支給額=課税支給額なら交通費ゼロとみなす。
  * どうしても金額が識別できない場合は月給そのものを参考値として採用し、
  * 未確定フラグを付ける（賞与が確実であると断言しない）。
@@ -119,30 +122,38 @@ function transportExcludedSalary(form: Record<string, string>): {
   if (taxable !== null && taxable === gross) {
     return { gross, net, incomplete: false };
   }
-  // 交通費の情報が取得できていない場合は、月給をそのまま暫定参考値とする。
-  return { gross, net, incomplete: true };
+  // 交通費・立替経費が不明な月の総支給を、そのまま賞与額面にはしない。
+  // 多めの賞与見込みを出す危険があるため、判定できない場合は予測を見送る。
+  return { gross: null, net: null, incomplete: true };
 }
-function estimateMainBonus(month: string, samples: ForecastSource[]): MonthEstimate | null {
-  const adjusted = samples.map(({ form }) => transportExcludedSalary(form));
-  const gross = median(adjusted.flatMap(item => item.gross === null ? [] : [item.gross]));
-  const net = median(adjusted.flatMap(item => item.net === null ? [] : [item.net]));
-  if (gross === null || net === null) return null;
+/**
+ * 本業の未登録賞与は、支給済みの最新「通常給与」1件だけを基準にする。
+ * 8月に実績として存在する業績給はその明細の実績にのみ含め、
+ * 将来の2月賞与や未登録8月賞与へ業績給を横展開しない。
+ * 保存フォームは基本給/固定残業代を個別保持していないため、
+ * 解析済みの課税支給額、または総支給-交通費-立替経費を用いる。
+ */
+export function estimateMainBonus(month: string, samples: ForecastSource[]): MonthEstimate | null {
+  const latest = [...samples].sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate))[0];
+  if (!latest) return null;
+  const adjusted = transportExcludedSalary(latest.form);
+  if (adjusted.gross === null || adjusted.net === null) return null;
   const values = {} as Record<ForecastKey, number | null>;
   const incomplete: Partial<Record<ForecastKey, boolean>> = {};
   for (const key of FORECAST_KEYS) {
     if (key === 'gross') {
-      values[key] = gross;
-      if (adjusted.some(item => item.gross === null || item.incomplete)) incomplete[key] = true;
+      values[key] = adjusted.gross;
+      if (adjusted.incomplete) incomplete[key] = true;
     } else if (key === 'net') {
-      values[key] = net;
-      if (adjusted.some(item => item.net === null || item.incomplete)) incomplete[key] = true;
+      values[key] = adjusted.net;
+      if (adjusted.incomplete) incomplete[key] = true;
     } else if (key === 'transportation' || key === 'reimbursedExpenses' || key === 'workDays') {
-      values[key] = 0; // 賞与に通勤費や勤務日数を重ねて計上しない。
+      values[key] = 0;
     } else {
-      // 税額・社会保険料は月給の直近実績から参考値を算出。
-      const parts = samples.map(({ form }) => fieldValue(form, key));
-      values[key] = median(parts.flatMap(part => part.value === null ? [] : [part.value]));
-      if (parts.some(part => part.value === null || part.incomplete)) incomplete[key] = true;
+      // 控除も同じ月給1件だけから参考推計。年末調整の一時的な還付/追徴は含めない。
+      const part = fieldValue(latest.form, key);
+      values[key] = part.value;
+      if (part.value === null || part.incomplete) incomplete[key] = true;
     }
   }
   return { month, job: 'main', kind: 'bonus', values, incomplete };
@@ -215,15 +226,22 @@ export function calculateAnnualForecast(
       .map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
     const pendingBonusMonths = job === 'main' && applicable && includeBonus
       ? bonusMonths.filter(month => !paidBonusMonths.has(month)) : [];
-    const bonusEstimates = job === 'main' && pendingBonusMonths.length && samples.length
+    // 給与の通常月見込みは「直近6か月・最大3件」。賞与だけは最後の登録済み通常給与1件を使う。
+    // 賞与見込みが古い給与からでも算出できるよう、通常月見込みのサンプルとは独立させる。
+    const latestBonusSalary = job === 'main' ? salaries
+      .filter(({ form }) => form.paymentDate <= todayIso)
+      .sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate))[0] : undefined;
+    const bonusSampleMonth = latestBonusSalary?.form.paymentDate?.slice(0, 7);
+    const bonusEstimates = job === 'main' && pendingBonusMonths.length && latestBonusSalary
       ? pendingBonusMonths.flatMap(month => {
-        const estimate = estimateMainBonus(month, samples);
+        const estimate = estimateMainBonus(month, [latestBonusSalary]);
         return estimate ? [estimate] : [];
       }) : [];
     const bonusReason = job === 'main' && applicable && includeBonus && pendingBonusMonths.length && !bonusEstimates.length
-      ? '本業賞与は8月・2月を想定していますが、月給の参照データが不足しています。' : undefined;
+      ? '本業賞与の参考になる通常給与の内訳が不足しているため、見込み賞与を算出できません。' : undefined;
 
     jobs[job] = { job, sampleMonths, pendingMonths, estimates, bonusEstimates, pendingBonusMonths,
+      ...(bonusSampleMonth ? { bonusSampleMonth } : {}),
       ...(reason ? { reason } : {}), ...(bonusReason ? { bonusReason } : {}) };
   }
   return { fiscalYear: selectedYear, applicable, jobs, estimates: [

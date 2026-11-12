@@ -220,3 +220,50 @@
   border-color: #e6a6b1;
   background: #fff4f6;
 }
+
+/* 集計期間の切り替え：年度／暦年を同じホーム内で切り替える。 */
+.period-switcher {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px 20px;
+  flex-wrap: wrap;
+  padding: 15px 30px 0;
+}
+.period-switcher__group { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.period-switcher__caption { color: var(--color-muted); font-size: 10px; font-weight: 700; }
+.period-switcher__options {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 11px;
+  background: #f1f4f9;
+}
+.period-switcher__option {
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 15px;
+  min-height: 37px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.period-switcher__option[aria-pressed="true"] {
+  color: var(--color-text);
+  background: #fff;
+  box-shadow: 0 1px 5px #16253b1c;
+}
+.period-switcher__option:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.period-switcher .select-field { flex: none; }
+@media (max-width: 640px) {
+  .period-switcher { padding: 14px 20px 0; gap: 10px 12px; }
+  .period-switcher__options { width: 100%; }
+  .period-switcher__option { flex: 1; padding: 9px 10px; font-size: 11px; }
+  .period-switcher__group { width: 100%; }
+  .period-switcher .select-field { width: 100%; }
+  .period-switcher .select-field .select { width: 100%; }
+}

@@ -1,0 +1,46 @@
+# Payroll: private-by-default Git allowlist.
+# Only reviewed source/config files are eligible for a commit.
+# IMPORTANT: .gitignore does not protect files that Git is ALREADY tracking.
+# It also does not detect credentials or personal information written inside allowed source files.
+
+# Ignore everything at the project root unless explicitly re-allowed below.
+/*
+
+# Project metadata (tracked deliberately).
+!/.gitignore
+!/README.md
+!/package.json
+!/package-lock.json
+!/tsconfig.json
+
+# Source folders (the folders themselves must be re-allowed first).
+!/src/
+!/public/
+!/scripts/
+
+# TypeScript application code only.
+/src/**
+!/src/**/
+!/src/**/*.ts
+!/src/**/*.tsx
+
+# HTML/CSS source used to generate dist/.
+# Assets such as PDFs, images, fonts, JSON, and raw data remain ignored.
+/public/**
+!/public/**/
+!/public/**/*.html
+!/public/**/*.css
+
+# Reviewed build/test scripts only.
+/scripts/**
+!/scripts/**/
+!/scripts/**/*.mjs
+!/scripts/**/*.js
+!/scripts/**/*.cjs
+!/scripts/**/*.sh
+
+# Note: dist/, node_modules/, local-data/, backups/, *.pdf, *.payroll,
+# *.zip, *.json (except named config above), *.csv, *.sqlite, images,
+# documents, .env*, keys, archives, logs, and ALL unknown extensions
+# are ignored automatically by the top-level deny rule and allowlists.
+# Any newly needed file type/path requires an intentional .gitignore review.

@@ -1,0 +1,183 @@
+/* 保存済み編集・バックアップの画面共通部品 */
+.vault-page { max-width: 930px; margin: 0 auto; padding: 25px 0 72px; }
+.vault-heading { margin-bottom: 22px; }
+.vault-heading h1 { font-size: clamp(23px,3vw,30px); font-weight: 850; }
+.vault-heading p { margin: 6px 0 0; color: var(--color-muted); font-size: 13px; }
+.vault-stack { display: grid; gap: 18px; }
+.vault-section { padding: 26px 29px; }
+.vault-section__head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+.vault-section__head h2 { font-size: 18px; margin: 0 0 3px; }
+.vault-section__head p { font-size: 12px; color: var(--color-muted); margin: 0; }
+.vault-step { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; flex: none; background: #edf2ff; color: var(--color-primary); font-weight: 850; }
+.vault-info { padding: 12px 14px; background: #f5f7fb; border-radius: 9px; font-size: 12px; color: var(--color-text); white-space: pre-line; }
+.vault-small { font-size: 11px; color: var(--color-muted); margin: 12px 0 0; }
+.vault-file-label { display: block; font-size: 12px; font-weight: 800; margin-bottom: 8px; }
+.vault-file-input { display: block; width: 100%; font-size: 12px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: #fff; padding: 9px; margin-bottom: 14px; }
+.vault-file-input::file-selector-button { background: #edf2ff; color: #315bd4; border: none; border-radius: 7px; padding: 8px 12px; margin-right: 10px; cursor: pointer; }
+.vault-danger { padding: 15px 17px; border: 1px solid #f0cfbd; background: #fff8f3; border-radius: 10px; color: #815239; margin-bottom: 16px; font-size: 12px; }
+.vault-danger p { margin: 5px 0 0; }
+.vault-check { display: flex; gap: 10px; align-items: center; font-size: 12px; font-weight: 650; cursor: pointer; margin-bottom: 16px; }
+.vault-check input { width: 17px; height: 17px; flex: none; accent-color: var(--color-primary); }
+.vault-status { font-size: 12px; margin-top: 15px; white-space: pre-line; }
+.vault-alert { padding: 14px; border: 1px solid #efbdc6; color: #9b273a; background: #fff4f6; border-radius: 10px; margin: 12px 0; }
+.saved-file { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 23px; margin-bottom: 18px; }
+.saved-file strong { font-size: 15px; overflow-wrap: anywhere; }
+.saved-file p { margin: 2px 0 0; font-size: 11px; color: var(--color-muted); }
+.saved-file__actions { display: flex; flex: none; gap: 8px; align-items: center; }
+.edit-page .review-panel { height: auto !important; max-height: none !important; overflow: visible !important; padding: 26px; }
+.edit-page .review-panel .form-section:first-child { margin-top: 0; }
+.edit-page .review-panel .form-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.raw-details { padding: 18px 23px; margin-top: 18px; }
+.raw-details summary { cursor: pointer; font-weight: 800; font-size: 13px; }
+.raw-details p { margin: 11px 0; font-size: 11px; color: var(--color-muted); }
+.raw-details pre { max-height: 360px; overflow: auto; padding: 16px; background: #142036; color: #f2f5fb; border-radius: 10px; font-size: 11px; line-height: 1.7; }
+.vault-bottom { position: sticky; bottom: 9px; z-index: 2; display: flex; gap: 20px; align-items: center; justify-content: space-between; padding: 15px 20px; background: rgba(255,255,255,.97); border: 1px solid var(--color-border); border-radius: 15px; box-shadow: 0 4px 22px rgba(25,41,72,.08); margin-top: 15px; }
+.vault-bottom__status { min-width: 0; }
+.vault-bottom__status p { margin: 0 0 8px; font-size: 12px; color: var(--color-muted); }
+.vault-bottom__status .vault-check { margin: 0; font-size: 11px; }
+.edit-page .field[data-salary-only][hidden],.edit-page .field[data-bonus-only][hidden] { display: none !important; }
+@media(max-width:680px) {
+  .vault-page { padding: 18px 0 60px; }
+  .vault-section { padding: 19px 16px; }
+  .saved-file { flex-wrap: wrap; padding: 16px; }
+  .edit-page .review-panel { padding: 16px; }
+  .edit-page .review-panel .form-grid { grid-template-columns: 1fr; }
+  .vault-bottom { position: static; flex-direction: column; align-items: stretch; padding: 14px; }
+  .vault-bottom .btn { width: 100%; }
+}
+
+/* --------------------------------------------------------------------------
+   バックアップ・復元: 無彩色ベースの整理されたレイアウト。
+   保存済み編集画面の .vault-* 共通スタイルはそのまま維持する。
+   -------------------------------------------------------------------------- */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 21px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.breadcrumb a,
+.breadcrumb [aria-current="page"] { color: var(--color-muted); }
+.breadcrumb a:hover { color: var(--color-text); }
+.breadcrumb__separator { color: #a6afbc; }
+
+.backup-page { max-width: 840px; padding-top: 29px; }
+.backup-page .vault-heading { margin-bottom: 25px; }
+.backup-page .vault-heading h1 { font-size: clamp(23px, 2.8vw, 27px); font-weight: 800; }
+.backup-page .vault-heading p { margin-top: 7px; color: var(--color-muted); font-size: 12px; }
+.backup-page .vault-stack { gap: 16px; }
+.backup-page .vault-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px 30px;
+  border-radius: 16px;
+  box-shadow: none;
+}
+.backup-page .vault-section__head { margin: 0; }
+.backup-page .vault-section__head h2 { margin: 0; font-size: 17px; font-weight: 800; }
+.backup-page .vault-section__head p { margin: 5px 0 0; font-size: 12px; line-height: 1.65; }
+.backup-page .vault-info {
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.backup-export-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+}
+.backup-export-row #export-button { flex: none; }
+.backup-page .vault-small { margin: -5px 0 0; font-size: 11px; line-height: 1.6; }
+.backup-file-control { display: flex; flex-direction: column; gap: 8px; }
+.backup-page .vault-file-label { margin: 0; font-size: 12px; font-weight: 700; }
+.backup-page .vault-file-input {
+  margin: 0;
+  min-height: 49px;
+  padding: 7px;
+  background: #fff;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 9px;
+  font-size: 12px;
+}
+.backup-page .vault-file-input::file-selector-button {
+  padding: 8px 13px;
+  background: #f4f6f8;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-weight: 650;
+}
+.backup-page .vault-file-input:hover { border-color: #a8b5c6; }
+.backup-restore-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+.backup-restore-warning {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.65;
+}
+.backup-page .vault-check { margin: 0; font-size: 12px; font-weight: 500; line-height: 1.65; }
+.backup-page .vault-check input { margin: 0; cursor: pointer; }
+.backup-page .vault-check input:disabled { cursor: not-allowed; }
+.backup-page #restore-button:not(:disabled) {
+  color: var(--color-danger);
+  background: #fff;
+  border-color: #d5a3aa;
+}
+.backup-page #restore-button:not(:disabled):hover { background: #fff8f8; }
+.backup-page .vault-status { margin: 17px 0 0; line-height: 1.65; }
+.backup-page .vault-status:empty { display: none; }
+
+@media (max-width: 680px) {
+  .backup-page { padding-top: 20px; }
+  .backup-page .vault-heading { margin-bottom: 21px; }
+  .backup-page .vault-section { gap: 18px; padding: 22px 18px; }
+  .backup-export-row { align-items: stretch; flex-direction: column; gap: 14px; }
+  .backup-export-row .btn { align-self: flex-start; max-width: 100%; white-space: normal; }
+  .backup-page .vault-small { margin-top: -4px; }
+  .backup-restore-actions { gap: 15px; padding-top: 18px; }
+  .backup-page .vault-check { align-items: flex-start; }
+  .backup-page .vault-check input { margin-top: 2px; }
+  .backup-page #restore-button { max-width: 100%; white-space: normal; }
+}
+
+/* 専用暗号化バックアップ: 操作範囲を広くしつつ、パスワード入力だけを増やす。 */
+.backup-page [hidden] { display: none !important; }
+.backup-secret-fields { display: grid; gap: 8px; max-width: 470px; }
+.backup-secret-fields label { font-size: 12px; font-weight: 700; color: var(--color-text); }
+.backup-secret-fields input {
+  width: 100%; min-height: 43px; padding: 10px 12px; font: inherit; font-size: 13px;
+  background: #fff; border: 1px solid var(--color-border-strong); border-radius: 9px;
+}
+.backup-secret-fields input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.backup-secret-fields label:not(:first-child) { margin-top: 5px; }
+.backup-export-row .vault-small { flex: 1; }
+.backup-page #verify-button { align-self: flex-start; }
+
+/* 編集画面の削除操作は独立ボタン。狭い画面では自動的に折り返す。 */
+.edit-page .saved-file__actions { flex-wrap: wrap; }
+.edit-page #edit-delete { display: inline-flex; align-items: center; gap: 6px; }
+.edit-page #edit-delete .icon { width: 15px; height: 15px; }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>バックアップ・復元 | Payroll</title><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../backup.js"></script></head><body>
+<svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
+<symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
+<symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M4 17v3h16v-3"/></symbol>
+</svg>
+<div class="app-shell"><header class="site-header"><a class="brand" href="../index.html" aria-label="Payroll ホーム"><span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span><span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span></a><a class="btn btn--secondary" href="../index.html"><svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg>ホームへ戻る</a></header>
+<main class="vault-page backup-page"><nav class="breadcrumb"><a href="../index.html">ホーム</a><span class="breadcrumb__separator">/</span><span aria-current="page">バックアップ・復元</span></nav>
+<div class="vault-heading"><h1>バックアップ・復元</h1><p>明細とPDF原本をまとめて保護・復元します。</p></div>
+<div class="vault-stack">
+<section class="card vault-section">
+ <div class="vault-section__head"><h2>暗号化バックアップを書き出す</h2></div>
+ <p id="export-summary" class="vault-info">保存済みデータを確認しています…</p>
+ <div class="backup-secret-fields">
+  <label for="export-password">パスワード（12文字以上）</label><input id="export-password" type="password" autocomplete="new-password" maxlength="512" placeholder="復元時に必要なパスワード">
+  <label for="export-confirm">パスワードを再入力</label><input id="export-confirm" type="password" autocomplete="new-password" maxlength="512" placeholder="確認のためもう一度入力">
+ </div>
+ <div class="backup-export-row"><p class="vault-small">AES-256-GCMでZIP全体を保護します。パスワードは保存されず、忘れると復元できません。</p><button type="button" id="export-button" class="btn btn--primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>暗号化バックアップを保存</button></div>
+</section>
+<section class="card vault-section">
+ <div class="vault-section__head"><h2>バックアップを復元する</h2></div>
+ <div class="backup-file-control"><label class="vault-file-label" for="restore-file">バックアップファイルを選択</label><input type="file" id="restore-file" accept=".payroll,.zip,application/zip,application/octet-stream" class="vault-file-input"></div>
+ <div id="restore-password-row" class="backup-secret-fields" hidden><label for="restore-password">復元パスワード</label><input id="restore-password" type="password" autocomplete="off" maxlength="512" placeholder="バックアップ作成時のパスワード"></div>
+ <button type="button" id="verify-button" class="btn btn--secondary" hidden disabled>パスワードで復号・検証</button>
+ <p id="restore-preview" class="vault-info" aria-live="polite">暗号化ファイル（.payroll）と従来ZIPに対応しています。</p>
+ <div class="backup-restore-actions"><p class="backup-restore-warning">復元すると現在の明細はすべて置き換わります。</p><label class="vault-check"><input type="checkbox" id="restore-ack" disabled>現在の保存内容がすべて置き換わることを確認しました</label><button type="button" id="restore-button" class="btn btn--danger" disabled>完全復元する</button></div>
+</section>
+</div><p id="backup-status" class="vault-status" role="status" aria-live="polite"></p>
+</main></div></body></html>

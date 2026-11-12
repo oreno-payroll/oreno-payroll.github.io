@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>Payroll | 給与明細管理</title>
+  <link rel="stylesheet" href="./styles/ress.css">
+  <link rel="stylesheet" href="./styles/style.css">
+  <link rel="stylesheet" href="./styles/dashboard.css">
+  <script type="module" src="./main.js"></script>
+</head>
+<body>
+  <!-- 外部アイコンライブラリは使わない。共通アイコンはページ内のSVGシンボルを参照する。 -->
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M4 17v3h16v-3"/></symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24"><path d="M12 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="m15 5 4 4M10 14l9-9 2 2-9 9-4 1z"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/></symbol>
+    <symbol id="icon-backup" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 1-8.4 5.7M3 3v6h6"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m0 0-4.5 4.5M12 3l4.5 4.5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+  </svg>
+
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="Payroll トップページ">
+        <span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span>
+        <span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span>
+      </a>
+      <div class="header-actions">
+        <a class="btn btn--secondary" href="./backup/index.html"><svg class="icon" aria-hidden="true"><use href="#icon-backup"></use></svg><span>バックアップ・復元</span></a>
+        <a class="btn btn--primary" href="./upload/index.html"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span>明細をアップロード</span></a>
+      </div>
+    </header>
+
+    <main class="dashboard" id="main-content">
+      <div class="page-heading">
+        <div>
+          <p class="eyebrow">OVERVIEW</p>
+          <h1>収入ダッシュボード</h1>
+          <p class="page-heading__description">本業と副業の収入を、ひとつの場所で。</p>
+        </div>
+      </div>
+
+      <section class="card total-card" aria-labelledby="total-heading">
+        <div class="total-card__header">
+          <div>
+            <p class="section-kicker">INCOME SUMMARY</p>
+            <h2 id="total-heading">総収入</h2>
+            <p class="section-description" id="fiscal-period"></p>
+          </div>
+          <div class="total-card__controls">
+            <label class="check-control" for="include-bonus">
+              <input id="include-bonus" type="checkbox" checked disabled>
+              <span>賞与を含む</span>
+            </label>
+            <label class="check-control" for="include-forecast" title="未登録の給与と本業8月・2月賞与を概算します。副業の将来賞与は加算せず、保存データは変更しません。">
+              <input id="include-forecast" type="checkbox" disabled>
+              <span>3月まで見込み</span>
+            </label>
+            <div class="select-field">
+              <label for="fiscal-year">対象年度</label>
+              <select class="select" id="fiscal-year" aria-label="対象年度"></select>
+            </div>
+          </div>
+        </div>
+
+        <p class="forecast-status" id="forecast-status" role="status" hidden></p>
+        <div class="total-card__hero">
+          <div>
+            <p class="amount-label">年度総支給額 <span class="amount-label__hint">本業＋副業</span></p>
+            <p class="amount amount--hero" id="total-gross">--</p>
+          </div>
+          <div class="hero-net">
+            <span class="hero-net__label">手取り合計</span>
+            <strong class="hero-net__value" id="total-net">--</strong>
+          </div>
+        </div>
+
+        <div class="total-card__details" aria-label="控除と交通費の内訳">
+          <div class="metric"><span class="metric__label">所得税（年調含む）</span><strong class="metric__value" id="total-income-tax">--</strong></div>
+          <div class="metric"><span class="metric__label">住民税</span><strong class="metric__value" id="total-resident-tax">--</strong></div>
+          <div class="metric"><span class="metric__label">社会保険料</span><strong class="metric__value" id="total-social-insurance">--</strong></div>
+          <div class="metric"><span class="metric__label">交通費 <span class="metric__hint">支給内訳</span></span><strong class="metric__value" id="total-transportation">--</strong></div>
+          <div class="metric"><span class="metric__label">立替経費 <span class="metric__hint">交通費と併記の分</span></span><strong class="metric__value" id="total-reimbursed-expenses">--</strong></div>
+        </div>
+        <section class="forecast-panel" id="forecast-panel" aria-label="年度見込みの計算根拠" hidden>
+          <h3>見込みの計算根拠</h3>
+          <div id="forecast-details"></div>
+        </section>
+      </section>
+
+      <div class="job-grid">
+        <section class="card job-card" aria-labelledby="main-heading">
+          <div class="job-card__heading">
+            <div class="job-card__title-group"><span class="job-dot job-dot--main"></span><h2 id="main-heading">本業収入</h2></div>
+            <span class="tag">MAIN JOB</span>
+          </div>
+          <p class="amount-label">年度総支給額</p>
+          <p class="amount amount--job" id="main-gross">--</p>
+          <dl class="details-list">
+            <div><dt>所得税（年調含む）</dt><dd id="main-income-tax">--</dd></div>
+            <div><dt>住民税</dt><dd id="main-resident-tax">--</dd></div>
+            <div><dt>交通費</dt><dd id="main-transportation">--</dd></div>
+            <div><dt>立替経費</dt><dd id="main-reimbursed-expenses">--</dd></div>
+            <div><dt>社会保険料</dt><dd id="main-social-insurance">--</dd></div>
+          </dl>
+          <div class="job-card__footer"><span>手取り</span><strong id="main-net">--</strong></div>
+        </section>
+
+        <section class="card job-card" aria-labelledby="side-heading">
+          <div class="job-card__heading">
+            <div class="job-card__title-group"><span class="job-dot job-dot--side"></span><h2 id="side-heading">副業収入</h2></div>
+            <span class="tag">SIDE JOB</span>
+          </div>
+          <p class="amount-label">年度総支給額</p>
+          <p class="amount amount--job" id="side-gross">--</p>
+          <dl class="details-list">
+            <div><dt>所得税（年調含む）</dt><dd id="side-income-tax">--</dd></div>
+            <div><dt>住民税</dt><dd id="side-resident-tax">--</dd></div>
+            <div><dt>交通費</dt><dd id="side-transportation">--</dd></div>
+            <div><dt>社会保険料</dt><dd id="side-social-insurance">--</dd></div>
+          </dl>
+          <div class="job-card__footer"><span>手取り</span><strong id="side-net">--</strong></div>
+          <div class="job-card__supplement"><span>出勤日数（年度累計）</span><strong id="side-days">--</strong></div>
+        </section>
+      </div>
+
+      <section class="card statements-card" aria-labelledby="statements-heading">
+        <div class="statements-card__header">
+          <div>
+            <p class="section-kicker">DOCUMENTS</p>
+            <h2 id="statements-heading">給与明細一覧</h2>
+          </div>
+          <p class="statements-card__caption">登録されたPDFを年月別に確認できます</p>
+        </div>
+        <div class="statements-grid">
+          <section class="statement-column" aria-labelledby="main-list-heading">
+            <div class="statement-column__heading"><h3 id="main-list-heading">本業</h3><span class="count-badge" id="main-count">0件</span></div>
+            <ul class="statement-list" id="main-records"></ul>
+          </section>
+          <section class="statement-column" aria-labelledby="side-list-heading">
+            <div class="statement-column__heading"><h3 id="side-list-heading">副業</h3><span class="count-badge" id="side-count">0件</span></div>
+            <ul class="statement-list" id="side-records"></ul>
+          </section>
+        </div>
+      </section>
+
+      <footer class="site-footer"><span>Payroll · 個人用給与管理ツール</span><span>PDFの解析はブラウザ内で行います</span></footer>
+    </main>
+  </div>
+</body>
+</html>

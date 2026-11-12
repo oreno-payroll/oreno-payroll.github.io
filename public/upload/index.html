@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>明細アップロード | Payroll</title>
+  <link rel="stylesheet" href="../styles/ress.css">
+  <link rel="stylesheet" href="../styles/style.css">
+  <link rel="stylesheet" href="../styles/upload.css">
+  <script type="module" src="../upload.js"></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m0 0-4.5 4.5M12 3l4.5 4.5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z"/><path d="M13 3v7h7M8 15h8"/></symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3z"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3z"/><path d="M12 9v5m0 3v.01"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="M5 5 19 19M19 5 5 19"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9"/><path d="M20 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h6"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3 8.5 8 11 5-2.5 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  </svg>
+
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="../index.html" aria-label="Payroll トップページへ">
+        <span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span>
+        <span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span>
+      </a>
+      <a class="btn btn--secondary header-back" href="../index.html">
+        <svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg>
+        <span>ダッシュボードに戻る</span>
+      </a>
+    </header>
+
+    <main class="upload-page">
+      <nav class="breadcrumb" aria-label="現在位置"><a href="../index.html">ホーム</a><span aria-hidden="true">/</span><span aria-current="page">明細アップロード</span></nav>
+      <div class="upload-heading">
+        <div>
+          <p class="eyebrow">IMPORT DOCUMENTS</p>
+          <h1>明細をアップロード</h1>
+          <p class="upload-heading__description">PDFをまとめて読み取り、項目を確認・修正できます。</p>
+        </div>
+      </div>
+
+      <div class="notice notice--privacy" role="note">
+        <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
+        <div><strong>PDFはこのブラウザ内で処理します。</strong><span>外部サーバーへの送信はありません。「すべて保存」でPDF原本と明細情報をこのブラウザのIndexedDBへ保存します。</span></div>
+      </div>
+
+      <section class="workspace" aria-label="PDF解析と内容確認">
+        <div class="upload-left">
+          <section class="card upload-zone-card" aria-labelledby="drop-heading">
+            <div class="zone-content" id="drop-zone" role="button" tabindex="0" aria-labelledby="drop-heading" aria-describedby="drop-description">
+              <div class="zone-icon"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg></div>
+              <div class="zone-copy">
+                <h2 id="drop-heading">ここにPDFをドロップ</h2>
+                <p id="drop-description">枠内をクリックして選択 / 複数PDFのドロップにも対応</p>
+              </div>
+              <div class="zone-privacy"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg><span>PDFのみ・1件25MBまで・最大30件</span></div>
+            </div>
+            <input type="file" id="file-input" accept=".pdf,application/pdf" multiple hidden>
+          </section>
+        <div class="card file-panel">
+          <div class="panel-title-row">
+            <div>
+              <p class="section-kicker">FILES</p>
+              <h2>取り込みファイル <span class="count-badge" id="file-count">0件</span></h2>
+            </div>
+            <button class="btn btn--ghost btn--small" type="button" id="clear-files" hidden>すべて削除</button>
+          </div>
+          <div class="progress-wrap" id="progress-wrap" hidden>
+            <div class="progress-copy"><span>文字情報を確認しています</span><span id="progress-text">0 / 0</span></div>
+            <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
+          </div>
+          <div class="file-list-empty" id="file-list-empty">
+            <span class="file-list-empty__icon"><svg class="icon" aria-hidden="true"><use href="#icon-folder"></use></svg></span>
+            <strong>PDFはまだありません</strong>
+            <p>上のエリアから明細を追加すると、解析状況がここに表示されます。</p>
+          </div>
+          <ul class="file-list" id="file-list" aria-label="選択されたPDF一覧" hidden></ul>
+          <div class="file-panel__foot"><span class="status-dot"></span><span id="file-summary">取り込み待ち</span></div>
+        </div>
+        </div>
+
+        <section class="card review-panel" aria-label="明細の確認・修正">
+          <div class="review-empty" id="review-empty">
+            <span class="review-empty__icon"><svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg></span>
+            <strong>明細を選ぶと、ここで内容を確認できます</strong>
+            <p>PDFから取得したページ数や文字情報を確認し、給与の項目を入力・修正できる画面です。</p>
+          </div>
+          <div id="review-content" hidden>
+            <div class="selected-file">
+              <div class="selected-file__icon"><svg class="icon" aria-hidden="true"><use href="#icon-file"></use></svg></div>
+              <div class="selected-file__name-wrap"><strong id="selected-name"></strong><span id="selected-meta"></span></div>
+              <div class="selected-file__actions">
+                <button class="btn btn--soft btn--small" id="open-pdf" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>原本を見る</button>
+                <button class="btn btn--secondary btn--small" type="button" id="diagnostic-button">座標診断を開く</button>
+              </div>
+            </div>
+            <div class="read-result" id="read-result" role="status" aria-live="polite"></div>
+            <section class="analysis-issues" id="analysis-issues" aria-labelledby="analysis-issues-heading" hidden>
+              <div class="analysis-issues__head"><strong id="analysis-issues-heading">解析時の確認事項</strong><span id="analysis-issues-count"></span></div>
+              <ul id="analysis-issues-list"></ul>
+              <p>検出されなかった項目は空欄のままです。原本で確認して、必要に応じて入力してください。</p>
+            </section>
+
+            <form id="review-form" novalidate>
+              <section class="form-section">
+                <div class="form-section__heading"><span class="form-section__number">01</span><h3>明細の基本情報</h3></div>
+                <div class="form-grid form-grid--two">
+                  <fieldset class="field field--choice"><legend class="field__label">勤務先 <span class="field__required">*</span></legend>
+                    <div class="segmented-choice" role="group" aria-label="勤務先">
+                      <label><input type="radio" name="job" value="main" required><span>本業</span></label>
+                      <label><input type="radio" name="job" value="side" required><span>副業</span></label>
+                    </div>
+                  </fieldset>
+                  <fieldset class="field field--choice"><legend class="field__label">明細種別 <span class="field__required">*</span></legend>
+                    <div class="segmented-choice" role="group" aria-label="明細種別">
+                      <label><input type="radio" name="kind" value="salary" required><span>給与</span></label>
+                      <label><input type="radio" name="kind" value="bonus" required><span>賞与</span></label>
+                    </div>
+                  </fieldset>
+                  <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" name="targetMonth" type="month" required></label>
+                  <label class="field"><span class="field__label">実際の支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="form-section__heading"><span class="form-section__number">02</span><h3>支給額</h3></div>
+                <div class="form-grid form-grid--two">
+                  <label class="field"><span class="field__label">総支給額 <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="gross" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
+                  <label class="field"><span class="field__label">差引支給額（手取り） <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="net" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
+                  <label class="field"><span class="field__label">課税支給額 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="taxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" ><span>円</span></span></label>
+                  <label class="field"><span class="field__label">非課税支給額 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="nonTaxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-bonus-only><span class="field__label">賞与額・賞与手当 <span class="field__optional">賞与のみ・任意</span></span><span class="unit-field"><input class="input" name="bonusBase" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-bonus-only><span class="field__label">業績手当 <span class="field__optional">賞与のみ・任意</span></span><span class="unit-field"><input class="input" name="performanceBonus" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">交通費 <span class="field__optional">支給内訳</span></span><span class="unit-field"><input class="input" name="transportation" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-salary-only><span class="field__label">立替経費 <span class="field__optional">通勤手当と併記時のみ</span></span><span class="unit-field"><input class="input" name="reimbursedExpenses" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-salary-only><span class="field__label">出勤日数 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="form-section__heading"><span class="form-section__number">03</span><h3>控除額</h3></div>
+                <div class="form-grid form-grid--two">
+                  <label class="field"><span class="field__label">所得税</span><span class="unit-field"><input class="input" name="incomeTax" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-salary-only><span class="field__label">年調過不足税額 <span class="field__optional">年末調整時のみ</span></span><span class="unit-field"><input class="input" name="yearEndAdjustment" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">住民税</span><span class="unit-field"><input class="input" name="residentTax" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">健康保険料</span><span class="unit-field"><input class="input" name="healthInsurance" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">子ども・子育て支援金</span><span class="unit-field"><input class="input" name="childcareSupport" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">介護保険料</span><span class="unit-field"><input class="input" name="careInsurance" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">厚生年金保険料</span><span class="unit-field"><input class="input" name="pension" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">雇用保険料</span><span class="unit-field"><input class="input" name="employmentInsurance" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">その他控除</span><span class="unit-field"><input class="input" name="otherDeductions" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                </div>
+              </section>
+
+              <div class="review-actions">
+                <span class="review-actions__note">編集内容は「すべて保存」を押すとPDF原本とともに保存されます。</span>
+                <button class="btn btn--secondary" type="button" id="validate-button"><svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>入力内容をチェック</button>
+              </div>
+              <p class="validation-message" id="validation-message" role="status" aria-live="polite" hidden></p>
+            </form>
+          </div>
+        </section>
+      </section>
+
+      <div class="save-bar" aria-label="明細の一括保存">
+        <div class="save-bar__status">
+          <strong id="save-status" role="status" aria-live="polite">PDFを追加すると、ここからまとめて保存できます。</strong>
+        </div>
+        <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+          すべて保存
+        </button>
+      </div>
+    </main>
+  </div>
+  <dialog id="diagnostic-dialog" class="diagnostic-dialog" aria-labelledby="diagnostic-title">
+    <div class="diagnostic-dialog__header">
+      <div>
+        <p class="section-kicker">LOCAL PDF INSPECTOR</p>
+        <h2 id="diagnostic-title">文字・座標の診断</h2>
+      </div>
+      <button id="diagnostic-close" class="diagnostic-dialog__close" type="button" aria-label="診断画面を閉じる">×</button>
+    </div>
+    <p class="diagnostic-dialog__description">PDFの文字と座標をそのまま表示します。自動マスクは行いません。PDFそのものは外部へ送信しません。</p>
+    <div class="diagnostic-dialog__warning" role="note"><strong>この欄には氏名・会社名・社員番号・口座情報・実際の金額が含まれる可能性があります。</strong> チャットへ貼り付ける前に、ご自身で不要な情報を伏せてください。</div>
+    <p id="diagnostic-state" class="diagnostic-dialog__state" role="status" aria-live="polite"></p>
+    <label for="diagnostic-shared" class="diagnostic-dialog__label">抽出した文字・座標（編集可能／自動マスクなし）</label>
+    <textarea id="diagnostic-shared" class="diagnostic-dialog__textarea" rows="18" spellcheck="false" placeholder="診断結果を作成しています…"></textarea>
+    <div class="diagnostic-dialog__actions">
+      <button id="diagnostic-copy" class="btn btn--primary" type="button" disabled>編集したテキストをコピー</button>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

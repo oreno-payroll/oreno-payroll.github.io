@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>保存済み明細の編集 | Payroll</title><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/upload.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../edit.js"></script></head><body>
+<svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
+<symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
+<symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M4 17v3h16v-3"/></symbol>
+<symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/></symbol>
+</svg>
+<div class="app-shell"><header class="site-header"><a class="brand" href="../index.html" aria-label="Payroll ホーム"><span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span><span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span></a><a class="btn btn--secondary" href="../index.html"><svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg>ホームへ戻る</a></header>
+<main class="vault-page edit-page">
+<nav class="breadcrumb"><a href="../index.html">ホーム</a><span>/</span><span>保存済み明細の確認・編集</span></nav>
+<div class="vault-heading"><h1>保存済み明細を編集</h1><p>PDF原本は変更せず、IndexedDBに保存された入力値を確認・修正します。</p></div>
+<div id="edit-error" class="vault-alert" role="alert" hidden></div>
+<div id="editor" hidden>
+<div class="saved-file card"><div><strong id="record-name"></strong><p id="record-details"></p></div><div class="saved-file__actions"><a id="original-pdf" class="btn btn--secondary" target="_blank" rel="noopener noreferrer">原本を見る</a><a id="download-pdf" class="btn btn--icon" title="原本PDFをダウンロード" aria-label="原本PDFをダウンロード"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></a><button id="edit-delete" type="button" class="btn btn--danger-outline" title="保存済みの明細とPDF原本を削除"><svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>削除</button></div></div>
+<section class="card review-panel saved-editor-panel" aria-label="保存データの編集">
+
+            <form id="review-form" novalidate>
+              <section class="form-section">
+                <div class="form-section__heading"><span class="form-section__number">01</span><h3>明細の基本情報</h3></div>
+                <div class="form-grid form-grid--two">
+                  <fieldset class="field field--choice"><legend class="field__label">勤務先 <span class="field__required">*</span></legend>
+                    <div class="segmented-choice" role="group" aria-label="勤務先">
+                      <label><input type="radio" name="job" value="main" required><span>本業</span></label>
+                      <label><input type="radio" name="job" value="side" required><span>副業</span></label>
+                    </div>
+                  </fieldset>
+                  <fieldset class="field field--choice"><legend class="field__label">明細種別 <span class="field__required">*</span></legend>
+                    <div class="segmented-choice" role="group" aria-label="明細種別">
+                      <label><input type="radio" name="kind" value="salary" required><span>給与</span></label>
+                      <label><input type="radio" name="kind" value="bonus" required><span>賞与</span></label>
+                    </div>
+                  </fieldset>
+                  <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" name="targetMonth" type="month" required></label>
+                  <label class="field"><span class="field__label">実際の支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="form-section__heading"><span class="form-section__number">02</span><h3>支給額</h3></div>
+                <div class="form-grid form-grid--two">
+                  <label class="field"><span class="field__label">総支給額 <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="gross" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
+                  <label class="field"><span class="field__label">差引支給額（手取り） <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="net" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
+                  <label class="field"><span class="field__label">課税支給額 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="taxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" ><span>円</span></span></label>
+                  <label class="field"><span class="field__label">非課税支給額 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="nonTaxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-bonus-only><span class="field__label">賞与額・賞与手当 <span class="field__optional">賞与のみ・任意</span></span><span class="unit-field"><input class="input" name="bonusBase" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-bonus-only><span class="field__label">業績手当 <span class="field__optional">賞与のみ・任意</span></span><span class="unit-field"><input class="input" name="performanceBonus" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">交通費 <span class="field__optional">支給内訳</span></span><span class="unit-field"><input class="input" name="transportation" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-salary-only><span class="field__label">立替経費 <span class="field__optional">通勤手当と併記時のみ</span></span><span class="unit-field"><input class="input" name="reimbursedExpenses" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-salary-only><span class="field__label">出勤日数 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="form-section__heading"><span class="form-section__number">03</span><h3>控除額</h3></div>
+                <div class="form-grid form-grid--two">
+                  <label class="field"><span class="field__label">所得税</span><span class="unit-field"><input class="input" name="incomeTax" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-salary-only><span class="field__label">年調過不足税額 <span class="field__optional">年末調整時のみ</span></span><span class="unit-field"><input class="input" name="yearEndAdjustment" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">住民税</span><span class="unit-field"><input class="input" name="residentTax" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">健康保険料</span><span class="unit-field"><input class="input" name="healthInsurance" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">子ども・子育て支援金</span><span class="unit-field"><input class="input" name="childcareSupport" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">介護保険料</span><span class="unit-field"><input class="input" name="careInsurance" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">厚生年金保険料</span><span class="unit-field"><input class="input" name="pension" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">雇用保険料</span><span class="unit-field"><input class="input" name="employmentInsurance" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">その他控除</span><span class="unit-field"><input class="input" name="otherDeductions" type="number" step="1" placeholder="未入力"><span>円</span></span></label>
+                </div>
+              </section>
+            </form>
+</section>
+<details class="card raw-details"><summary>内部保存データを確認（ID・日時・全フィールド・PDF情報）</summary><p>こちらは読み取り専用のJSON表示です。実際の保存内容を確認できます。PDF本体は表示せず、サイズなどの情報を示します。</p><pre id="raw-state"></pre></details>
+<div class="vault-bottom"><div class="vault-bottom__status"><p id="edit-status" role="status" aria-live="polite"></p><label class="vault-check"><input type="checkbox" id="confirm-diff">金額の検算警告を原本と照合して確認しました</label></div><button class="btn btn--primary" id="edit-save" type="button">変更を保存</button></div>
+</div>
+</main></div></body></html>

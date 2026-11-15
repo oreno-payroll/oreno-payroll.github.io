@@ -31,6 +31,10 @@
 !/public/**/*.html
 !/public/**/*.css
 
+# PDF閲覧用Service Workerだけは、JavaScriptを明示的にGit管理する。
+# ビルド成果物ではなく public/view/ にある原本ソース。
+!/public/view/pdf-sw.js
+
 # Reviewed build/test scripts only.
 /scripts/**
 !/scripts/**/
@@ -44,3 +48,10 @@
 # documents, .env*, keys, archives, logs, and ALL unknown extensions
 # are ignored automatically by the top-level deny rule and allowlists.
 # Any newly needed file type/path requires an intentional .gitignore review.
+
+# GitHub Pages: allow only the reviewed deployment workflow.
+!/.github/
+/.github/**
+!/.github/workflows/
+/.github/workflows/**
+!/.github/workflows/deploy.yml

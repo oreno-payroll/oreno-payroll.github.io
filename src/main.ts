@@ -1,13 +1,16 @@
+import { safePdfFileName } from './storage/fileNaming';
 /** 給与ダッシュボード：IndexedDBに保存したPDF原本と手入力・自動抽出値を表示する。 */
-import { deleteRecord, loadRecords, recordSignature, type SavedPayrollRecord } from './storage/payrollStore';
+import { deleteRecord, getRecord, loadRecordSummaries, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import { amountOrMissing } from './storage/payrollValidation';
+import { summary, withEstimates, type Summary, type SummaryKey } from './forecast/summary';
+import { setMissingIndicator } from './ui/missingIndicator';
+import { createSidePdfZip } from './export/sidePdfs';
 import { calculateAnnualForecast, type MonthEstimate, type AnnualForecast } from './forecast/annualForecast';
 import { fiscalYearOfTargetMonth } from './forecast/payrollCalendar';
 import { calendarYearOfPaymentDate, calculateCalendarForecast, type CalendarForecast } from './forecast/calendarForecast';
 
 type Job = 'main' | 'side';
 type PeriodMode = 'fiscal' | 'calendar';
-type SummaryKey = 'gross' | 'net' | 'incomeTax' | 'residentTax' | 'socialInsurance' | 'transportation' | 'reimbursedExpenses' | 'workDays';
 
 function required<T extends HTMLElement>(selector: string): T {
   const node = document.querySelector<T>(selector);
@@ -54,9 +57,57 @@ function persistPeriodSelection(): void {
 function editPeriodQuery(): string {
   return `mode=${encodeURIComponent(periodMode)}&year=${encodeURIComponent(yearSelect.value)}`;
 }
-let saved: SavedPayrollRecord[] = [];
-let pdfUrls: string[] = [];
+let saved: SavedPayrollSummary[] = [];
+const visibleCounts: Record<Job, number> = { main: 50, side: 50 };
 const deletingRecordIds = new Set<number>();
+const sideZipButton = required<HTMLButtonElement>('#download-side-zip');
+const sideZipStatus = required<HTMLElement>('#side-zip-status');
+let exportingSideZip = false;
+function selectedPeriodRecords(): SavedPayrollSummary[] {
+  const year = Number(yearSelect.value);
+  return saved.filter(item =>
+    (periodMode === 'calendar' ? calendarYearOfPaymentDate(item.form.paymentDate) : fiscalYearOfTargetMonth(item.form.targetMonth)) === year &&
+    (bonusToggle.checked || item.form.kind !== 'bonus'));
+}
+sideZipButton.addEventListener('click', async () => {
+  if (exportingSideZip) return;
+  const exportYear = yearSelect.value;
+  const exportMode = periodMode;
+  const side = selectedPeriodRecords().filter(item => item.form.job === 'side');
+  if (!side.length) return;
+  exportingSideZip = true;
+  sideZipButton.disabled = true;
+  sideZipStatus.textContent = `${side.length}件のPDFをZIPにまとめています…`;
+  sideZipStatus.removeAttribute('role');
+  try {
+    // 表示には索引しか持たないため、ZIP作成の際にだけ対象PDF原本を取得する。
+    const originals: SavedPayrollRecord[] = [];
+    for (const [index, item] of side.entries()) {
+      sideZipStatus.textContent = `副業PDFを取得中… ${index + 1} / ${side.length}件（${exportMode === 'calendar' ? '暦年' : '年度'} ${exportYear}）`;
+      const full = await getRecord(item.id);
+      if (!full || recordSignature(full) !== recordSignature(item)) {
+        throw new Error('保存済み明細が変更されました。画面を更新してから再実行してください。');
+      }
+      originals.push(full);
+    }
+    const archive = await createSidePdfZip(originals);
+    const url = URL.createObjectURL(archive);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `payroll-side-${exportMode}-${exportYear}.zip`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    sideZipStatus.textContent = `副業PDF ${side.length}件（${exportYear}）のZIPを作成しました。ダウンロード先を確認してください。`;
+  } catch (error) {
+    sideZipStatus.textContent = `副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`;
+    sideZipStatus.setAttribute('role', 'alert');
+  } finally {
+    exportingSideZip = false;
+    sideZipButton.disabled = selectedPeriodRecords().every(item => item.form.job !== 'side');
+  }
+});
 
 function updateYearOptions(): void {
   const currentYear = currentPeriodYear();
@@ -86,63 +137,6 @@ function updateYearOptions(): void {
   forecastToggle.closest('label')?.setAttribute('title', forecastToggle.title);
   fiscalModeButton.setAttribute('aria-pressed', String(periodMode === 'fiscal'));
   calendarModeButton.setAttribute('aria-pressed', String(periodMode === 'calendar'));
-}
-interface Summary {
-  sums: Record<SummaryKey, number>;
-  observed: Record<SummaryKey, boolean>;
-  partial: Record<SummaryKey, boolean>;
-}
-function summary(records: SavedPayrollRecord[]): Summary {
-  const zero = (): Record<SummaryKey, number> => ({
-    gross: 0, net: 0, incomeTax: 0, residentTax: 0, socialInsurance: 0, transportation: 0, reimbursedExpenses: 0, workDays: 0,
-  });
-  const sums = zero();
-  const observed = Object.fromEntries(Object.keys(sums).map(k => [k, false])) as Record<SummaryKey, boolean>;
-  const partial = Object.fromEntries(Object.keys(sums).map(k => [k, false])) as Record<SummaryKey, boolean>;
-  function add(key: SummaryKey, value: string | undefined): void {
-    const numeric = amountOrMissing(value);
-    if (numeric === null) { partial[key] = true; return; }
-    observed[key] = true;
-    sums[key] += numeric;
-  }
-  for (const { form } of records) {
-    // 0円の賞与は内訳欄が存在しない正常明細。月次の「未入力」扱いで
-    // 所得税・社会保険料の年間集計に ※ を付けない。
-    const zeroBonus = form.kind === 'bonus' && amountOrMissing(form.gross) === 0 && amountOrMissing(form.net) === 0;
-    const valueFor = (key: string): string | undefined =>
-      zeroBonus && amountOrMissing(form[key]) === null ? '0' : form[key];
-    for (const key of ['gross', 'net', 'residentTax', 'transportation', 'reimbursedExpenses'] as const) add(key, valueFor(key));
-    // 実績の所得税は年調還付を反映した実際の控除（所得税＋年調過不足）を表示する。
-    // 月給を使った将来予測にはこの一時的な年調額を混ぜない。
-    add('incomeTax', valueFor('incomeTax'));
-    const yearEnd = amountOrMissing(form.yearEndAdjustment);
-    if (yearEnd !== null) {
-      sums.incomeTax += yearEnd;
-      observed.incomeTax = true;
-      if (amountOrMissing(form.incomeTax) === null && !zeroBonus) partial.incomeTax = true;
-    }
-    if (form.kind === 'salary') add('workDays', form.workDays);
-    for (const key of ['healthInsurance', 'careInsurance', 'childcareSupport', 'pension', 'employmentInsurance']) {
-      add('socialInsurance', valueFor(key));
-    }
-  }
-  return { sums, observed, partial };
-}
-/** 見込みを表示専用の集計に加算する。保存済みレコードや元の集計結果は変更しない。 */
-function withEstimates(actual: Summary, estimates: readonly MonthEstimate[]): Summary {
-  const sums = { ...actual.sums };
-  const observed = { ...actual.observed };
-  const partial = { ...actual.partial };
-  for (const estimate of estimates) {
-    for (const key of ['gross', 'net', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses', 'workDays'] as const) {
-      const value = estimate.values[key];
-      if (value === null) { partial[key] = true; continue; }
-      sums[key] += value;
-      observed[key] = true;
-      if (estimate.incomplete[key]) partial[key] = true;
-    }
-  }
-  return { sums, observed, partial };
 }
 function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): void {
   forecastPanel.hidden = false;
@@ -212,35 +206,41 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   }
   const caution = document.createElement('p');
   caution.className = 'forecast-caution';
-  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。登録済みの副業賞与は「賞与を含む」ON時に実績として集計します。※は未入力のある部分集計。保存データは変更しません。';
+  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。登録済みの副業賞与は「賞与を含む」ON時に実績として集計します。見込み加算分の※は一部算出できない項目を示します。保存データは変更しません。';
   forecastDetails.append(caution);
+  const suspicious = plan.estimates.filter(estimate => {
+    const gross = estimate.values.gross;
+    const net = estimate.values.net;
+    const travel = estimate.values.transportation ?? 0;
+    const expenses = estimate.values.reimbursedExpenses ?? 0;
+    return gross !== null && (gross < 0 || net !== null && net > gross || travel + expenses > gross);
+  });
+  if (suspicious.length) {
+    const warning = document.createElement('p');
+    warning.className = 'forecast-caution forecast-caution--warning';
+    warning.textContent = `見込み${suspicious.length}件で手取りが総支給を上回るなどの異常値が検出されました。推計の元となった実績明細を確認してください。`;
+    forecastDetails.append(warning);
+  }
 }
-function updateSummary(prefix: 'total' | Job, result: Summary, count: number): void {
+function updateSummary(prefix: 'total' | Job, result: Summary, count: number, sideSalaryCount = count): void {
   for (const key of ['gross', 'net', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses'] as const) {
     const id = `${prefix}-${key.replace(/[A-Z]/g, ch => `-${ch.toLowerCase()}`)}`;
     const element = document.getElementById(id);
     if (!element) continue;
-    element.textContent = !count || !result.observed[key] ? '--' : `${yen(result.sums[key])}${result.partial[key] ? ' ※' : ''}`;
-    if (count && result.partial[key]) {
-      element.title = '未入力の項目があります。表示額は入力済みの合計であり、0円として確定していません。';
-      element.setAttribute('aria-label', `${element.textContent} 未入力項目あり`);
-    } else {
-      element.removeAttribute('title'); element.removeAttribute('aria-label');
-    }
+    // 金額には金額だけを表示し、欠損情報は項目名の直下へ分離する。
+    element.textContent = !count || !result.observed[key] ? '--' : yen(result.sums[key]);
+    setMissingIndicator(element, count && result.partial[key] ? result.missingCounts[key] : 0, count);
   }
   if (prefix === 'side') {
     const days = document.getElementById('side-days');
     if (days) {
-      days.textContent = !count || !result.observed.workDays ? '--' : `${result.sums.workDays.toLocaleString('ja-JP')}日${result.partial.workDays ? ' ※' : ''}`;
-      days.title = result.partial.workDays ? '出勤日数が未入力の明細があります。' : '';
+      days.textContent = !sideSalaryCount || !result.observed.workDays
+        ? '--' : `${result.sums.workDays.toLocaleString('ja-JP')}日`;
+      setMissingIndicator(days, sideSalaryCount && result.partial.workDays ? result.missingCounts.workDays : 0, sideSalaryCount);
     }
   }
 }
-function revokePdfUrls(): void {
-  for (const url of pdfUrls) URL.revokeObjectURL(url);
-  pdfUrls = [];
-}
-function renderList(job: Job, records: SavedPayrollRecord[]): void {
+function renderList(job: Job, records: SavedPayrollSummary[]): void {
   const list = required<HTMLUListElement>(`#${job}-records`);
   required<HTMLElement>(`#${job}-count`).textContent = `${records.length}件`;
   list.replaceChildren();
@@ -255,7 +255,8 @@ function renderList(job: Job, records: SavedPayrollRecord[]): void {
     list.append(li);
     return;
   }
-  for (const record of records.sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate))) {
+  const ordered = [...records].sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate));
+  for (const record of ordered.slice(0, visibleCounts[job])) {
     const item = document.createElement('li');
     item.className = 'statement-item';
     const left = document.createElement('div');
@@ -266,9 +267,8 @@ function renderList(job: Job, records: SavedPayrollRecord[]): void {
     link.className = 'statement-link';
     link.textContent = record.fileName;
     link.title = '原本PDFを別タブで開く';
-    const url = URL.createObjectURL(record.pdf);
-    pdfUrls.push(url);
-    link.href = url;
+    // 閲覧専用ページがクリック時にIDBから原本1件だけ取得する。
+    link.href = `./view/index.html?id=${encodeURIComponent(String(record.id))}`;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     const caption = document.createElement('span');
@@ -280,13 +280,32 @@ function renderList(job: Job, records: SavedPayrollRecord[]): void {
     left.append(detail);
     const actions = document.createElement('div');
     actions.className = 'statement-item__actions';
-    const download = document.createElement('a');
+    const download = document.createElement('button');
+    download.type = 'button';
     download.className = 'btn btn--icon';
     download.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>';
     download.setAttribute('aria-label', `${record.fileName} をダウンロード`);
-    download.href = url;
-    download.download = record.fileName;
     download.title = '原本PDFをダウンロード';
+    download.addEventListener('click', async () => {
+      if (download.disabled) return;
+      download.disabled = true;
+      try {
+        const full = await getRecord(record.id);
+        if (!full || recordSignature(full) !== recordSignature(record)) {
+          throw new Error('この明細は別タブで更新されています。画面を再読み込みしてください。');
+        }
+        const url = URL.createObjectURL(full.pdf);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = safePdfFileName(full.fileName);
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch (error) {
+        window.alert(`PDFのダウンロードに失敗しました。\n${error instanceof Error ? error.message : String(error)}`);
+      } finally { download.disabled = false; }
+    });
     const edit = document.createElement('a');
     edit.className = 'btn btn--icon';
     edit.href = `./edit/index.html?id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}`;
@@ -322,18 +341,32 @@ function renderList(job: Job, records: SavedPayrollRecord[]): void {
     item.append(left, actions);
     list.append(item);
   }
+  // 50件ずつ描画する。年度内の全件を副業ZIPに保存する機能には影響しない。
+  if (ordered.length > visibleCounts[job]) {
+    const rest = ordered.length - visibleCounts[job];
+    const moreItem = document.createElement('li');
+    moreItem.className = 'statement-item';
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'btn btn--secondary';
+    more.textContent = `さらに${Math.min(50, rest)}件表示（残り${rest}件）`;
+    more.addEventListener('click', () => { visibleCounts[job] += 50; render(); });
+    moreItem.append(more);
+    list.append(moreItem);
+  }
 }
 function render(): void {
   const year = Number(yearSelect.value);
   const isCalendar = periodMode === 'calendar';
   periodLabel.textContent = isCalendar
-    ? `${year}年1月〜12月 ・ 支給日基準 / ※は未入力のある部分集計`
-    : `${year}年4月〜${year + 1}年3月 ・ 給与対象年月基準 / ※は未入力のある部分集計`;
-  const yearRecords = saved.filter(item =>
-    (isCalendar ? calendarYearOfPaymentDate(item.form.paymentDate) : fiscalYearOfTargetMonth(item.form.targetMonth)) === year &&
-    (bonusToggle.checked || item.form.kind !== 'bonus'));
+    ? `${year}年1月〜12月 ・ 支給日基準`
+    : `${year}年4月〜${year + 1}年3月 ・ 給与対象年月基準`;
+  const yearRecords = selectedPeriodRecords();
   const main = yearRecords.filter(item => item.form.job === 'main');
   const side = yearRecords.filter(item => item.form.job === 'side');
+  sideZipButton.disabled = exportingSideZip || side.length === 0;
+  sideZipButton.title = side.length ? `表示中の副業明細${side.length}件の原本PDFをZIPで保存` : '表示中の副業PDFはありません';
+  if (!exportingSideZip) sideZipStatus.textContent = '';
   const forecast = forecastToggle.checked
     ? isCalendar ? calculateCalendarForecast(saved, year, new Date(), bonusToggle.checked)
       : calculateAnnualForecast(saved, year, new Date(), bonusToggle.checked)
@@ -353,27 +386,27 @@ function render(): void {
   const mainProjected = projected.filter(item => item.job === 'main');
   const sideProjected = projected.filter(item => item.job === 'side');
   updateSummary('main', withEstimates(summary(main), mainProjected), main.length + mainProjected.length);
-  updateSummary('side', withEstimates(summary(side), sideProjected), side.length + sideProjected.length);
-  revokePdfUrls();
+  updateSummary('side', withEstimates(summary(side), sideProjected), side.length + sideProjected.length,
+    side.filter(item => item.form.kind === 'salary').length + sideProjected.filter(item => item.kind === 'salary').length);
   renderList('main', main);
   renderList('side', side);
 }
 function changeMode(mode: PeriodMode): void {
   if (periodMode === mode) return;
   periodMode = mode;
+  visibleCounts.main = 50; visibleCounts.side = 50;
   updateYearOptions();
   persistPeriodSelection();
   render();
 }
 fiscalModeButton.addEventListener('click', () => changeMode('fiscal'));
 calendarModeButton.addEventListener('click', () => changeMode('calendar'));
-yearSelect.addEventListener('change', () => { persistPeriodSelection(); render(); });
-bonusToggle.addEventListener('change', render);
+yearSelect.addEventListener('change', () => { visibleCounts.main = 50; visibleCounts.side = 50; persistPeriodSelection(); render(); });
+bonusToggle.addEventListener('change', () => { visibleCounts.main = 50; visibleCounts.side = 50; render(); });
 forecastToggle.addEventListener('change', render);
-window.addEventListener('pagehide', revokePdfUrls);
 async function refreshDashboard(): Promise<void> {
   try {
-    saved = await loadRecords();
+    saved = await loadRecordSummaries();
     yearSelect.disabled = false;
     bonusToggle.disabled = false;
     forecastToggle.disabled = false;
@@ -389,6 +422,7 @@ async function refreshDashboard(): Promise<void> {
     yearSelect.disabled = true;
     bonusToggle.disabled = true;
     forecastToggle.disabled = true;
+    sideZipButton.disabled = true;
     // エラー文を通常renderで上書きしない。既存レコードが消えたわけではない。
   }
 }

@@ -2,7 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="theme-color" content="#f5f7fb">
   <title>Payroll | 給与明細管理</title>
   <link rel="stylesheet" href="./styles/ress.css">
@@ -150,7 +151,8 @@
             <ul class="statement-list" id="main-records"></ul>
           </section>
           <section class="statement-column" aria-labelledby="side-list-heading">
-            <div class="statement-column__heading"><h3 id="side-list-heading">副業</h3><span class="count-badge" id="side-count">0件</span></div>
+            <div class="statement-column__heading"><h3 id="side-list-heading">副業</h3><span class="count-badge" id="side-count">0件</span><button type="button" class="btn btn--secondary side-zip-button" id="download-side-zip" disabled title="選択中の集計期間に属する副業PDF全件をZIP保存">PDFをZIP保存</button></div>
+            <p class="side-zip-status" id="side-zip-status" role="status" aria-live="polite"></p>
             <ul class="statement-list" id="side-records"></ul>
           </section>
         </div>
@@ -159,5 +161,5 @@
       <footer class="site-footer"><span>Payroll · 個人用給与管理ツール</span><span>PDFの解析はブラウザ内で行います</span></footer>
     </main>
   </div>
-</body>
+<div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="./build-info.js"></script></body>
 </html>

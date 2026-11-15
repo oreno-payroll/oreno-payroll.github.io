@@ -17,14 +17,14 @@ function u16(v: DataView, offset: number, n: number): void { v.setUint16(offset,
 function u32(v: DataView, offset: number, n: number): void { v.setUint32(offset, n >>> 0, true); }
 import { MAX_ARCHIVE_BYTES } from './storageLimits';
 const MAX_ARCHIVE = MAX_ARCHIVE_BYTES;
-export function writeZip(files: ZipFile[]): Blob {
+function writeZipFiles(files: ZipFile[], validName: (name: string) => boolean): Blob {
   if (files.length > 2001) throw new Error('バックアップ内のファイル数が多すぎます。');
   const parts: BlobPart[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;
   const unique = new Set<string>();
   for (const { name, data } of files) {
-    if (!/^(manifest\.json|pdf\/[0-9]{6}\.pdf)$/.test(name) || unique.has(name)) throw new Error('ZIP内のパスが不正または重複しています。');
+    if (!validName(name) || unique.has(name)) throw new Error('ZIP内のパスが不正または重複しています。');
     unique.add(name);
     const nameBytes = encoder.encode(name);
     const size = data.byteLength;
@@ -55,6 +55,14 @@ export function writeZip(files: ZipFile[]): Blob {
   if (offset + directorySize + end.byteLength > MAX_ARCHIVE) throw new Error('ZIPの合計サイズが512MBを超えています。');
   return new Blob(parts, { type: 'application/zip' });
 }
+/** バックアップ形式はこれまでどおり固定し、既存の復元仕様と互換性を維持する。 */
+export function writeZip(files: ZipFile[]): Blob {
+  return writeZipFiles(files, name => /^(manifest\.json|pdf\/[0-9]{6}\.pdf)$/.test(name));
+}
+/** 元PDFだけを取り出すエクスポートZIP。バックアップ用readZipとは混同しない。 */
+export function writePdfExportZip(files: ZipFile[]): Blob {
+  return writeZipFiles(files, name => /^pdf\/[0-9]{6}_[^/\\\x00-\x1f]{1,200}\.pdf$/i.test(name));
+}
 function ensure(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
 /** 自前で作成したstore方式ZIPのみ読み込み。他のZIPは安全側で拒否する。 */
 export function readZip(buffer: ArrayBuffer): Map<string, Uint8Array> {
@@ -74,6 +82,7 @@ export function readZip(buffer: ArrayBuffer): Map<string, Uint8Array> {
   ensure(cursor + dirSize === eocd, 'ZIPのディレクトリ位置が不正です。');
   const result = new Map<string, Uint8Array>();
   let totalSize = 0;
+  let expectedLocalOffset = 0;
   for (let i = 0; i < count; i++) {
     ensure(cursor + 46 <= eocd && view.getUint32(cursor, true) === 0x02014b50, 'ZIPのディレクトリが壊れています。');
     const flags = view.getUint16(cursor + 8, true);
@@ -86,14 +95,23 @@ export function readZip(buffer: ArrayBuffer): Map<string, Uint8Array> {
     const commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
     const next = cursor + 46 + nameLength + extraLength + commentLength;
-    ensure(next <= eocd && method === 0 && flags === 0x0800 && compressed === uncompressed, 'このバックアップ形式に対応していません。');
+    ensure(next <= eocd && method === 0 && flags === 0x0800 && compressed === uncompressed,
+      'このバックアップ形式に対応していません。');
+    ensure(view.getUint16(cursor + 34, true) === 0 && view.getUint16(cursor + 36, true) === 0,
+      'ZIP内のディスク情報が不正です。');
+    ensure(localOffset === expectedLocalOffset, 'ZIP内のファイル位置が連続していません。');
     const name = decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
     ensure(/^(manifest\.json|pdf\/[0-9]{6}\.pdf)$/.test(name) && !result.has(name), 'ZIP内に不正なファイル名または重複があります。');
     ensure(localOffset + 30 <= cursor && view.getUint32(localOffset, true) === 0x04034b50, 'ZIP内のPDFデータ位置が不正です。');
     const localNameLength = view.getUint16(localOffset + 26, true);
     const localExtra = view.getUint16(localOffset + 28, true);
     const start = localOffset + 30 + localNameLength + localExtra;
-    ensure(start + compressed <= view.getUint32(eocd + 16, true), 'ZIP内のデータが不完全です。');
+    ensure(view.getUint16(localOffset + 6, true) === flags && view.getUint16(localOffset + 8, true) === method &&
+      view.getUint32(localOffset + 14, true) === checksum && view.getUint32(localOffset + 18, true) === compressed &&
+      view.getUint32(localOffset + 22, true) === uncompressed && localNameLength === nameLength,
+      'ZIPのローカルヘッダーとディレクトリ情報が一致しません。');
+    ensure(start <= view.getUint32(eocd + 16, true) && start + compressed <= view.getUint32(eocd + 16, true), 'ZIP内のデータが不完全です。');
+    expectedLocalOffset = start + compressed;
     ensure(decoder.decode(bytes.subarray(localOffset + 30, localOffset + 30 + localNameLength)) === name, 'ZIPのファイル名が一致しません。');
     const data = bytes.slice(start, start + compressed);
     ensure(crc32(data) === checksum, `CRC検証に失敗しました: ${name}`);
@@ -102,6 +120,7 @@ export function readZip(buffer: ArrayBuffer): Map<string, Uint8Array> {
     result.set(name, data);
     cursor = next;
   }
-  ensure(cursor === eocd && result.has('manifest.json'), 'バックアップの内容が不完全です。');
+  ensure(cursor === eocd && expectedLocalOffset === view.getUint32(eocd + 16, true) && result.has('manifest.json'),
+    'バックアップの内容が不完全です。');
   return result;
 }

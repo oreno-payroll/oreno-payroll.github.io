@@ -2,8 +2,9 @@
  * ホーム画面専用の年度見込み。保存済みフォームを読み取り、結果だけを返す純粋関数。
  * IndexedDBへの書き込み、PDF生成、追加の給与レコード作成は行わない。
  */
-import { amountOrMissing } from '../storage/payrollValidation';
-import { monthIndex, targetMonthOf, salaryPaymentLag } from './payrollCalendar';
+import { amountOrMissing } from '../storage/payrollValidation.ts';
+import { isZeroIfMissingSummaryKey } from './missingPolicy.ts';
+import { monthIndex, targetMonthOf, salaryPaymentLag } from './payrollCalendar.ts';
 
 export type ForecastJob = 'main' | 'side';
 export type ForecastKind = 'salary' | 'bonus';
@@ -57,11 +58,12 @@ function median(values: number[]): number | null {
 }
 function fieldValue(form: Record<string, string>, key: ForecastKey): { value: number | null; incomplete: boolean } {
   if (key === 'socialInsurance') {
-    const parts = SOCIAL_KEYS.map(part => amountOrMissing(form[part]));
-    if (parts.every(value => value === null)) return { value: null, incomplete: true };
-    return { value: parts.reduce<number>((sum, value) => sum + (value ?? 0), 0), incomplete: parts.some(value => value === null) };
+    // 社会保険各項目の記載がなければ0円。存在する内訳は従来どおり足す。
+    const value = SOCIAL_KEYS.reduce((sum, part) => sum + (amountOrMissing(form[part]) ?? 0), 0);
+    return { value, incomplete: false };
   }
-  return { value: amountOrMissing(form[key]), incomplete: false };
+  const value = amountOrMissing(form[key]);
+  return { value: value ?? (isZeroIfMissingSummaryKey(key) ? 0 : null), incomplete: false };
 }
 export function estimateFromSamples(job: ForecastJob, month: string, samples: ForecastSource[]): MonthEstimate {
   const values = {} as Record<ForecastKey, number | null>;

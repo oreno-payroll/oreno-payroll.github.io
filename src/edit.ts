@@ -1,7 +1,9 @@
+import { safePdfFileName } from './storage/fileNaming';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import { deleteRecord, getRecord, updateRecord, inspectReplacementConflicts, recordSignature, type SavedPayrollRecord } from './storage/payrollStore';
-import { validatePayrollForm, normalizeWorkDays } from './storage/payrollValidation';
+import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
+import { showInlineError, clearInlineError } from './ui/feedback';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -31,6 +33,7 @@ document.querySelectorAll<HTMLAnchorElement>('a[href="../index.html"]').forEach(
 let record: SavedPayrollRecord | undefined;
 let url: string | undefined;
 let saving = false;
+let leavingAfterSave = false;
 
 function hideConditional(kind: string): void {
   form.querySelectorAll<HTMLElement>('[data-bonus-only]').forEach(el => { el.hidden = kind !== 'bonus'; });
@@ -52,6 +55,18 @@ function getValues(): Record<string, string> {
   values.workDays = normalizeWorkDays(values.workDays ?? '');
   return values;
 }
+/** 既存PDFはそのまま。フォームの実質的な編集がある時だけ離脱警告。 */
+function hasUnsavedChanges(): boolean {
+  if (!record) return false;
+  const current = getValues();
+  const previous = record.form;
+  const keys = new Set([...Object.keys(current), ...Object.keys(previous)]);
+  for (const key of keys) {
+    const oldValue = key === 'workDays' ? normalizeWorkDays(previous[key] ?? '') : (previous[key] ?? '');
+    if ((current[key] ?? '') !== oldValue) return true;
+  }
+  return false;
+}
 function updateUI(): void {
   if (!record) return;
   const values = getValues();
@@ -67,12 +82,12 @@ function showState(): void {
   state.textContent = JSON.stringify({ ...metadata, pdf: { size: pdf.size, type: pdf.type } }, null, 2);
 }
 function showError(message: string): void {
-  errorView.textContent = message;
-  errorView.hidden = false;
+  showInlineError(errorView, message);
 }
 form.addEventListener('input', event => {
   const el = event.target;
   if (el instanceof HTMLInputElement && el.name === 'kind') hideConditional(el.value);
+  clearInlineError(errorView);
   confirmDiff.checked = false;
   updateUI();
 });
@@ -81,13 +96,14 @@ form.addEventListener('change', event => {
   if (el instanceof HTMLInputElement && el.name === 'workDays') {
     el.value = normalizeWorkDays(el.value);
   }
+  clearInlineError(errorView);
   updateUI();
 });
 form.addEventListener('submit', event => event.preventDefault());
-confirmDiff.addEventListener('change', updateUI);
+confirmDiff.addEventListener('change', () => { clearInlineError(errorView); updateUI(); });
 saveButton.addEventListener('click', async () => {
   if (!record || saving) return;
-  const formValues = getValues();
+  const formValues = applicablePayrollForm(getValues());
   const checked = validatePayrollForm(formValues);
   if (checked.errors.length) { showError(checked.errors[0]); return; }
   if (checked.warnings.length && !confirmDiff.checked) return;
@@ -110,8 +126,10 @@ saveButton.addEventListener('click', async () => {
       }
     }
     await updateRecord(updated, conflicts, recordSignature(record));
+    leavingAfterSave = true;
     window.location.assign(homeHref);
   } catch (error) {
+    leavingAfterSave = false;
     saving = false;
     showError(error instanceof Error ? `保存できませんでした: ${error.message}` : '保存できませんでした。');
     updateUI();
@@ -126,12 +144,19 @@ deleteButton.addEventListener('click', async () => {
   updateUI();
   try {
     await deleteRecord(record.id, recordSignature(record));
+    leavingAfterSave = true;
     window.location.assign(homeHref);
   } catch (error) {
+    leavingAfterSave = false;
     saving = false;
     showError(error instanceof Error ? `削除できませんでした: ${error.message}` : '削除できませんでした。');
     updateUI();
   }
+});
+window.addEventListener('beforeunload', event => {
+  if (leavingAfterSave || !hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
 });
 window.addEventListener('pagehide', () => { if (url) URL.revokeObjectURL(url); });
 void (async () => {
@@ -148,7 +173,7 @@ void (async () => {
     link.href = url;
     const download = $<HTMLAnchorElement>('download-pdf');
     download.href = url;
-    download.download = record.fileName;
+    download.download = safePdfFileName(record.fileName);
     fillForm(record.form);
     showState();
     updateUI();

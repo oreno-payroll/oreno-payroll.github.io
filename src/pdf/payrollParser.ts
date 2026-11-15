@@ -33,6 +33,12 @@ export interface PayrollParseResult {
   fields: Partial<Record<PayrollField, string>>;
   warnings: string[];
   missingFields: MissingPdfField[];
+  /** 想定の重要見出しが座標付きで一致した割合。疑いが強い場合、自動入力を止める。 */
+  layout?: { matched: number; required: number; status: "matched" | "suspect" };
+  /** 自動解析で採用した明細のページ。複数ページのPDFの診断に使用。 */
+  sourcePage?: number;
+  /** 直接読んだ数値の元ラベル・数値のPDF座標。派生計算した金額は含めない。 */
+  fieldSources?: Partial<Record<PayrollField, { page: number; label: string; labelX: number; labelY: number; valueX: number; valueY: number }>>;
 }
 
 type Region = { labelMinX: number; labelMaxX: number; valueMinX: number; valueMaxX: number; minY?: number; maxY?: number };
@@ -102,27 +108,65 @@ function asAmount(text: string): number | undefined {
     ? (negative ? -value : value) : undefined;
 }
 
-/** 書式・位置で限定したラベルと、右側の同一行にある数値の組を取得する。 */
-function findAmount(
-  items: PdfTextCell[],
-  labels: readonly string[],
-  region: Region,
+/** 金額の元文字・座標も戻す。座標インデックスは1ページ単位で遅延構築。 */
+type LocatedAmount = { amount: number; label: PdfTextCell; value: PdfTextCell };
+interface RowIndex { rows: Map<string, PdfTextCell[]> }
+const rowIndices = new WeakMap<PdfTextCell[], RowIndex>();
+function indexRows(items: PdfTextCell[]): RowIndex {
+  const cached = rowIndices.get(items);
+  if (cached) return cached;
+  const rows = new Map<string, PdfTextCell[]>();
+  for (const cell of items) {
+    const key = `${cell.page}|${Math.floor(cell.y / 5)}`;
+    const row = rows.get(key) ?? [];
+    row.push(cell);
+    rows.set(key, row);
+  }
+  const index = { rows };
+  rowIndices.set(items, index);
+  return index;
+}
+function findLocatedAmount(
+  items: PdfTextCell[], labels: readonly string[], region: Region,
   options: { startsWith?: boolean; yTolerance?: number } = {},
-): number | undefined {
+): LocatedAmount | undefined {
   const names = labels.map(norm);
-  const candidates = items.filter(cell => inRange(cell, region, "label") && names.some(name =>
+  const tolerance = options.yTolerance ?? 3;
+  const candidates = items.filter(cell => inRange(cell, region, 'label') && names.some(name =>
     options.startsWith ? norm(cell.text).startsWith(name) : norm(cell.text) === name));
+  const { rows } = indexRows(items);
   for (const label of candidates) {
-    const matches = items.filter(value => value.page === label.page
-      && inRange(value, region, "value")
-      && value.x >= label.x + 10
-      && Math.abs(value.y - label.y) <= (options.yTolerance ?? 3.0)
+    const nearby: PdfTextCell[] = [];
+    for (let row = Math.floor((label.y - tolerance) / 5); row <= Math.floor((label.y + tolerance) / 5); row++) {
+      nearby.push(...(rows.get(`${label.page}|${row}`) ?? []));
+    }
+    const matches = nearby.filter(value => inRange(value, region, 'value')
+      && value.x >= label.x + 10 && Math.abs(value.y - label.y) <= tolerance
       && asAmount(value.text) !== undefined)
-      .sort((a, b) => Math.abs(a.y - label.y) - Math.abs(b.y - label.y)
+      .sort((a,b) => Math.abs(a.y - label.y) - Math.abs(b.y - label.y)
         || Math.abs(a.x - (region.valueMaxX - 5)) - Math.abs(b.x - (region.valueMaxX - 5)));
-    if (matches.length) return asAmount(matches[0].text);
+    if (matches.length) return { amount: asAmount(matches[0].text)!, label, value: matches[0] };
   }
   return undefined;
+}
+function findAmount(
+  items: PdfTextCell[], labels: readonly string[], region: Region,
+  options: { startsWith?: boolean; yTolerance?: number } = {},
+): number | undefined {
+  return findLocatedAmount(items, labels, region, options)?.amount;
+}
+function sourcedAmount(
+  result: PayrollParseResult, key: PayrollField, items: PdfTextCell[], labels: readonly string[], region: Region,
+  options: { startsWith?: boolean; yTolerance?: number } = {},
+): number | undefined {
+  const found = findLocatedAmount(items, labels, region, options);
+  if (!found) return undefined;
+  (result.fieldSources ??= {})[key] = {
+    page: found.label.page, label: found.label.text,
+    labelX: found.label.x, labelY: found.label.y,
+    valueX: found.value.x, valueY: found.value.y,
+  };
+  return found.amount;
 }
 
 function put(fields: PayrollParseResult["fields"], field: PayrollField, value: number | undefined): void {
@@ -148,24 +192,46 @@ function monthFrom(text: string): string | undefined {
   return month >= 1 && month <= 12 ? `${match[1]}-${String(month).padStart(2, "0")}` : undefined;
 }
 
-function getDate(items: PdfTextCell[], label?: string): string | undefined {
-  if (!label) return items.map(i => dateFrom(i.text)).find((d): d is string => Boolean(d));
-  // 「支給日：YYYY年...」のような同一TextItemも扱う。
-  const inSame = items.filter(i => norm(i.text).startsWith(label))
-    .map(i => dateFrom(i.text)).find((d): d is string => Boolean(d));
-  if (inSame) return inSame;
-  const labels = items.filter(i => norm(i.text) === label);
-  for (const l of labels) {
-    const date = items.filter(i => i.page === l.page && i.x > l.x && Math.abs(i.y - l.y) <= 3)
+/** 支給日の見出しと同じ行で対応が取れる日付だけを採用する。
+ * 単なる「PDFで最初に見つかった日付」へのフォールバックは禁止する。
+ * 本業賞与にある「支」「給日: YYYY...」の分割文字も扱う。
+ */
+function getPaymentDate(items: PdfTextCell[]): string | undefined {
+  const isLabel = (value: string): boolean => /^支給日(?::|20\d{2}|$)/u.test(norm(value));
+  const dateOnLine = (label: PdfTextCell): string | undefined => {
+    // 同じTextItemに日付が含まれるケースを優先する。
+    const inline = dateFrom(label.text);
+    if (inline) return inline;
+    return items.filter(item => item.page === label.page
+      && item.x > label.x && item.x < label.x + 260
+      && Math.abs(item.y - label.y) <= 4)
       .sort((a, b) => a.x - b.x)
-      .map(i => dateFrom(i.text)).find((d): d is string => Boolean(d));
+      .map(item => dateFrom(item.text))
+      .find((date): date is string => Boolean(date));
+  };
+  for (const item of items) {
+    if (isLabel(item.text)) {
+      const date = dateOnLine(item);
+      if (date) return date;
+    }
+  }
+  for (const item of items) {
+    if (!/^給日(?::|20\d{2}|$)/u.test(norm(item.text))) continue;
+    // 「給日...」だけを支給日とみなさず、直前の「支」と座標が接していることを確認。
+    const prefix = items.some(before => before.page === item.page && norm(before.text) === "支"
+      && before.x < item.x && item.x - before.x <= 38 && Math.abs(before.y - item.y) <= 4);
+    if (!prefix) continue;
+    const date = dateOnLine(item);
     if (date) return date;
   }
-  // 一部の賞与PDFは「支」「 給日：YYYY...」と分割される。
-  // 支給日以外の数字を拾わないよう、給日: を含む断片に限定する。
-  const fragments = items.filter(i => /^(?:給日|支給日)[:：]/u.test(norm(i.text)));
-  const fragmented = fragments.map(i => dateFrom(i.text)).find((d): d is string => Boolean(d));
-  return fragmented;
+  return undefined;
+}
+
+function hasPaymentDateLabel(items: PdfTextCell[]): boolean {
+  return items.some(item => /^支給日(?::|20\d{2}|$)/u.test(norm(item.text)))
+    || items.some(item => /^給日(?::|20\d{2}|$)/u.test(norm(item.text))
+      && items.some(before => before.page === item.page && norm(before.text) === '支'
+        && before.x < item.x && item.x - before.x <= 38 && Math.abs(before.y - item.y) <= 4));
 }
 
 /** 検証済み帳票に存在するはずの欄を、未検出と読取失敗に分けて記録する。 */
@@ -183,7 +249,7 @@ function checkExpectedFields(
   specialValues: Readonly<Record<string, number | undefined>> = {},
 ): void {
   for (const spec of expected) {
-    const labelExists = items.some(item => {
+    const labelExists = spec.label === "支給日" ? hasPaymentDateLabel(items) : items.some(item => {
       if (spec.region && !inRange(item, spec.region, "label")) return false;
       const content = norm(item.text);
       return spec.names.some(name => spec.startsWith
@@ -252,10 +318,10 @@ function mainPayroll(items: PdfTextCell[]): PayrollParseResult {
   const fields: PayrollParseResult["fields"] = { job: "main", kind: "salary" };
   const result: PayrollParseResult = { profile: "main", fields, warnings: [], missingFields: [] };
   fields.targetMonth = items.map(i => monthFrom(i.text)).find((m): m is string => Boolean(m));
-  fields.paymentDate = getDate(items, "支給日:") ?? getDate(items, "支給日");
-  put(fields, "gross", findAmount(items, ["支給合計"], MAIN_PAY));
-  put(fields, "net", findAmount(items, ["振込支給額"], MAIN_NET));
-  put(fields, "workDays", findAmount(items, ["出勤日数(平日)", "出勤日数"], MAIN_WORK));
+  fields.paymentDate = getPaymentDate(items);
+  put(fields, "gross", sourcedAmount(result, "gross", items, ["支給合計"], MAIN_PAY));
+  put(fields, "net", sourcedAmount(result, "net", items, ["振込支給額"], MAIN_NET));
+  put(fields, "workDays", sourcedAmount(result, "workDays", items, ["出勤日数(平日)", "出勤日数"], MAIN_WORK));
   // 帳票上は「立替経費」だけでは実際の経費か都度交通費か識別できない。
   // 通勤手当等と併記されたときだけ「経費」として分離し、
   // 立替経費しかない月はその全額を交通費に分類する（ユーザー指定の規則）。
@@ -286,16 +352,16 @@ function mainPayroll(items: PdfTextCell[]): PayrollParseResult {
       result.missingFields.push({ label: line.label, field, reason: "unreadable" });
     }
   }
-  put(fields, "incomeTax", findAmount(items, ["所得税"], MAIN_TAX));
+  put(fields, "incomeTax", sourcedAmount(result, "incomeTax", items, ["所得税"], MAIN_TAX));
   // 年調過不足税額は所得税とは独立して保持する。マイナスは還付（控除の減額）。
-  put(fields, "yearEndAdjustment", findAmount(items, ["年調過不足税額", "年末調整過不足額", "年末調整税額"], MAIN_TAX));
-  put(fields, "residentTax", findAmount(items, ["住民税", "市民税", "市府民税"], MAIN_TAX));
-  put(fields, "healthInsurance", findAmount(items, ["健康保険料"], MAIN_TAX));
-  put(fields, "careInsurance", findAmount(items, ["介護保険料"], MAIN_TAX));
-  put(fields, "childcareSupport", findAmount(items, ["子ども・子育て支援金", "子ども子育て支援金"], MAIN_TAX));
-  put(fields, "pension", findAmount(items, ["厚生年金保険料"], MAIN_TAX));
-  put(fields, "employmentInsurance", findAmount(items, ["雇用保険料"], MAIN_TAX));
-  put(fields, "otherDeductions", findAmount(items, ["その他控除"], MAIN_TAX));
+  put(fields, "yearEndAdjustment", sourcedAmount(result, "yearEndAdjustment", items, ["年調過不足税額", "年末調整過不足額", "年末調整税額"], MAIN_TAX));
+  put(fields, "residentTax", sourcedAmount(result, "residentTax", items, ["住民税", "市民税", "市府民税"], MAIN_TAX));
+  put(fields, "healthInsurance", sourcedAmount(result, "healthInsurance", items, ["健康保険料"], MAIN_TAX));
+  put(fields, "careInsurance", sourcedAmount(result, "careInsurance", items, ["介護保険料"], MAIN_TAX));
+  put(fields, "childcareSupport", sourcedAmount(result, "childcareSupport", items, ["子ども・子育て支援金", "子ども子育て支援金"], MAIN_TAX));
+  put(fields, "pension", sourcedAmount(result, "pension", items, ["厚生年金保険料"], MAIN_TAX));
+  put(fields, "employmentInsurance", sourcedAmount(result, "employmentInsurance", items, ["雇用保険料"], MAIN_TAX));
+  put(fields, "otherDeductions", sourcedAmount(result, "otherDeductions", items, ["その他控除"], MAIN_TAX));
 
   const gross = fields.gross === undefined ? undefined : Number(fields.gross);
   const basic = findAmount(items, ["基本給"], MAIN_PAY);
@@ -345,22 +411,22 @@ function mainPayroll(items: PdfTextCell[]): PayrollParseResult {
 function sidePayroll(items: PdfTextCell[]): PayrollParseResult {
   const fields: PayrollParseResult["fields"] = { job: "side", kind: "salary" };
   const result: PayrollParseResult = { profile: "side", fields, warnings: [], missingFields: [] };
-  fields.paymentDate = getDate(items, "支給日");
+  fields.paymentDate = getPaymentDate(items);
   // 副業は毎月10日締め・当月25日支払い。管理対象月は支給月。
   if (fields.paymentDate) fields.targetMonth = fields.paymentDate.slice(0, 7);
-  put(fields, "gross", findAmount(items, ["支給合計"], SIDE_PAY));
-  put(fields, "net", findAmount(items, ["差引支給合計"], SIDE_NET));
-  put(fields, "taxable", findAmount(items, ["課税支給合計"], SIDE_PAY));
-  put(fields, "nonTaxable", findAmount(items, ["非税支給合計", "非課税支給合計"], SIDE_PAY));
-  put(fields, "transportation", findAmount(items, ["非課税通勤費"], SIDE_PAY));
-  put(fields, "incomeTax", findAmount(items, ["所得税"], SIDE_TAX));
+  put(fields, "gross", sourcedAmount(result, "gross", items, ["支給合計"], SIDE_PAY));
+  put(fields, "net", sourcedAmount(result, "net", items, ["差引支給合計"], SIDE_NET));
+  put(fields, "taxable", sourcedAmount(result, "taxable", items, ["課税支給合計"], SIDE_PAY));
+  put(fields, "nonTaxable", sourcedAmount(result, "nonTaxable", items, ["非税支給合計", "非課税支給合計"], SIDE_PAY));
+  put(fields, "transportation", sourcedAmount(result, "transportation", items, ["非課税通勤費"], SIDE_PAY));
+  put(fields, "incomeTax", sourcedAmount(result, "incomeTax", items, ["所得税"], SIDE_TAX));
   // この帳票の「その他」は控除欄(x=164〜298)にある。支給欄の他項目とは混同しない。
-  put(fields, "otherDeductions", findAmount(items, ["その他", "その他控除"], SIDE_TAX));
+  put(fields, "otherDeductions", sourcedAmount(result, "otherDeductions", items, ["その他", "その他控除"], SIDE_TAX));
   // 控除合計の外にある別掲の還付額は、共通の控除計算ではマイナス値として持つ。
   // PDF自体の総支給額や控除合計を改変せず、総支給−控除＋還付＝手取りを成立させる。
-  const outsideRefund = findAmount(items, ["年末調整還付", "年調還付"], SIDE_REFUND);
+  const outsideRefund = sourcedAmount(result, "yearEndAdjustment", items, ["年末調整還付", "年調還付"], SIDE_REFUND);
   if (outsideRefund !== undefined) put(fields, "yearEndAdjustment", -outsideRefund);
-  put(fields, "workDays", findAmount(items, ["出勤日数"], SIDE_WORK));
+  put(fields, "workDays", sourcedAmount(result, "workDays", items, ["出勤日数"], SIDE_WORK));
   // 書式にない社会保険料・住民税は「0」ではなく未入力のまま。
   const deductionTotal = findAmount(items, ["控除合計"], SIDE_TAX);
   checkExpectedFields(result, items, [
@@ -387,16 +453,16 @@ function sidePayroll(items: PdfTextCell[]): PayrollParseResult {
 function sideBonus(items: PdfTextCell[]): PayrollParseResult {
   const fields: PayrollParseResult["fields"] = { job: "side", kind: "bonus" };
   const result: PayrollParseResult = { profile: "side", fields, warnings: [], missingFields: [] };
-  fields.paymentDate = getDate(items, "支給日");
+  fields.paymentDate = getPaymentDate(items);
   if (fields.paymentDate) fields.targetMonth = fields.paymentDate.slice(0, 7);
-  put(fields, "bonusBase", findAmount(items, ["賞与"], SIDE_PAY));
-  put(fields, "gross", findAmount(items, ["支給合計"], SIDE_PAY));
-  put(fields, "net", findAmount(items, ["差引支給合計"], SIDE_NET));
-  put(fields, "healthInsurance", findAmount(items, ["健康保険料"], SIDE_TAX));
-  put(fields, "careInsurance", findAmount(items, ["介護保険料"], SIDE_TAX));
-  put(fields, "pension", findAmount(items, ["厚生年金保険", "厚生年金保険料"], SIDE_TAX));
-  put(fields, "employmentInsurance", findAmount(items, ["雇用保険料"], SIDE_TAX));
-  put(fields, "incomeTax", findAmount(items, ["所得税"], SIDE_TAX));
+  put(fields, "bonusBase", sourcedAmount(result, "bonusBase", items, ["賞与"], SIDE_PAY));
+  put(fields, "gross", sourcedAmount(result, "gross", items, ["支給合計"], SIDE_PAY));
+  put(fields, "net", sourcedAmount(result, "net", items, ["差引支給合計"], SIDE_NET));
+  put(fields, "healthInsurance", sourcedAmount(result, "healthInsurance", items, ["健康保険料"], SIDE_TAX));
+  put(fields, "careInsurance", sourcedAmount(result, "careInsurance", items, ["介護保険料"], SIDE_TAX));
+  put(fields, "pension", sourcedAmount(result, "pension", items, ["厚生年金保険", "厚生年金保険料"], SIDE_TAX));
+  put(fields, "employmentInsurance", sourcedAmount(result, "employmentInsurance", items, ["雇用保険料"], SIDE_TAX));
+  put(fields, "incomeTax", sourcedAmount(result, "incomeTax", items, ["所得税"], SIDE_TAX));
   const deductionTotal = findAmount(items, ["控除合計"], SIDE_TAX);
   checkExpectedFields(result, items, [
     { label: "支給日", names: ["支給日"], field: "paymentDate" },
@@ -433,19 +499,19 @@ function mainBonusHeaderNet(items: PdfTextCell[]): number | undefined {
 function mainBonus(items: PdfTextCell[]): PayrollParseResult {
   const fields: PayrollParseResult["fields"] = { job: "main", kind: "bonus" };
   const result: PayrollParseResult = { profile: "main", fields, warnings: [], missingFields: [] };
-  // 「支」「 給日:...」というPDF分割にもgetDateが対応する。
-  fields.paymentDate = getDate(items, "支給日") ?? getDate(items);
+  // 「支」「 給日:...」というPDF分割にも支給日限定の解析で対応する。
+  fields.paymentDate = getPaymentDate(items);
   if (fields.paymentDate) fields.targetMonth = fields.paymentDate.slice(0, 7);
-  put(fields, "bonusBase", findAmount(items, ["賞与手当"], MAIN_BONUS_PAY));
-  put(fields, "performanceBonus", findAmount(items, ["業績手当", "業績給"], MAIN_BONUS_PAY));
-  put(fields, "gross", findAmount(items, ["支給合計"], MAIN_BONUS_PAY));
-  put(fields, "net", findAmount(items, ["振込支給額"], MAIN_BONUS_NET) ?? mainBonusHeaderNet(items));
-  put(fields, "healthInsurance", findAmount(items, ["健康保険料"], MAIN_BONUS_TAX));
-  put(fields, "careInsurance", findAmount(items, ["介護保険料"], MAIN_BONUS_TAX));
-  put(fields, "childcareSupport", findAmount(items, ["子ども・子育て支援金", "子ども子育て支援金"], MAIN_BONUS_TAX));
-  put(fields, "pension", findAmount(items, ["厚生年金保険料"], MAIN_BONUS_TAX));
-  put(fields, "employmentInsurance", findAmount(items, ["雇用保険料"], MAIN_BONUS_TAX));
-  put(fields, "incomeTax", findAmount(items, ["所得税"], MAIN_BONUS_TAX));
+  put(fields, "bonusBase", sourcedAmount(result, "bonusBase", items, ["賞与手当"], MAIN_BONUS_PAY));
+  put(fields, "performanceBonus", sourcedAmount(result, "performanceBonus", items, ["業績手当", "業績給"], MAIN_BONUS_PAY));
+  put(fields, "gross", sourcedAmount(result, "gross", items, ["支給合計"], MAIN_BONUS_PAY));
+  put(fields, "net", sourcedAmount(result, "net", items, ["振込支給額"], MAIN_BONUS_NET) ?? mainBonusHeaderNet(items));
+  put(fields, "healthInsurance", sourcedAmount(result, "healthInsurance", items, ["健康保険料"], MAIN_BONUS_TAX));
+  put(fields, "careInsurance", sourcedAmount(result, "careInsurance", items, ["介護保険料"], MAIN_BONUS_TAX));
+  put(fields, "childcareSupport", sourcedAmount(result, "childcareSupport", items, ["子ども・子育て支援金", "子ども子育て支援金"], MAIN_BONUS_TAX));
+  put(fields, "pension", sourcedAmount(result, "pension", items, ["厚生年金保険料"], MAIN_BONUS_TAX));
+  put(fields, "employmentInsurance", sourcedAmount(result, "employmentInsurance", items, ["雇用保険料"], MAIN_BONUS_TAX));
+  put(fields, "incomeTax", sourcedAmount(result, "incomeTax", items, ["所得税"], MAIN_BONUS_TAX));
   const deductionTotal = findAmount(items, ["控除合計"], MAIN_BONUS_TAX);
   // 本業の「賞与実績なし」帳票では、支給・控除・差引がすべて0円で、
   // 賞与手当・税額・振込欄自体が存在しない。この場合は正常な0円明細として扱う。
@@ -478,6 +544,51 @@ function mainBonus(items: PdfTextCell[]): PayrollParseResult {
   return result;
 }
 
+/** 書式の重要な見出しが、想定した欄の座標に存在するか確認する。
+ * 文字の存在だけでプロファイルを特定できても、配置が変わったら自動転記しない。
+ * 欄のない0円賞与だけは、実際の見出し構成に合わせて必須アンカーを減らす。
+ */
+function checkLayout(result: PayrollParseResult, items: PdfTextCell[]): PayrollParseResult {
+  if (!result.profile) return result;
+  type Anchor = { names: readonly string[]; region: Region };
+  const anchor = (region: Region, ...names: string[]): Anchor => ({ names, region });
+  const mainSalary = [
+    anchor(MAIN_PAY, "基本給"), anchor(MAIN_PAY, "支給合計"),
+    anchor(MAIN_NET, "振込支給額"), anchor(MAIN_TAX, "控除合計"),
+  ];
+  const mainBonus = [
+    anchor(MAIN_BONUS_PAY, "賞与手当"), anchor(MAIN_BONUS_PAY, "支給合計"),
+    anchor(MAIN_BONUS_NET, "振込支給額"), anchor(MAIN_BONUS_TAX, "控除合計"),
+  ];
+  const sideSalary = [
+    anchor(SIDE_PAY, "課税支給合計"), anchor(SIDE_PAY, "支給合計"),
+    anchor(SIDE_NET, "差引支給合計"), anchor(SIDE_TAX, "控除合計"),
+  ];
+  const sideBonus = [
+    anchor(SIDE_PAY, "賞与"), anchor(SIDE_PAY, "支給合計"),
+    anchor(SIDE_NET, "差引支給合計"), anchor(SIDE_TAX, "控除合計"),
+  ];
+  const zeroMainBonus = result.profile === "main" && result.fields.kind === "bonus"
+    && result.fields.gross === "0" && result.fields.net === "0";
+  const anchors = result.profile === "main"
+    ? result.fields.kind === "bonus"
+      ? zeroMainBonus ? [mainBonus[1], mainBonus[3]] : mainBonus
+      : mainSalary
+    : result.fields.kind === "bonus" ? sideBonus : sideSalary;
+  const hasLabel = (item: PdfTextCell, a: Anchor): boolean =>
+    a.names.some(label => norm(item.text) === norm(label));
+  const matched = anchors.filter(a => items.some(item => hasLabel(item, a) && inRange(item, a.region, "label"))).length;
+  // 全体で見つかるのに想定位置にはない重要項目は、帳票レイアウト変更の兆候。
+  const displaced = anchors.filter(a => !items.some(item => hasLabel(item, a) && inRange(item, a.region, "label"))
+    && items.some(item => hasLabel(item, a))).length;
+  const minimum = zeroMainBonus ? 2 : 3;
+  const suspect = matched < minimum || displaced > 0;
+  result.layout = { matched, required: anchors.length, status: suspect ? "suspect" : "matched" };
+  if (suspect) result.warnings.unshift(
+    `重要な見出しの配置が想定と異なります（${matched}/${anchors.length}項目一致）。書式変更の可能性があるため自動入力を停止しました。原本で手動確認してください。`);
+  return result;
+}
+
 /** 書式・種類を判別して、検証済み帳票だけを自動入力する。 */
 function parseSinglePage(cells: PdfTextCell[]): PayrollParseResult {
   const texts = new Set(cells.map(item => norm(item.text)));
@@ -489,8 +600,8 @@ function parseSinglePage(cells: PdfTextCell[]): PayrollParseResult {
       + Number(has("介護保険料")) + Number(cells.some(item => item.text.includes("TCPDF")));
     const mainBonusScore = Number(has("振込支給額")) + Number(has("賞与手当"))
       + Number(has("本年累計")) + Number(has("支給合計"));
-    if (sideBonusScore >= 2 && sideBonusScore > mainBonusScore) return sideBonus(cells);
-    if (mainBonusScore >= 2 && mainBonusScore > sideBonusScore) return mainBonus(cells);
+    if (sideBonusScore >= 2 && sideBonusScore > mainBonusScore) return checkLayout(sideBonus(cells), cells);
+    if (mainBonusScore >= 2 && mainBonusScore > sideBonusScore) return checkLayout(mainBonus(cells), cells);
     return { profile: null, fields: {}, warnings: ["賞与明細の書式を特定できませんでした。手動で確認してください。"], missingFields: [] };
   }
   const sideScore = Number(has("差引支給合計")) + Number(has("非税支給合計"))
@@ -498,8 +609,8 @@ function parseSinglePage(cells: PdfTextCell[]): PayrollParseResult {
   const mainScore = Number(has("振込支給額")) + Number(has("本年累計"))
     + Number(cells.some(item => norm(item.text).startsWith("固定残業手当")))
     + Number(has("出勤日数(平日)"));
-  if (sideScore >= 2 && sideScore > mainScore) return sidePayroll(cells);
-  if (mainScore >= 2 && mainScore > sideScore) return mainPayroll(cells);
+  if (sideScore >= 2 && sideScore > mainScore) return checkLayout(sidePayroll(cells), cells);
+  if (mainScore >= 2 && mainScore > sideScore) return checkLayout(mainPayroll(cells), cells);
   return { profile: null, fields: {}, warnings: ["この給与明細の書式はまだ登録されていません。手動入力してください。"], missingFields: [] };
 }
 
@@ -516,7 +627,8 @@ export function parsePayroll(items: PdfTextCell[]): PayrollParseResult {
   const recognized = candidates.filter(c => c.result.profile !== null);
   if (!recognized.length) return candidates[0].result;
   recognized.sort((a, b) =>
-    Object.keys(b.result.fields).length - Object.keys(a.result.fields).length
+    Number(a.result.layout?.status === "suspect") - Number(b.result.layout?.status === "suspect")
+    || Object.keys(b.result.fields).length - Object.keys(a.result.fields).length
     || a.result.missingFields.length - b.result.missingFields.length
     || a.page - b.page);
   const best = recognized[0];
@@ -527,5 +639,5 @@ export function parsePayroll(items: PdfTextCell[]): PayrollParseResult {
   } else if (pages.length > 1) {
     warnings.push(`全${pages.length}ページを調査し、${best.page}ページ目から給与情報を取得しました。ほかのページに追加項目がないか確認してください。`);
   }
-  return { ...best.result, warnings };
+  return { ...best.result, sourcePage: best.page, warnings };
 }

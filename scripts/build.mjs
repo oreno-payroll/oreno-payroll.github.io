@@ -8,6 +8,7 @@ import * as esbuild from "esbuild";
 import { watch } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -39,7 +40,7 @@ const options = {
 
 // 元ファイルが欠けている場合は、既存のdistを消す前に停止する。
 // ZIP展開時のフォルダ入れ違いや誤削除を早めに発見できるようにする。
-for (const rel of ["public/index.html", "public/upload/index.html", "src/main.ts", "src/upload.ts"]) {
+for (const rel of ["public/index.html", "public/upload/index.html", "public/view/pdf-sw.js", "src/main.ts", "src/upload.ts", "src/view.ts"]) {
   const file = path.join(root, rel);
   try {
     const stat = await fs.stat(file);
@@ -68,6 +69,15 @@ for (const directory of ["cmaps", "standard_fonts", "wasm", "iccs"]) {
     { recursive: true },
   );
 }
+
+// 全ページ共通の実ビルド識別子。修正パッチの未反映を画面から判断できる。
+const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+let gitHash = "local";
+try { gitHash = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch {}
+const buildStamp = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", hour12: false });
+const buildLabel = `v${pkg.version} · ${buildStamp} · ${gitHash}`;
+await fs.writeFile(path.join(distDir, "build-info.js"),
+  `document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ${JSON.stringify(buildLabel)}; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n`, "utf8");
 
 if (!watchMode) {
   await esbuild.build(options);

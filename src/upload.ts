@@ -6,11 +6,14 @@
  */
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import { createCoordinateDiagnostic } from "./pdf/diagnostic";
+import { redactCoordinateDiagnostic } from "./pdf/redactDiagnostic";
 import { parsePayroll, type PdfTextCell, type PayrollParseResult } from "./pdf/payrollParser";
 import { saveRecordsSkippingDuplicates, type SavedPayrollRecordInput } from "./storage/payrollStore";
-import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, type PayrollFieldKey } from "./storage/payrollValidation";
+import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
+import { duplicateOwners, pdfFailureMessage, shortFileName } from "./pdf/uploadWorkflow";
+import { showInlineError, clearInlineError } from "./ui/feedback";
 
 GlobalWorkerOptions.workerSrc = new URL("./pdf.worker.min.mjs", import.meta.url).href;
 
@@ -26,6 +29,11 @@ interface Entry {
   textCount: number;
   hash?: string;
   error?: string;
+  cancelled?: boolean;
+  task?: ReturnType<typeof getDocument>;
+  currentPage?: number;
+  /** PDF解析で値が自動転記された欄。手動修正時に解除する。 */
+  autoFields?: Set<FieldKey>;
   form: FormValues;
   parsed?: PayrollParseResult;
   previewUrl?: string;
@@ -39,6 +47,9 @@ interface Entry {
 
 const MAX_FILES = 30;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+// 圧縮率の高い大量ページPDFで、ブラウザが無制限に解析を続けないようにする。
+const MAX_PARSE_PAGES = 100;
+const MAX_TEXT_ITEMS = 100_000;
 const FIELDS: readonly FieldKey[] = PAYROLL_FIELDS;
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -66,11 +77,13 @@ const diagnosticDialog = $<HTMLDialogElement>("diagnostic-dialog");
 const diagnosticClose = $<HTMLButtonElement>("diagnostic-close");
 const diagnosticShared = $<HTMLTextAreaElement>("diagnostic-shared");
 const diagnosticCopy = $<HTMLButtonElement>("diagnostic-copy");
+const diagnosticRedact = $<HTMLButtonElement>("diagnostic-redact");
 const diagnosticState = $<HTMLParagraphElement>("diagnostic-state");
 const analysisIssues = $<HTMLElement>("analysis-issues");
 const analysisIssuesList = $<HTMLUListElement>("analysis-issues-list");
 const analysisIssuesCount = $<HTMLElement>("analysis-issues-count");
 const saveButton = $<HTMLButtonElement>("save-all");
+const saveButtonLabel = $<HTMLSpanElement>("save-all-label");
 const saveStatus = $<HTMLElement>("save-status");
 const reviewPanel = document.querySelector<HTMLElement>(".review-panel");
 
@@ -79,6 +92,7 @@ let selectedId: number | null = null;
 let nextId = 1;
 let reading = false;
 let saving = false;
+let leavingAfterSave = false;
 let toastTimeout: ReturnType<typeof setTimeout> | undefined;
 
 function notice(message: string): void {
@@ -95,6 +109,36 @@ const ceilWorkDays = normalizeWorkDays;
 function selectedEntry(): Entry | undefined {
   return entries.find(entry => entry.id === selectedId);
 }
+function duplicated(): Map<number, number> { return duplicateOwners(entries); }
+function candidates(): Entry[] {
+  const dup = duplicated();
+  return entries.filter(entry => !dup.has(entry.id));
+}
+/** 削除されたファイルの処理を中断。保管済みのPDFには作用しない。 */
+function abortEntry(entry: Entry): void {
+  entry.cancelled = true;
+  if (entry.task) void entry.task.destroy().catch(() => {});
+}
+/** 重複元を削除したら、残ったコピーを再解析して通常の保存候補へ戻す。 */
+function activateOrphanDuplicates(): void {
+  const dup = duplicated();
+  let requeued = false;
+  for (const entry of entries) {
+    if (entry.status === 'duplicate' && !dup.has(entry.id)) {
+      entry.status = 'queued';
+      entry.parsed = undefined;
+      entry.autoFields = undefined;
+      entry.form = makeForm();
+      entry.cancelled = false;
+      requeued = true;
+    }
+  }
+  if (requeued) void drainQueue();
+}
+function stillActive(entry: Entry): void {
+  if (entry.cancelled || !entries.includes(entry)) throw new Error('解析が中断されました。');
+}
+
 /** 確認済みの対象を明細ごとに固定する。フォーム・警告が変わったら失効。 */
 function reviewFingerprint(entry: Entry): string {
   return JSON.stringify([
@@ -129,6 +173,7 @@ function formatBytes(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 function statusLabel(entry: Entry): { label: string; variant: string } {
+  if (duplicated().has(entry.id)) return { label: "同一PDF（保存対象外）", variant: "warning" };
   switch (entry.status) {
     case "queued": return { label: "読み取り待ち", variant: "pending" };
     case "reading": return { label: "読み取り中", variant: "pending" };
@@ -158,7 +203,10 @@ function renderFileList(): void {
   const active = entries.some(entry => entry.status === "queued" || entry.status === "reading");
   $("file-summary").textContent = !hasFiles ? "取り込み待ち" : active ? `${completed} / ${entries.length} 件の読み取りが完了` : `${entries.length}件の確認が可能です（未保存）`;
   progressWrap.hidden = !active;
-  progressText.textContent = `${completed} / ${entries.length}`;
+  const parsing = entries.find(entry => entry.status === "reading");
+  progressText.textContent = parsing
+    ? `${completed} / ${entries.length} · ${shortFileName(parsing.file.name, 26)}${parsing.pages ? `（${parsing.currentPage ?? 0}/${parsing.pages}ページ）` : ""}`
+    : `${completed} / ${entries.length}`;
   progressFill.style.width = `${hasFiles ? completed * 100 / entries.length : 0}%`;
   fileList.replaceChildren();
 
@@ -230,8 +278,9 @@ function renderIssues(entry: Entry): void {
     items.push({ text: `${entry.error ?? "PDFを読み取れませんでした。"} このPDFは保存できません。`, severity: "error" });
   } else if (entry.status === "no-text") {
     items.push({ text: "文字を取得できません。画像形式などの可能性があります。", severity: "warning" });
-  } else if (entry.status === "duplicate") {
-    items.push({ text: "内容が同じPDFが一覧にあります。二重登録にご注意ください。", severity: "warning" });
+  } else if (duplicated().has(entry.id)) {
+    const original = entries.find(item => item.id === duplicated().get(entry.id));
+    items.push({ text: `同じPDFが一覧にあります。「${original?.file.name ?? "先に追加したPDF"}」を優先し、このファイルは保存しません。`, severity: "warning" });
   }
   for (const missing of entry.parsed?.missingFields ?? []) {
     const manuallyEntered = missing.field ? entry.form[missing.field].trim() !== "" : false;
@@ -259,6 +308,15 @@ function renderIssues(entry: Entry): void {
     if (!control) continue;
     const missing = entry.parsed?.missingFields.some(item => item.field === control.name && entry.form[control.name as FieldKey] === "") ?? false;
     field.classList.toggle("field--missing", missing);
+    const automatic = entry.autoFields?.has(control.name as FieldKey) ?? false;
+    field.classList.toggle("field--auto", automatic && entry.form[control.name as FieldKey] !== "");
+    field.classList.toggle("field--manual", !automatic && entry.form[control.name as FieldKey] !== "");
+    const source = entry.parsed?.fieldSources?.[control.name as FieldKey];
+    if (automatic && source) {
+      control.title = `PDF自動抽出: ${source.page}ページ「${source.label}」 x=${source.valueX.toFixed(1)} y=${source.valueY.toFixed(1)}`;
+    } else if (automatic) control.title = 'PDFから自動入力しました。原本をご確認ください。';
+    else if (entry.form[control.name as FieldKey] !== '') control.title = '手動入力値です。';
+    else control.removeAttribute('title');
   }
 }
 
@@ -278,17 +336,25 @@ function renderReview(): void {
   $("selected-name").textContent = entry.file.name;
   $("selected-meta").textContent = `${formatBytes(entry.file.size)}${entry.pages ? ` · ${entry.pages}ページ` : ""} · 原本ファイル`;
   readResult.className = "read-result";
-  if (entry.status === "queued" || entry.status === "reading") {
-    readResult.textContent = "PDFの文字情報を読み取っています。";
+  if (duplicated().has(entry.id)) {
+    readResult.textContent = "同一内容のPDFは一覧内で最初の1件だけ保存します。このファイルは保存対象外です。";
+    readResult.classList.add("read-result--warning");
+  } else if (entry.status === "queued" || entry.status === "reading") {
+    readResult.textContent = `PDFの文字情報を読み取っています。${entry.pages ? ` ${entry.currentPage ?? 0}/${entry.pages}ページ` : ""}`;
   } else if (entry.status === "ready") {
     const parsed = entry.parsed;
     if (parsed?.profile) {
-      const source = parsed.profile === "main" ? "本業" : "副業";
-      const count = Object.keys(parsed.fields).filter(key => parsed.fields[key as FieldKey] !== undefined).length;
-      readResult.textContent = `${source}の${parsed.fields.kind === "bonus" ? "賞与" : "給与"}明細と判定し、${count}項目を自動入力しました。原本と照合してから確認してください。`;
-      if (parsed.warnings.length) {
+      if (parsed.layout?.status === "suspect") {
+        readResult.textContent = `PDFの書式変更が疑われるため、自動入力を停止しました。原本を確認し、各欄を手動入力してください。${parsed.warnings.join(" / ")}`;
         readResult.classList.add("read-result--warning");
-        readResult.textContent += ` ${isReviewed(entry) ? "確認済み" : "要確認"}：${parsed.warnings.join(" / ")}`;
+      } else {
+        const source = parsed.profile === "main" ? "本業" : "副業";
+        const count = Object.keys(parsed.fields).filter(key => parsed.fields[key as FieldKey] !== undefined).length;
+        readResult.textContent = `${source}の${parsed.fields.kind === "bonus" ? "賞与" : "給与"}明細と判定し、${count}項目を自動入力しました。${parsed.sourcePage ? `取得元は${parsed.sourcePage}ページ目です。` : ''}原本と照合してから確認してください。`;
+        if (parsed.warnings.length) {
+          readResult.classList.add("read-result--warning");
+          readResult.textContent += ` ${isReviewed(entry) ? "確認済み" : "要確認"}：${parsed.warnings.join(" / ")}`;
+        }
       }
     } else {
       readResult.textContent = `${entry.pages}ページ / ${entry.textCount}件の文字を取得しました。${parsed?.warnings.join(" / ") ?? "項目を手動で確認してください。"}`;
@@ -319,7 +385,7 @@ function renderReview(): void {
   }
   updateConditionalFields(entry.form.kind);
   // 解析中に入力しても後からPDFの結果で上書きされないよう、完了まで編集不可。
-  const isReading = entry.status === "queued" || entry.status === "reading";
+  const isReading = entry.status === "queued" || entry.status === "reading" || duplicated().has(entry.id);
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = isReading;
   renderIssues(entry);
   validationMessage.hidden = !entry.validationFeedback;
@@ -334,9 +400,11 @@ function render(): void {
 function removeFile(id: number): void {
   if (saving) return;
   const entry = entries.find(item => item.id === id);
+  if (entry) abortEntry(entry);
   if (entry?.previewUrl) URL.revokeObjectURL(entry.previewUrl);
   entries = entries.filter(item => item.id !== id);
   if (selectedId === id) selectedId = entries[0]?.id ?? null;
+  activateOrphanDuplicates();
   render();
 }
 function addFiles(files: File[]): void {
@@ -361,41 +429,61 @@ function toHex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 async function inspect(entry: Entry): Promise<void> {
+  stillActive(entry);
   entry.status = "reading";
   renderFileList();
   if (selectedId === entry.id) renderReview();
   try {
     const bytes = await entry.file.arrayBuffer();
+    stillActive(entry);
     verifyPdfBytes(new Uint8Array(bytes));
     // HTTPSまたはlocalhostならWeb Cryptoで完全一致の重複を検知できる。
     if (typeof crypto !== "undefined" && crypto.subtle) {
       try {
         const digest = await crypto.subtle.digest("SHA-256", bytes.slice(0));
+        stillActive(entry);
         entry.hash = toHex(digest);
-        // 一覧内で同じPDFがあっても解析は続け、どの明細を残すか保存前に選べるようにする。
+        // 一覧内の同一PDFは先に追加したものを優先し、保存対象から外す。
+        if (duplicated().has(entry.id)) {
+          entry.status = "duplicate";
+          return;
+        }
       } catch {
         // ハッシュが使えなくてもPDFの文字抽出は継続する。
       }
     }
     const task = getDocument({
       data: new Uint8Array(bytes),
-      cMapUrl: new URL("./cmaps/", import.meta.url).href,
+        cMapUrl: new URL("./cmaps/", import.meta.url).href,
       cMapPacked: true,
       standardFontDataUrl: new URL("./standard_fonts/", import.meta.url).href,
       wasmUrl: new URL("./wasm/", import.meta.url).href,
       iccUrl: new URL("./iccs/", import.meta.url).href,
     });
+    entry.task = task;
     try {
       const pdf = await task.promise;
+      stillActive(entry);
       entry.pages = pdf.numPages;
+      renderFileList();
+      if (!Number.isSafeInteger(pdf.numPages) || pdf.numPages < 1 || pdf.numPages > MAX_PARSE_PAGES) {
+        throw new Error(`PDFのページ数が上限（${MAX_PARSE_PAGES}ページ）を超えています。`);
+      }
       let count = 0;
       const coordinateItems: PdfTextCell[] = [];
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+        stillActive(entry);
+        entry.currentPage = pageNumber;
+        renderFileList();
+        if (selectedId === entry.id) renderReview();
         const page = await pdf.getPage(pageNumber);
+        stillActive(entry);
         const content = await page.getTextContent();
+        stillActive(entry);
         for (const item of content.items) {
           if (!( "str" in item) || !item.str.trim()) continue;
           count++;
+          if (count > MAX_TEXT_ITEMS) throw new Error('PDFの文字情報が上限を超えています。');
           // 全ページの座標を保持し、後続ページにある明細も解析する。
           {
             coordinateItems.push({
@@ -412,21 +500,25 @@ async function inspect(entry: Entry): Promise<void> {
       entry.textCount = count;
       if (count) {
         entry.parsed = parsePayroll(coordinateItems);
+        entry.autoFields = new Set();
         // 自動検出できた項目だけ反映し、不明な項目は空欄のまま残す。
-        for (const [key, value] of Object.entries(entry.parsed.fields)) {
+        for (const [key, value] of Object.entries(entry.parsed.layout?.status === "suspect" ? {} : entry.parsed.fields)) {
           if (value !== undefined && FIELDS.includes(key as FieldKey)) {
             entry.form[key as FieldKey] = key === "workDays" ? ceilWorkDays(value) : value;
+            entry.autoFields.add(key as FieldKey);
           }
         }
       }
       entry.status = count ? "ready" : "no-text";
     } finally {
+      entry.task = undefined;
       await task.destroy();
     }
   } catch (error) {
-    entry.status = "error";
-    const message = error instanceof Error ? error.message : String(error);
-    entry.error = /password/i.test(message) ? "パスワード付きPDFは現在未対応です。" : "破損・保護・非対応形式などの可能性があります。";
+    if (!entry.cancelled) {
+      entry.status = "error";
+      entry.error = pdfFailureMessage(error);
+    }
   } finally {
     // 読み取り結果が確定した時点でだけ、このPDFの確認状態を初期化する。
     setReviewed(entry, false);
@@ -505,7 +597,10 @@ document.addEventListener("drop", event => {
 });
 clearButton.addEventListener("click", () => {
   // ページで選択した未保存データだけを削除。保存済みDBには影響しない。
-  for (const entry of entries) if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+  for (const entry of entries) {
+    abortEntry(entry);
+    if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+  }
   entries = [];
   selectedId = null;
   render();
@@ -518,6 +613,7 @@ reviewForm.addEventListener("input", event => {
   const key = target.name as FieldKey;
   if (!FIELDS.includes(key) || entry.form[key] === target.value) return;
   entry.form[key] = target.value;
+  entry.autoFields?.delete(key);
   if (key === "kind") updateConditionalFields(target.value);
   // 値が本当に変更された明細だけ確認を解除する。
   setReviewed(entry, false);
@@ -536,6 +632,7 @@ reviewForm.addEventListener("change", event => {
   input.value = rounded;
   if (entry.form.workDays !== rounded) {
     entry.form.workDays = rounded;
+    entry.autoFields?.delete("workDays");
     setReviewed(entry, false);
     entry.validationFeedback = undefined;
   }
@@ -556,7 +653,7 @@ $("open-pdf").addEventListener("click", () => {
 });
 validateButton.addEventListener("click", () => {
   const entry = selectedEntry();
-  if (!entry) return;
+  if (!entry || duplicated().has(entry.id)) return;
   if (entry.status === "queued" || entry.status === "reading") return;
   const checked = validatePayrollForm(entry.form);
   if (!reviewForm.reportValidity() || checked.errors.length || entry.status === "error") {
@@ -582,23 +679,24 @@ function formError(entry: Entry): string | null {
   return validatePayrollForm(entry.form).errors[0] ?? null;
 }
 function updateSaveState(): void {
-  const locked = saving || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued";
+  const locked = saving || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
   fileInput.disabled = saving;
   clearButton.disabled = saving;
   for (const button of Array.from(fileList.querySelectorAll<HTMLButtonElement>("button"))) button.disabled = saving;
   const pending = entries.some(entry => entry.status === "queued" || entry.status === "reading");
-  const issueEntries = entries.filter(hasReviewIssue);
-  const invalidEntry = entries.find(entry => formError(entry) !== null);
-  const badPdf = entries.find(entry => entry.status === "error");
+  const uploadable = candidates();
+  const issueEntries = uploadable.filter(hasReviewIssue);
+  const invalidEntry = uploadable.find(entry => formError(entry) !== null);
+  const badPdf = uploadable.find(entry => entry.status === "error");
   const unreviewed = issueEntries.filter(entry => !isReviewed(entry));
   validateButton.disabled = locked;
   // 確認の入口を右側のボタンに一本化する。状態は選択中PDFごとに保持。
   // ボタン名を切り替えず、確認済みは左側のステータスと直下のメッセージで示す。
   saveButton.disabled = saving || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0;
+  saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
   if (saving) {
     saveStatus.textContent = `${entries.length}件のPDFと明細を保存しています…`;
-    saveButton.textContent = "保存中…";
   } else if (!entries.length) {
     saveStatus.textContent = "PDFを追加すると、ここからまとめて保存できます。";
   } else if (pending) {
@@ -610,40 +708,43 @@ function updateSaveState(): void {
   } else if (unreviewed.length) {
     saveStatus.textContent = `${unreviewed.length}件が未確認です。左の「要確認」を選び、右側の「入力内容をチェック」を押してください。`;
   } else {
-    saveStatus.textContent = `${entries.length}件を保存できます。既存データとの重複があればその分だけスキップします。`;
+    const duplicateCount = entries.length - uploadable.length;
+    saveStatus.textContent = `${uploadable.length}件を保存できます。${duplicateCount ? `一覧内の同一PDF ${duplicateCount}件は対象外。` : ""}既存データとの重複はスキップします。`;
   }
 }
 saveButton.addEventListener("click", async () => {
   if (saving || saveButton.disabled) return;
-  const errorEntry = entries.find(entry => formError(entry));
+  const uploadable = candidates();
+  const errorEntry = uploadable.find(entry => formError(entry));
   if (errorEntry) {
     selectFile(errorEntry.id);
     notice(`「${errorEntry.file.name}」の入力内容を確認してください。`);
     return;
   }
-  if (entries.some(entry => entry.status === "error")) {
+  if (uploadable.some(entry => entry.status === "error")) {
     notice("読み取りに失敗したPDFがあります。先に一覧から削除してください。");
     return;
   }
-  if (entries.some(entry => hasReviewIssue(entry) && !isReviewed(entry))) {
+  if (uploadable.some(entry => hasReviewIssue(entry) && !isReviewed(entry))) {
     notice("未確認の明細があります。右側の「入力内容をチェック」で確認してください。");
     return;
   }
   saving = true;
+  clearInlineError(saveStatus);
   updateSaveState();
   try {
     // 保存前に形式とSHA-256を再確認する。ハッシュがないまま重複検査を素通りさせない。
-    for (const entry of entries) {
+    for (const entry of uploadable) {
       verifyPdfBytes(new Uint8Array(await entry.file.arrayBuffer()));
       if (!entry.hash) throw new Error("PDFのSHA-256を確認できません。localhost/HTTPSで開いて再読み込みしてください。");
     }
     // 同一トランザクションで全件を登録。途中失敗なら一件も登録しない。
-    const records: SavedPayrollRecordInput[] = entries.map(entry => ({
+    const records: SavedPayrollRecordInput[] = uploadable.map(entry => ({
       fileName: storedPdfName(entry.form.job, entry.form.kind, entry.form.paymentDate, entry.file.name),
       originalFileName: entry.file.name,
       pdf: entry.file,
       fileHash: entry.hash,
-      form: { ...entry.form, workDays: ceilWorkDays(entry.form.workDays) },
+      form: applicablePayrollForm({ ...entry.form, workDays: ceilWorkDays(entry.form.workDays) }),
       pages: entry.pages,
       warningsAcknowledged: hasReviewIssue(entry) && isReviewed(entry),
       ...(hasReviewIssue(entry) ? { reviewedIssues: [
@@ -653,21 +754,26 @@ saveButton.addEventListener("click", async () => {
       ], reviewedAt: new Date().toISOString() } : {}),
     }));
     const result = await saveRecordsSkippingDuplicates(records);
-    if (result.skipped.length) {
+    const batchDuplicateCount = entries.length - uploadable.length;
+    if (result.skipped.length || batchDuplicateCount) {
       const detail = result.skipped.map(item => `・${item.fileName}：${item.reason.includes('pdf') ? 'PDFが重複' : '勤務先・種類・年月が重複'}`).join('\n');
-      window.alert(`${result.saved}件を保存し、重複${result.skipped.length}件は既存優先でスキップしました。\n既存の明細・手動修正・PDF原本は変更していません。\n\n${detail}`);
+      window.alert(`${result.saved}件を保存し、重複${result.skipped.length + batchDuplicateCount}件はスキップしました。\n既存の明細・手動修正・PDF原本は変更していません。${batchDuplicateCount ? `\n一覧内の同一PDF ${batchDuplicateCount}件を除外。` : ''}\n${detail}`);
     }
-    if (result.saved) window.location.assign("../index.html");
-    else {
+    if (result.saved) {
+      leavingAfterSave = true;
+      window.location.assign("../index.html");
+    } else {
       notice('すべて既存の明細と重複しているため、新しい保存は行いませんでした。');
       saving = false;
       updateSaveState();
     }
   } catch (error) {
+    leavingAfterSave = false;
     console.error("明細保存に失敗", error);
-    notice(`保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
     saving = false;
     updateSaveState();
+    showInlineError(saveStatus, `保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+    notice('保存に失敗しました。画面下部のエラーをご確認ください。');
   }
 });
 
@@ -678,6 +784,7 @@ diagnosticButton.addEventListener("click", async () => {
   diagnosticShared.value = "";
   diagnosticState.textContent = "PDFの文字と座標を解析しています…";
   diagnosticCopy.disabled = true;
+  diagnosticRedact.disabled = true;
   diagnosticButton.disabled = true;
   diagnosticDialog.showModal();
   try {
@@ -685,12 +792,20 @@ diagnosticButton.addEventListener("click", async () => {
     diagnosticShared.value = diagnostic.raw;
     diagnosticState.textContent = `${diagnostic.pageCount}ページのPDFから、${diagnostic.itemCount}件の座標付き文字を抽出しました。チャットに貼る前に氏名・会社名・金額などを手動で伏せてください。`;
     diagnosticCopy.disabled = false;
+    diagnosticRedact.disabled = false;
   } catch {
     diagnosticState.textContent = "座標診断に失敗しました。画像だけのPDFや保護されたPDFは解析できない場合があります。";
   } finally {
     diagnosticButton.disabled = false;
   }
 });
+diagnosticRedact.addEventListener("click", () => {
+  if (diagnosticRedact.disabled) return;
+  diagnosticShared.value = redactCoordinateDiagnostic(diagnosticShared.value);
+  diagnosticRedact.disabled = true;
+  diagnosticState.textContent = "座標と文字番号を残し、すべての文字を伏せました。内容を確認してからコピーしてください。原文は診断を開き直すと再取得できます。";
+});
+
 diagnosticCopy.addEventListener("click", async () => {
   const text = diagnosticShared.value.trim();
   if (!text) return;
@@ -706,6 +821,13 @@ diagnosticCopy.addEventListener("click", async () => {
 diagnosticClose.addEventListener("click", () => diagnosticDialog.close());
 diagnosticDialog.addEventListener("click", event => {
   if (event.target === diagnosticDialog) diagnosticDialog.close();
+});
+// 一覧にあるPDFは保存前。保存成功時のみ離脱確認を抑止する。
+// beforeunloadの文言はブラウザ標準（任意の文面は表示されない）。
+window.addEventListener("beforeunload", event => {
+  if (entries.length === 0 || leavingAfterSave) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 window.addEventListener("pagehide", () => {
   for (const entry of entries) if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);

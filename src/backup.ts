@@ -1,5 +1,5 @@
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
-import { loadRecords, replaceAllRecords } from './storage/payrollStore';
+import { loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
 
@@ -22,6 +22,7 @@ const restoreButton = $<HTMLButtonElement>('restore-button');
 const status = $<HTMLElement>('backup-status');
 let preview: LoadedBackup | undefined;
 let currentCount = 0;
+let initialSnapshot: string[] | undefined;
 let busy = false;
 let loadedDb = false;
 let encryptedFile = false;
@@ -44,10 +45,11 @@ function resetPreview(): void {
   updateButtons();
 }
 async function refreshCount(): Promise<void> {
-  const records = await loadRecords();
+  const records = await loadRecordSummaries();
   currentCount = records.length;
+  initialSnapshot = payrollSnapshot(records);
   loadedDb = true;
-  const bytes = records.reduce((sum, r) => sum + r.pdf.size, 0);
+  const bytes = records.reduce((sum, r) => sum + r.pdfSize, 0);
   exportSummary.textContent = `保存済み ${currentCount}件 ・ PDF原本 ${sizes(bytes)}`;
 }
 exportButton.addEventListener('click', async () => {
@@ -121,14 +123,19 @@ verifyButton.addEventListener('click', async () => {
 });
 ack.addEventListener('change', updateButtons);
 restoreButton.addEventListener('click', async () => {
-  if (busy || !preview || !ack.checked) return;
+  if (busy || !preview || !ack.checked || !initialSnapshot) return;
   const data = preview;
+  const snapshot = [...initialSnapshot];
   if (!window.confirm(`現在の${currentCount}件を削除して、バックアップ内の${data.records.length}件で完全に置き換えます。続けますか？`)) return;
   busy = true; updateButtons(); info('全件復元中です。操作完了を確認してください…');
   try {
-    await replaceAllRecords(data.records);
+    await replaceAllRecords(data.records, snapshot);
     window.location.assign('../index.html');
   } catch (error) {
+    // 別タブで変更されていた場合も、古い復元確認を再利用できないようにする。
+    resetPreview();
+    restorePreview.textContent = '復元を中断しました。バックアップの検証からやり直してください。';
+    try { await refreshCount(); } catch { /* データの読み込み失敗は以下の詳細エラーを優先 */ }
     info(`復元に失敗しました。元のデータは保持されています: ${error instanceof Error ? error.message : String(error)}`, true);
     busy = false; updateButtons();
   }
@@ -138,3 +145,17 @@ void refreshCount().then(updateButtons).catch(error => {
   info(error instanceof Error ? error.message : 'データベースの読み込みに失敗しました。', true);
   updateButtons();
 });
+
+// 表示状態は入力欄ごとに独立。パスワード値をログ・保存領域に出さない。
+for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('[data-toggle-password]'))) {
+  const targetId = button.dataset.togglePassword;
+  const target = targetId ? document.getElementById(targetId) : null;
+  if (!(target instanceof HTMLInputElement)) continue;
+  button.addEventListener('click', () => {
+    const visible = target.type === 'password';
+    target.type = visible ? 'text' : 'password';
+    button.textContent = visible ? '隠す' : '表示';
+    button.setAttribute('aria-pressed', String(visible));
+    button.setAttribute('aria-label', visible ? 'パスワードを隠す' : 'パスワードを表示');
+  });
+}

@@ -350,3 +350,34 @@
 @media (max-width: 860px) {
   .workspace > .upload-left { height: 100%; max-height: 100%; }
 }
+
+/* PDF自動入力と手動入力を区別。通常のフォーム配置・余白を変更しない。 */
+.review-panel .field--auto .input { border-color: #8ea9dc; background: #f6f9ff; }
+.review-panel .field--manual .input { border-color: #c6d2df; background: #fff; }
+.review-panel .field--auto .field__label::after { content: ' · PDF自動'; color: #3b65ae; font-size: 10px; font-weight: 600; }
+.review-panel .field--manual .field__label::after { content: ' · 手入力'; color: #687b91; font-size: 10px; font-weight: 600; }
+.progress-copy #progress-text { max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+
+.field-source-note { margin: -12px 0 17px; color: var(--color-muted); font-size: 10px; line-height: 1.6; }
+
+
+/* 低い画面やスマホ横向きでは固定ビューポートの二重スクロールを解除する。 */
+@media (max-height: 620px), (max-width: 640px) and (orientation: landscape) {
+  .upload-page { height: auto !important; min-height: 0; overflow: visible; }
+  .upload-page .workspace { flex: none; height: auto; min-height: 0; grid-template-rows: auto auto; align-items: stretch; }
+  .upload-page .upload-left { height: auto; max-height: none; overflow: visible; }
+  .upload-page .upload-left .file-list { flex: none; max-height: min(45vh, 290px); min-height: 0; overflow-y: auto; }
+  .upload-page .workspace .review-panel { height: auto; max-height: none; overflow: visible; }
+  .upload-page .save-bar { position: static; }
+}
+@media (max-width: 390px) {
+  .upload-page .review-panel .form-grid--two { grid-template-columns: minmax(0,1fr); }
+  .upload-page .save-bar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .upload-page .save-bar__button { width: 100%; min-width: 0; }
+  .upload-page .selected-file { min-width: 0; }
+  .upload-page .file-list__text { flex: 1; overflow: hidden; }
+}
+@media (max-width: 640px) {
+  .diagnostic-dialog__actions { flex-wrap: wrap; }
+  .diagnostic-dialog__actions .btn { min-width: 0; width: 100%; }
+}

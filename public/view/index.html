@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>Payroll | PDF原本</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; }
+    body { background: #f5f7fb; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", sans-serif; color: #1c2638; }
+    .status { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: 24px; text-align: center; }
+    .status[hidden], .reader[hidden] { display: none; }
+    .reader { display: block; width: 100%; height: 100vh; height: 100dvh; border: 0; background: #eee; }
+  </style>
+  <script type="module" src="../view.js"></script>
+</head>
+<body>
+  <p class="status" id="pdf-status" role="status">保存済みPDF原本を取得しています…</p>
+  <iframe class="reader" id="pdf-reader" title="給与明細PDF原本" hidden></iframe>
+</body>
+</html>

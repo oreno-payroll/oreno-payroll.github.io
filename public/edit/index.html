@@ -1,5 +1,6 @@
 <!doctype html>
-<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>保存済み明細の編集 | Payroll</title><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/upload.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../edit.js"></script></head><body>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"><title>保存済み明細の編集 | Payroll</title><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/upload.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../edit.js"></script></head><body>
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
 <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
@@ -71,4 +72,4 @@
 <details class="card raw-details"><summary>内部保存データを確認（ID・日時・全フィールド・PDF情報）</summary><p>こちらは読み取り専用のJSON表示です。実際の保存内容を確認できます。PDF本体は表示せず、サイズなどの情報を示します。</p><pre id="raw-state"></pre></details>
 <div class="vault-bottom"><div class="vault-bottom__status"><p id="edit-status" role="status" aria-live="polite"></p><label class="vault-check"><input type="checkbox" id="confirm-diff">金額の検算警告を原本と照合して確認しました</label></div><button class="btn btn--primary" id="edit-save" type="button">変更を保存</button></div>
 </div>
-</main></div></body></html>
+</main></div><div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="../build-info.js"></script></body></html>

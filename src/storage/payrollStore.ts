@@ -3,8 +3,10 @@ import { payrollPeriodKey, validatePayrollForm } from './payrollValidation';
 import { assertStorageLimits } from './storageLimits';
 
 const DB_NAME = 'payroll-local-v1';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'payroll-records';
+/** 一覧用の軽量な索引。PDF原本は従来のSTOREに1つだけ保持する。 */
+const INDEX_STORE = 'payroll-record-index';
 
 export interface SavedPayrollRecordInput {
   fileName: string;
@@ -24,6 +26,16 @@ export interface SavedPayrollRecord extends SavedPayrollRecordInput {
   /** 旧レコードでは未設定。編集するたびに加算し、タブ間の上書きを拒否する。 */
   revision?: number;
 }
+/** PDF Blobを含まない一覧・集計用の保存済み明細。 */
+export interface SavedPayrollSummary extends Omit<SavedPayrollRecord, 'pdf'> {
+  pdfSize: number;
+  pdfType: string;
+}
+/** 索引には原本を含めない。保存・削除・復元と同じトランザクションで更新する。 */
+export function toSummary(record: SavedPayrollRecord): SavedPayrollSummary {
+  const { pdf, ...rest } = record;
+  return { ...rest, pdfSize: pdf.size, pdfType: pdf.type };
+}
 export interface ReplacementConflict {
   id: number;
   fileName: string;
@@ -40,23 +52,41 @@ function openPayrollDb(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      const transaction = request.transaction;
+      if (!transaction) throw new Error('データベース更新を開始できませんでした。');
       if (!db.objectStoreNames.contains(STORE)) {
         const records = db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
         records.createIndex('paymentDate', 'form.paymentDate', { unique: false });
       }
+      if (!db.objectStoreNames.contains(INDEX_STORE)) {
+        const index = db.createObjectStore(INDEX_STORE, { keyPath: 'id' });
+        // v1からの更新。PDFは一切複製せず、索引のみを1件ずつ構築する。
+        const cursorRequest = transaction.objectStore(STORE).openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          index.put(toSummary(cursor.value as SavedPayrollRecord));
+          cursor.continue();
+        };
+      }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // 別タブでスキーマ更新されたときは古い接続を閉じる。
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     request.onerror = () => reject(request.error ?? new Error('データベースを開けませんでした。'));
     request.onblocked = () => reject(new Error('他のタブがデータベースを使用しています。'));
   });
 }
 
-async function transact<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore, transaction: IDBTransaction, resolve: (value: T) => void, reject: (error: Error) => void) => void): Promise<T> {
+async function transact<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore, transaction: IDBTransaction, resolve: (value: T) => void, reject: (error: Error) => void) => void, readStore = STORE): Promise<T> {
   const db = await openPayrollDb();
   try {
     return await new Promise<T>((resolve, reject) => {
-      const transaction = db.transaction(STORE, mode);
-      const store = transaction.objectStore(STORE);
+      const transaction = db.transaction(mode === 'readwrite' ? [STORE, INDEX_STORE] : [readStore], mode);
+      const store = transaction.objectStore(readStore);
       let result: T;
       let failure: Error | undefined;
       const fail = (error: Error) => { failure = error; try { transaction.abort(); } catch { /* 既に終了済み */ } };
@@ -70,9 +100,11 @@ async function transact<T>(mode: IDBTransactionMode, operation: (store: IDBObjec
 }
 
 /** 保存IDだけでは不十分なので、フォーム・警告記録・リビジョンまで比較する。 */
-export function recordSignature(record: SavedPayrollRecord): string {
+export function recordSignature(record: SavedPayrollRecord | SavedPayrollSummary): string {
+  const pdfSize = 'pdf' in record ? record.pdf.size : record.pdfSize;
+  const pdfType = 'pdf' in record ? record.pdf.type : record.pdfType;
   return JSON.stringify([record.id, record.savedAt, record.fileName, record.originalFileName ?? '',
-    record.fileHash ?? '', record.pdf.size, record.pdf.type, record.pages, record.revision ?? 0,
+    record.fileHash ?? '', pdfSize, pdfType, record.pages, record.revision ?? 0,
     record.warningsAcknowledged, record.reviewedAt ?? '', record.reviewedIssues ?? [], record.form]);
 }
 function conflicting(previous: SavedPayrollRecord, incoming: SavedPayrollRecordInput, oldHash?: string): ('same-pdf' | 'same-period')[] {
@@ -182,7 +214,12 @@ export async function saveRecordsSkippingDuplicates(records: SavedPayrollRecordI
         }
         assertStorageLimits([...old, ...accepted]);
         const savedAt = new Date().toISOString();
-        for (const record of accepted) store.add({ ...record, savedAt, revision: 1 });
+        const index = _tx.objectStore(INDEX_STORE);
+        for (const record of accepted) {
+          const incoming = { ...record, savedAt, revision: 1 };
+          const add = store.add(incoming);
+          add.onsuccess = () => index.put(toSummary({ ...incoming, id: add.result as number }));
+        }
         resolve({ saved: accepted.length, skipped });
       } catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
     };
@@ -196,6 +233,15 @@ export async function loadRecords(): Promise<SavedPayrollRecord[]> {
     request.onsuccess = () => resolve(request.result as SavedPayrollRecord[]);
     request.onerror = () => reject(request.error ?? new Error('読み込みに失敗しました。'));
   });
+}
+
+/** ホーム画面用。PDF原本を一切読み込まず、金額・年月・ファイル名だけ取得する。 */
+export async function loadRecordSummaries(): Promise<SavedPayrollSummary[]> {
+  return transact<SavedPayrollSummary[]>('readonly', (store, _tx, resolve, reject) => {
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result as SavedPayrollSummary[]);
+    request.onerror = () => reject(request.error ?? new Error('明細索引の読み込みに失敗しました。'));
+  }, INDEX_STORE);
 }
 
 export async function getRecord(id: number): Promise<SavedPayrollRecord | undefined> {
@@ -218,9 +264,15 @@ export async function updateRecord(record: SavedPayrollRecord, approvals: Replac
         if (!self || !expectedSignature || recordSignature(self) !== expectedSignature) {
           throw new Error('編集中に元の明細が変更されました。読み直してから編集してください。');
         }
-        for (const id of assertApprovals(old, [record], approvals, record.id)) store.delete(id);
+        const index = _tx.objectStore(INDEX_STORE);
+        for (const id of assertApprovals(old, [record], approvals, record.id)) {
+          store.delete(id);
+          index.delete(id);
+        }
         assertStorageLimits([...old.filter(r => r.id !== record.id && !approvals.some(a => a.id === r.id)), record]);
-        store.put({ ...record, revision: (self.revision ?? 0) + 1 });
+        const updated = { ...record, revision: (self.revision ?? 0) + 1 };
+        store.put(updated);
+        index.put(toSummary(updated));
       } catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
     };
     request.onerror = () => reject(request.error ?? new Error('明細の再確認に失敗しました。'));
@@ -247,14 +299,20 @@ export async function deleteRecord(id: number, expectedSignature: string): Promi
         }
         // 原本と入力情報は1レコードとして保存されているため、この1件のみ削除する。
         store.delete(id);
+        _tx.objectStore(INDEX_STORE).delete(id);
       } catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
     };
     request.onerror = () => reject(request.error ?? new Error('削除対象を読み取れませんでした。'));
   });
 }
 
-/** バックアップから全件を原子的に復元。ZIP側の検証に加え書込前にも基本検証する。 */
-export async function replaceAllRecords(records: SavedPayrollRecord[]): Promise<void> {
+/** 復元前に現在の全件を記録し、別タブ更新があれば全件消去を中止する。 */
+export function payrollSnapshot(records: readonly SavedPayrollSummary[]): string[] {
+  return records.map(recordSignature).sort();
+}
+
+/** バックアップから全件を原子的に復元。復元確認後の別タブ更新は拒否する。 */
+export async function replaceAllRecords(records: SavedPayrollRecord[], expectedSnapshot: readonly string[]): Promise<void> {
   const ids = new Set<number>();
   for (const r of records) {
     assertValid(r, true); // 旧バージョン由来の未承認差異を消さず、そのまま復元する。
@@ -263,8 +321,27 @@ export async function replaceAllRecords(records: SavedPayrollRecord[]): Promise<
     // 復元は旧版で作られた重複も含めた完全スナップショット。新規保存側で重複を防ぐ。
   }
   assertStorageLimits(records);
-  await transact<void>('readwrite', store => {
-    store.clear();
-    for (const record of records) store.put(record);
+  if (!Array.isArray(expectedSnapshot) || !expectedSnapshot.every(v => typeof v === 'string')) {
+    throw new Error('復元前の保存状態を確認できません。画面を開き直してください。');
+  }
+  await transact<void>('readwrite', (store, tx, _resolve, reject) => {
+    const index = tx.objectStore(INDEX_STORE);
+    // 読み取りと全件置換は同じreadwriteトランザクション内。別タブの追加・編集・削除に割り込まれない。
+    const request = index.getAll();
+    request.onsuccess = () => {
+      try {
+        const current = payrollSnapshot(request.result as SavedPayrollSummary[]);
+        if (JSON.stringify(current) !== JSON.stringify(expectedSnapshot)) {
+          throw new Error('別タブなどで保存済みデータが変更されています。復元せずに中断しました。画面を再読み込みし、バックアップを検証し直してください。');
+        }
+        store.clear();
+        index.clear();
+        for (const record of records) {
+          store.put(record);
+          index.put(toSummary(record));
+        }
+      } catch (error) { reject(error instanceof Error ? error : new Error(String(error))); }
+    };
+    request.onerror = () => reject(request.error ?? new Error('復元前の保存状態を確認できませんでした。'));
   });
 }

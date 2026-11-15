@@ -267,3 +267,37 @@
   .period-switcher .select-field { width: 100%; }
   .period-switcher .select-field .select { width: 100%; }
 }
+
+/* 表示中の副業PDFだけを書き出す操作 */
+.statement-column__heading .side-zip-button { min-height: 30px; padding: 5px 9px; margin-left: auto; font-size: 11px; }
+.side-zip-status { margin: 0 0 6px; font-size: 11px; color: var(--color-muted); }
+.side-zip-status:empty { display: none; }
+.side-zip-status[role="alert"] { color: var(--color-danger); }
+
+/* 欠損件数は金額ではなく項目名の下に表示する。0円と未入力を混同しない。 */
+.partial-count {
+  display: block;
+  margin: 4px 0 0;
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 650;
+  color: #865c21;
+  white-space: normal;
+  letter-spacing: normal;
+}
+/* ラベルが2行になっても右側の金額を下へ押し込まない。 */
+.details-list > div.has-missing-data,
+.job-card__footer.has-missing-data,
+.job-card__supplement.has-missing-data { align-items: flex-start; }
+.forecast-caution--warning { border-left: 3px solid #d3a15a; padding: 9px 12px; background: #fff7ea; border-radius: 4px; color: #7f5a25; }
+
+
+/* 小画面での横はみ出し対策。明細名と操作ボタンを無理に横並びさせない。 */
+@media (max-width: 480px) {
+  .statement-item { min-width: 0; }
+  .statement-item__main, .statement-item__detail { min-width: 0; }
+  .statement-item__actions { flex-shrink: 0; }
+  .statement-item__meta { overflow-wrap: anywhere; }
+  .statement-column__heading { flex-wrap: wrap; row-gap: 8px; }
+  .statement-column__heading .side-zip-button { margin-left: 0; }
+}

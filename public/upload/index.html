@@ -2,7 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="theme-color" content="#f5f7fb">
   <title>明細アップロード | Payroll</title>
   <link rel="stylesheet" href="../styles/ress.css">
@@ -75,7 +76,7 @@
             </div>
             <button class="btn btn--ghost btn--small" type="button" id="clear-files" hidden>すべて削除</button>
           </div>
-          <div class="progress-wrap" id="progress-wrap" hidden>
+          <div class="progress-wrap" id="progress-wrap" role="status" aria-live="polite" hidden>
             <div class="progress-copy"><span>文字情報を確認しています</span><span id="progress-text">0 / 0</span></div>
             <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
           </div>
@@ -105,6 +106,7 @@
               </div>
             </div>
             <div class="read-result" id="read-result" role="status" aria-live="polite"></div>
+            <p class="field-source-note">青い入力欄はPDFから自動取得した値です。白い欄は手入力値です。自動取得した値も原本と照合してください。</p>
             <section class="analysis-issues" id="analysis-issues" aria-labelledby="analysis-issues-heading" hidden>
               <div class="analysis-issues__head"><strong id="analysis-issues-heading">解析時の確認事項</strong><span id="analysis-issues-count"></span></div>
               <ul id="analysis-issues-list"></ul>
@@ -178,7 +180,7 @@
         </div>
         <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>
           <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
-          すべて保存
+          <span id="save-all-label">すべて保存</span>
         </button>
       </div>
     </main>
@@ -191,15 +193,16 @@
       </div>
       <button id="diagnostic-close" class="diagnostic-dialog__close" type="button" aria-label="診断画面を閉じる">×</button>
     </div>
-    <p class="diagnostic-dialog__description">PDFの文字と座標をそのまま表示します。自動マスクは行いません。PDFそのものは外部へ送信しません。</p>
-    <div class="diagnostic-dialog__warning" role="note"><strong>この欄には氏名・会社名・社員番号・口座情報・実際の金額が含まれる可能性があります。</strong> チャットへ貼り付ける前に、ご自身で不要な情報を伏せてください。</div>
+    <p class="diagnostic-dialog__description">最初はローカルの原文を表示します。共有するときは「文字をすべて伏せる」を使えます。PDFは外部へ送信しません。</p>
+    <div class="diagnostic-dialog__warning" role="note"><strong>この欄には氏名・会社名・社員番号・口座情報・実際の金額が含まれる可能性があります。</strong> 共有する前に「文字をすべて伏せる」を使うか、ご自身で内容を編集してください。</div>
     <p id="diagnostic-state" class="diagnostic-dialog__state" role="status" aria-live="polite"></p>
-    <label for="diagnostic-shared" class="diagnostic-dialog__label">抽出した文字・座標（編集可能／自動マスクなし）</label>
+    <label for="diagnostic-shared" class="diagnostic-dialog__label">抽出した文字・座標（編集可能／共有前に伏字推奨）</label>
     <textarea id="diagnostic-shared" class="diagnostic-dialog__textarea" rows="18" spellcheck="false" placeholder="診断結果を作成しています…"></textarea>
     <div class="diagnostic-dialog__actions">
+      <button id="diagnostic-redact" class="btn btn--secondary" type="button" disabled>文字をすべて伏せる（共有用）</button>
       <button id="diagnostic-copy" class="btn btn--primary" type="button" disabled>編集したテキストをコピー</button>
     </div>
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-</body>
+<div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="../build-info.js"></script></body>
 </html>

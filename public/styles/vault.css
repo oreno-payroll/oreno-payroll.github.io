@@ -181,3 +181,21 @@
 .edit-page .saved-file__actions { flex-wrap: wrap; }
 .edit-page #edit-delete { display: inline-flex; align-items: center; gap: 6px; }
 .edit-page #edit-delete .icon { width: 15px; height: 15px; }
+
+/* パスワード表示ボタンは入力内容を変更せず、typeだけ切り替える。 */
+.backup-secret-fields .password-field { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+.backup-secret-fields .password-field > input { flex: 1; width: 0; min-width: 0; }
+.password-visibility { flex: none; min-width: 55px; padding: 0 11px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: #fff; color: var(--color-primary); font-size: 12px; font-weight: 700; }
+.password-visibility:hover { background: var(--color-primary-soft); }
+
+
+/* 狭い画面でもファイル操作・警告のボタンがカード外へ飛び出さない。 */
+@media (max-width: 480px) {
+  .saved-file { min-width: 0; }
+  .saved-file__actions { width: 100%; min-width: 0; flex-wrap: wrap; }
+  .saved-file__actions > * { min-width: 0; }
+  .backup-export-row { flex-wrap: wrap; gap: 12px; }
+  .backup-export-row #export-button { width: 100%; }
+  .vault-page { min-width: 0; }
+  .vault-section { min-width: 0; }
+}

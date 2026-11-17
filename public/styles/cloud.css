@@ -44,3 +44,8 @@
 /* Dashboard cache status and explicit refresh control. */
 .payroll-data-sync{display:inline-flex;align-items:center;gap:9px;font-size:11px;opacity:.8}
 .payroll-data-sync button{color:inherit;background:transparent;border:0;border-bottom:1px dotted currentColor;cursor:pointer;padding:1px 0;font:inherit}
+
+/* OAuth と保管庫解除を独立した標準フォームとして扱う。1Passwordの送信にも対応。 */
+.payroll-cloud-form{display:grid;gap:15px;margin:0;min-width:0}
+.payroll-cloud-form[hidden]{display:none}
+.payroll-cloud-form button{width:100%}

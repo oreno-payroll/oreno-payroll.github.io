@@ -1,0 +1,25 @@
+/** UI layout regression test: settings, unified back buttons, mobile PDF picker. */
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source = p => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+const home = source('public/index.html');
+const settings = source('public/backup/index.html');
+const upload = source('public/upload/index.html');
+const shared = source('public/styles/style.css');
+const uploadCss = source('public/styles/upload.css');
+const uploadTs = source('src/upload.ts');
+assert.match(home, /<symbol id="icon-settings"/);
+assert.match(home, /<use href="#icon-settings"><\/use><\/svg><span>設定<\/span>/);
+assert.doesNotMatch(home, /<use href="#icon-backup"/);
+const back = /<a class="btn btn--secondary header-back" href="\.\.\/index\.html">\s*<svg class="icon" aria-hidden="true"><use href="#icon-arrow"><\/use><\/svg>\s*<span>ホームへ戻る<\/span>\s*<\/a>/;
+assert.match(settings, back);
+assert.match(upload, back);
+assert.match(shared, /\.site-header \.header-back\{/);
+assert.doesNotMatch(uploadCss, /\.header-back span \{ display: none; \}/);
+assert.match(upload, /id="mobile-file-picker"[^>]*type="button"/);
+assert.match(upload, /id="file-input"[^>]*multiple hidden/);
+assert.match(uploadCss, /@media\(max-width:640px\)[\s\S]*?\.upload-zone-card #drop-zone\{display:none\}/);
+assert.match(uploadCss, /\.mobile-file-picker-wrap\{display:flex/);
+assert.match(uploadTs, /mobileFilePicker\.addEventListener\("click", \(\) => \{ if \(!fileInput\.disabled\) fileInput\.click\(\); \}\)/);
+assert.match(uploadTs, /mobileFilePicker\.disabled = saving;/);
+console.log('PASS: settings gear, consistent back navigation, mobile PDF picker, desktop drop zone retained');

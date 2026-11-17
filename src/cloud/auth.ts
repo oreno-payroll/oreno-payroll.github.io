@@ -30,6 +30,8 @@ let vault:PayrollVault|undefined;
 let unlocking:Promise<PayrollVault>|undefined;
 let tokenCache:{scope:string;value:string;validUntil:number}|undefined;
 let tokenPending:{scope:string;promise:Promise<string>}|undefined;
+// Microsoft OAuthの戻りをこのページの表示に一度だけ反映する。
+let loginRedirectCompleted=false;
 // One stable OAuth callback for all screens; do not register every page in Entra.
 const redirectUri=()=>new URL('./',import.meta.url).href;
 const sessionScope=(id:string,user:Account)=>`${id}:${user.homeAccountId}`;
@@ -49,6 +51,7 @@ async function getMsal():Promise<Msal> {
   });
   await app.initialize();
   const result=await app.handleRedirectPromise();
+  if(result?.account)loginRedirectCompleted=true;
   const account=result?.account??app.getActiveAccount()??app.getAllAccounts()[0];
   if(account)app.setActiveAccount(account);
   return (msal=app);
@@ -82,7 +85,7 @@ async function token():Promise<string> {
  tokenPending={scope,promise:pending};
  try{return await pending;}finally{if(tokenPending?.promise===pending)tokenPending=undefined;}
 }
-type GateUI = {panel:HTMLElement;id:HTMLInputElement;password:HTMLInputElement;remember:HTMLInputElement;status:HTMLElement;button:HTMLButtonElement;login:HTMLButtonElement;account:HTMLElement;details:HTMLDetailsElement};
+type GateUI = {panel:HTMLElement;id:HTMLInputElement;password:HTMLInputElement;remember:HTMLInputElement;status:HTMLElement;button:HTMLButtonElement;login:HTMLButtonElement;account:HTMLElement;details:HTMLDetailsElement;loginForm:HTMLFormElement;unlockForm:HTMLFormElement};
 function mount():GateUI {
  const panel=document.createElement('div');panel.id='payroll-cloud-gate';
  panel.innerHTML=`<section class="payroll-cloud-dialog" role="dialog" aria-modal="true" aria-labelledby="payroll-cloud-title" aria-describedby="payroll-cloud-description">
@@ -92,23 +95,27 @@ function mount():GateUI {
  <div class="payroll-cloud-account is-checking" id="payroll-account-state" role="status" aria-live="polite">
  <span class="payroll-cloud-dot" aria-hidden="true"></span><span id="payroll-account-label">Microsoftアカウントを確認中…</span>
  </div>
- <button id="payroll-login" type="button" class="payroll-cloud-login" disabled hidden>Microsoftアカウントに接続</button>
+ <form id="payroll-cloud-login-form" class="payroll-cloud-form" autocomplete="off" hidden>
+ <button id="payroll-login" type="submit" class="payroll-cloud-login" disabled hidden>Microsoftアカウントに接続</button>
+ </form>
+ <form id="payroll-cloud-unlock-form" class="payroll-cloud-form" autocomplete="on" hidden>
  <div class="payroll-cloud-secret">
  <label for="payroll-passphrase">復号パスフレーズ</label>
- <input id="payroll-passphrase" type="password" autocomplete="off" placeholder="パスフレーズを入力" />
+ <input id="payroll-passphrase" type="password" name="password" autocomplete="current-password" placeholder="パスフレーズを入力" required />
  </div>
  <label class="payroll-cloud-remember"><input id="payroll-remember" type="checkbox" /><span>このタブでは再入力を省略する（最長8時間）</span></label>
  <p class="payroll-cloud-remember-note">選択時は復号に使える一時鍵をタブ内に保持します。共有端末では選択しないでください。</p>
- <button id="payroll-unlock" type="button" class="payroll-cloud-primary" disabled>保管庫を開く</button>
+ <button id="payroll-unlock" type="submit" class="payroll-cloud-primary" disabled>保管庫を開く</button>
+ </form>
  <p id="payroll-cloud-status" role="status" aria-live="polite"></p>
  <details id="payroll-client-settings" class="payroll-cloud-settings"><summary>Microsoft接続設定を変更</summary>
- <label for="payroll-client-id">Client ID</label><input id="payroll-client-id" autocomplete="off" spellcheck="false" />
+ <label for="payroll-client-id">Client ID</label><input id="payroll-client-id" name="clientId" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" form="payroll-cloud-login-form" />
  <p class="payroll-cloud-tip">初回のみFinanceと同じClient IDを入力してください。</p></details>
  <p class="payroll-cloud-footnote">パスフレーズはこの端末へ保存しません。</p>
  </section>`;
  document.body.append(panel);
  const el=<T extends HTMLElement>(id:string)=>panel.querySelector<T>('#'+id)!;
- return {panel,id:el('payroll-client-id'),password:el('payroll-passphrase'),remember:el('payroll-remember'),status:el('payroll-cloud-status'),button:el('payroll-unlock'),login:el('payroll-login'),account:el('payroll-account-state'),details:el('payroll-client-settings')};
+ return {panel,id:el('payroll-client-id'),password:el('payroll-passphrase'),remember:el('payroll-remember'),status:el('payroll-cloud-status'),button:el('payroll-unlock'),login:el('payroll-login'),account:el('payroll-account-state'),details:el('payroll-client-settings'),loginForm:el('payroll-cloud-login-form'),unlockForm:el('payroll-cloud-unlock-form')};
 }
 function showAccount(ui:GateUI, state:'checking'|'connected'|'disconnected'|'error', user?:Account):void {
  const label=ui.account.querySelector<HTMLElement>('#payroll-account-label')!;
@@ -119,14 +126,25 @@ function showAccount(ui:GateUI, state:'checking'|'connected'|'disconnected'|'err
   : state==='error'?'Microsoftの接続設定を確認してください':'Microsoftアカウントへの接続が必要です';
  // 接続済みなのに押しても無反応なボタンを表示しない。
  ui.login.hidden=state==='connected'||state==='checking';
+ ui.loginForm.hidden=state==='connected'||state==='checking';
+ ui.unlockForm.hidden=state!=='connected';
  ui.login.disabled=state==='checking'||state==='connected';
  ui.button.disabled=state!=='connected';
+ if(state==='connected')ui.details.open=false;
 }
 async function beginUnlock():Promise<PayrollVault> {
  const ui=mount();ui.id.value=clientId();
- if(!validId(clientId())){ui.details.open=true;showAccount(ui,'disconnected');}
+ if(!validId(clientId())){ui.details.open=true;showAccount(ui,'disconnected');ui.status.textContent='初回のみClient IDを設定してください。';}
+ const onClientIdEdited=()=>{
+  if(ui.id.value.trim()===clientId())return;
+  showAccount(ui,'disconnected');
+  ui.status.textContent=validId(ui.id.value.trim())?'Enterキーまたは「Microsoftアカウントに接続」で進めます。':'Client IDを入力してください。';
+ };
+ // 1Password等の補完はinput/changeのどちらかだけを発火する場合がある。
+ ui.id.addEventListener('input',onClientIdEdited);
+ ui.id.addEventListener('change',onClientIdEdited);
  const ready=new Promise<PayrollVault>((resolve)=>{
-  ui.login.addEventListener('click',()=>{void(async()=>{
+  ui.loginForm.addEventListener('submit',event=>{event.preventDefault();void(async()=>{
    ui.login.disabled=true;
    ui.login.textContent='Microsoft接続を確認中…';
    try{
@@ -134,14 +152,13 @@ async function beginUnlock():Promise<PayrollVault> {
     if(clientId()!==id){clearTabUnlock();invalidateAuthSession();localStorage.setItem(CLIENT_KEY,id);msal=undefined;tokenCache=undefined;tokenPending=undefined;}
     const app=await getMsal();
     const user=account(app);
-    if(user){showAccount(ui,'connected',user);ui.status.textContent='復号パスフレーズを入力してください。';return;}
-    if(!window.confirm('Microsoftアカウントのログイン画面へ移動します。続行しますか？'))return;
+    if(user){showAccount(ui,'connected',user);ui.status.textContent='Microsoft接続済み。復号パスフレーズを入力してください。';ui.password.focus();return;}
     ui.status.textContent='Microsoftのログイン画面へ移動しています…';
     await app.loginRedirect({scopes:SCOPES,prompt:'select_account'});
    }catch(e){showAccount(ui,'error');ui.status.textContent=e instanceof Error?e.message:String(e);}
    finally{ui.login.textContent='Microsoftアカウントに接続';if(!ui.login.hidden)ui.login.disabled=false;}
   })();});
-  ui.button.addEventListener('click',()=>{void(async()=>{
+  ui.unlockForm.addEventListener('submit',event=>{event.preventDefault();if(ui.button.disabled)return;void(async()=>{
    ui.button.disabled=true;
    ui.button.textContent='保管庫を確認しています…';
    try {
@@ -192,7 +209,14 @@ async function beginUnlock():Promise<PayrollVault> {
  });
  if(validId(clientId())) {
   showAccount(ui,'checking');
-  void getMsal().then(app=>{const user=account(app);showAccount(ui,user?'connected':'disconnected',user);}).catch(e=>{
+  void getMsal().then(app=>{
+   const user=account(app);showAccount(ui,user?'connected':'disconnected',user);
+   if(user){
+    ui.status.textContent=loginRedirectCompleted?'Microsoftログイン成功。続けて復号パスフレーズを入力してください。':'Microsoft接続済み。復号パスフレーズを入力してください。';
+    loginRedirectCompleted=false;
+    ui.password.focus();
+   }else{ui.status.textContent='Microsoftアカウントに接続してください。Client IDの再入力は不要です。';}
+  }).catch(e=>{
    showAccount(ui,'error');ui.status.textContent=e instanceof Error?e.message:String(e);
   });
  }

@@ -21,6 +21,8 @@ const tests = [
   ['scripts/test-viewer-flow.mjs', true],
   ['scripts/test-cloud-core.mjs', true],
   ['scripts/test-cloud-ux.mjs', true],
+  ['scripts/test-ui-polish.mjs', true],
+  ['scripts/test-cloud-auth-form.mjs', true],
   ['scripts/test-cloud-tab-unlock.mjs', true],
   ['scripts/test-cloud-upload-ux.mjs', true],
   ['scripts/test-cloud-batch.mjs', true],

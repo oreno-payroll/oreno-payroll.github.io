@@ -1,0 +1,22 @@
+/** OAuth帰還時、Client IDの一度入力、Enterキー、1Password送信の回帰ガード。 */
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const source=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
+const auth=source('src/cloud/auth.ts');
+const css=source('public/styles/cloud.css');
+assert.match(auth,/id="payroll-cloud-login-form"[^>]*autocomplete="off"/);
+assert.match(auth,/id="payroll-login" type="submit"/);
+assert.match(auth,/id="payroll-client-id"[^>]*form="payroll-cloud-login-form"/);
+assert.match(auth,/ui\.loginForm\.addEventListener\('submit',event=>\{event\.preventDefault\(\)/);
+assert.match(auth,/id="payroll-cloud-unlock-form"[^>]*autocomplete="on"/);
+assert.match(auth,/id="payroll-passphrase" type="password" name="password" autocomplete="current-password"/);
+assert.match(auth,/id="payroll-unlock" type="submit"/);
+assert.match(auth,/ui\.unlockForm\.addEventListener\('submit',event=>\{event\.preventDefault\(\)/);
+assert.match(auth,/if\(result\?\.account\)loginRedirectCompleted=true/);
+assert.match(auth,/loginRedirectCompleted\?'Microsoftログイン成功/);
+assert.match(auth,/if\(state==='connected'\)ui\.details\.open=false/);
+assert.match(auth,/ui\.id\.addEventListener\('change',onClientIdEdited\)/);
+assert.match(auth,/ui\.id\.addEventListener\('input',onClientIdEdited\)/);
+assert.doesNotMatch(auth,/if\(!window\.confirm\('Microsoftアカウントのログイン画面へ移動します。続行しますか？'\)\)return/);
+assert.match(css,/\.payroll-cloud-form\[hidden\]\{display:none\}/);
+console.log('PASS: OAuth戻り成功表示、Client ID初回のみ、Enter/1Password送信対応');

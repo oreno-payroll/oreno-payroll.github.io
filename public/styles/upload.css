@@ -134,7 +134,6 @@
   .form-grid--two { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .field__label { font-size: 11px; }
   .review-panel .select, .review-panel .input { min-height: 40px; font-size: 12px; }
-  .header-back span { display: none; }
 }
 @media (max-width: 390px) { .form-grid--two { grid-template-columns: 1fr; } }
 
@@ -398,3 +397,14 @@
 @keyframes payroll-cloud-upload-wait{0%{transform:translateX(-110%)}100%{transform:translateX(390%)}}
 @media(prefers-reduced-motion:reduce){.save-feedback__track.is-indeterminate .save-feedback__fill{animation:none}}
 @media(max-width:640px){.save-feedback__top{font-size:11px}.save-feedback__guidance{font-size:10px}}
+
+/* Mobile: a native-file-picker button, not a desktop drop zone. */
+.mobile-file-picker-wrap{display:none}
+@media(max-width:640px){
+  .upload-zone-card{padding:14px}
+  .upload-zone-card #drop-zone{display:none}
+  .mobile-file-picker-wrap{display:flex;flex-direction:column;align-items:stretch;gap:10px}
+  .mobile-file-picker{width:100%;min-height:50px;border-radius:12px;font-size:14px}
+  .mobile-file-picker .icon{width:19px;height:19px}
+  .mobile-file-picker-wrap p{margin:0;text-align:center;font-size:11px;line-height:1.65;color:var(--color-muted)}
+}

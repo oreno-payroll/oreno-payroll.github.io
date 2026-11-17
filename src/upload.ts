@@ -58,6 +58,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 const dropZone = $<HTMLDivElement>("drop-zone");
+const mobileFilePicker = $<HTMLButtonElement>("mobile-file-picker");
 const fileInput = $<HTMLInputElement>("file-input");
 const fileList = $<HTMLUListElement>("file-list");
 const listEmpty = $<HTMLDivElement>("file-list-empty");
@@ -602,6 +603,7 @@ async function drainQueue(): Promise<void> {
 
 // クリックで選択。ドロップ後に意図せず選択ダイアログが出ないよう抑止する。
 let suppressPickerUntil = 0;
+mobileFilePicker.addEventListener("click", () => { if (!fileInput.disabled) fileInput.click(); });
 dropZone.addEventListener("click", () => {
   if (dragDepth || Date.now() < suppressPickerUntil) return;
   fileInput.click();
@@ -736,6 +738,7 @@ function updateSaveState(): void {
   const locked = saving || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
   fileInput.disabled = saving;
+  mobileFilePicker.disabled = saving;
   dropZone.setAttribute("aria-disabled",saving?"true":"false");
   clearButton.disabled = saving;
   for (const button of Array.from(fileList.querySelectorAll<HTMLButtonElement>("button"))) button.disabled = saving;

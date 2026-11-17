@@ -41,7 +41,8 @@ check('偽装した診断行や説明欄は共有用に転載しない', () => {
 });
 const read=(rel)=>readFileSync(new URL(`../${rel}`,import.meta.url),'utf8');
 check('閲覧・一件ダウンロード・ZIPが同じ共通命名ルールを利用', () => {
-  for (const rel of ['src/view.ts','src/main.ts','src/edit.ts','src/export/sidePdfs.ts']) assert.match(read(rel),/safePdfFileName/);
+  for (const rel of ['src/main.ts','src/edit.ts','src/export/sidePdfs.ts']) assert.match(read(rel),/safePdfFileName/);
+  assert.match(read('src/view.ts'),/removeLegacyWorker/);
 });
 check('診断を生データとして確認でき、共有用マスクは任意の別操作', () => {
   assert.match(read('src/upload.ts'),/redactCoordinateDiagnostic/);

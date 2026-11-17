@@ -1,6 +1,7 @@
 import { safePdfFileName } from './storage/fileNaming';
-/** 給与ダッシュボード：IndexedDBに保存したPDF原本と手入力・自動抽出値を表示する。 */
-import { deleteRecord, getRecord, loadRecordSummaries, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
+/** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
+import { deleteRecord, getRecord, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
+import {mutationEpoch} from './cloud/snapshot';
 import { amountOrMissing } from './storage/payrollValidation';
 import { summary, withEstimates, type Summary, type SummaryKey } from './forecast/summary';
 import { setMissingIndicator } from './ui/missingIndicator';
@@ -404,9 +405,26 @@ calendarModeButton.addEventListener('click', () => changeMode('calendar'));
 yearSelect.addEventListener('change', () => { visibleCounts.main = 50; visibleCounts.side = 50; persistPeriodSelection(); render(); });
 bonusToggle.addEventListener('change', () => { visibleCounts.main = 50; visibleCounts.side = 50; render(); });
 forecastToggle.addEventListener('change', render);
-async function refreshDashboard(): Promise<void> {
+let dashboardValidUntil=0;
+let dashboardMutationEpoch='';
+let dashboardLoading=false;
+async function refreshDashboard(forceFresh=false): Promise<void> {
+  if(dashboardLoading)return;
+  dashboardLoading=true;
+  const refreshButton=document.querySelector<HTMLButtonElement>('#payroll-refresh-data');
+  if(refreshButton)refreshButton.disabled=true;
+  const preferred=initialYear??currentPeriodYear();
+  periodLabel.setAttribute('aria-busy','true');
+  yearSelect.disabled=true;
+  bonusToggle.disabled=true;
+  forecastToggle.disabled=true;
+  sideZipButton.disabled=true;
   try {
-    saved = await loadRecordSummaries();
+    saved = await loadRecordSummaries({
+      forceFresh,
+      priorityYears:[String(preferred),String(preferred-1)],
+      onProgress:message=>{periodLabel.textContent=message;},
+    });
     yearSelect.disabled = false;
     bonusToggle.disabled = false;
     forecastToggle.disabled = false;
@@ -414,9 +432,13 @@ async function refreshDashboard(): Promise<void> {
     periodLabel.style.removeProperty('color');
     updateYearOptions();
     render();
+    dashboardMutationEpoch=mutationEpoch();
+    const cache=await summaryCacheInfo();dashboardValidUntil=cache.deadline;
+    const indicator=document.getElementById('payroll-data-freshness');
+    if(indicator)indicator.textContent=cache.cached?'短時間の暗号化キャッシュを表示中':'OneDrive確認済み';
   } catch (error) {
     console.error('保存済み明細を読み込めませんでした。', error);
-    periodLabel.textContent = `保存済み明細の読み込みに失敗しました。ブラウザの保存設定をご確認ください。${error instanceof Error ? ` (${error.message})` : ''}`;
+    periodLabel.textContent = `保存済み明細の読み込みに失敗しました。OneDriveへの接続と暗号化保管庫をご確認ください。${error instanceof Error ? ` (${error.message})` : ''}`;
     periodLabel.setAttribute('role', 'alert');
     periodLabel.style.color = 'var(--color-danger)';
     yearSelect.disabled = true;
@@ -424,8 +446,23 @@ async function refreshDashboard(): Promise<void> {
     forecastToggle.disabled = true;
     sideZipButton.disabled = true;
     // エラー文を通常renderで上書きしない。既存レコードが消えたわけではない。
+  } finally {
+    periodLabel.removeAttribute('aria-busy');
+    dashboardLoading=false;
+    if(refreshButton)refreshButton.disabled=false;
   }
 }
-// ブラウザの「戻る」でbfcacheから復帰すると古い一覧と無効化されたBlob URLが残るため、再取得する。
-window.addEventListener('pageshow', event => { if (event.persisted) void refreshDashboard(); });
+// Back/forward cache does not imply a changed dataset. Only mutations or TTL expiry force a reload.
+window.addEventListener('pageshow', event => {
+ if(event.persisted && (dashboardMutationEpoch!==mutationEpoch()||Date.now()>=dashboardValidUntil))
+  void refreshDashboard(true);
+});
+const footer=document.querySelector<HTMLElement>('.site-footer');
+if(footer&&!footer.querySelector('#payroll-refresh-data')) {
+ const control=document.createElement('span');control.className='payroll-data-sync';
+ const state=document.createElement('span');state.id='payroll-data-freshness';state.textContent='確認中…';
+ const refresh=document.createElement('button');refresh.id='payroll-refresh-data';refresh.type='button';refresh.textContent='最新を確認';
+ refresh.addEventListener('click',()=>{void refreshDashboard(true);});
+ control.append(state,refresh);footer.append(control);
+}
 void refreshDashboard();

@@ -2,7 +2,7 @@
  * 明細アップロード画面。
  * - PDFをブラウザ内だけで読み取り、ページ数・テキスト取得可否を検証
  * - 本業・副業の確認済み給与書式に限り、当月の金額を自動入力
- * - 確認後のPDF原本と明細をIndexedDBへまとめて保存（ネットワーク送信なし）
+ * - 確認後のPDF原本と明細を端末内で暗号化しOneDriveへ保存
  */
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import { createCoordinateDiagnostic } from "./pdf/diagnostic";
@@ -85,6 +85,12 @@ const analysisIssuesCount = $<HTMLElement>("analysis-issues-count");
 const saveButton = $<HTMLButtonElement>("save-all");
 const saveButtonLabel = $<HTMLSpanElement>("save-all-label");
 const saveStatus = $<HTMLElement>("save-status");
+const saveFeedback = $<HTMLElement>("save-feedback");
+const saveStage = $<HTMLElement>("save-stage");
+const saveElapsed = $<HTMLElement>("save-elapsed");
+const saveProgress = $<HTMLElement>("save-progress-track");
+const saveProgressFill = $<HTMLElement>("save-progress-fill");
+const saveGuidance = $<HTMLElement>("save-guidance");
 const reviewPanel = document.querySelector<HTMLElement>(".review-panel");
 
 let entries: Entry[] = [];
@@ -93,6 +99,53 @@ let nextId = 1;
 let reading = false;
 let saving = false;
 let leavingAfterSave = false;
+let saveTick:ReturnType<typeof setInterval>|undefined;
+let saveStartedAt=0;
+let lastSaveUpdateAt=0;
+let lastSaveMessage='';
+function stopSaveClock():void {if(saveTick!==undefined){clearInterval(saveTick);saveTick=undefined;}}
+function updateSaveClock():void {
+ if(!saveStartedAt)return;
+ const seconds=Math.max(0,Math.floor((Date.now()-saveStartedAt)/1000));
+ const waiting=Math.floor((Date.now()-lastSaveUpdateAt)/1000);
+ const time=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+ saveElapsed.textContent=`経過 ${time}${saving&&waiting>=20?' · OneDriveの応答待ち':''}`;
+ if(saving&&waiting>=20)saveGuidance.textContent='通信応答を待っています。保存中は画面を移動せず、追加アップロードもしないでください。';
+}
+function beginSaveFeedback():void {
+ saveFeedback.hidden=false;saveFeedback.classList.remove('is-failed','is-complete');
+ saveStartedAt=Date.now();lastSaveUpdateAt=saveStartedAt;lastSaveMessage='';
+ saveStage.textContent='保存の準備中';
+ saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。完了後、自動的にホームへ戻ります。';
+ saveProgress.classList.add('is-indeterminate');saveProgressFill.style.width='28%';
+ saveProgress.removeAttribute('aria-valuenow');
+ stopSaveClock();updateSaveClock();saveTick=setInterval(updateSaveClock,1000);
+}
+function showSaveProgress(message:string):void {
+ if(message!==lastSaveMessage){lastSaveUpdateAt=Date.now();lastSaveMessage=message;}
+ const match=/^(\d+)\/(\d+)件[：を]/.exec(message);
+ const pct=/暗号化PDFの送信 (\d+)%/.exec(message);
+ const phase=pct?'PDFを送信中':message.includes('重複')?'重複を確認中':
+  message.includes('暗号化PDFをOneDriveへ送信')?'PDFの送信を開始':
+  message.includes('原本PDFを暗号化')?'PDFを暗号化中':
+  message.includes('読み戻して照合')?'PDF原本を検証中':
+  message.includes('解析済み給与データ')?'明細データを保存中':
+  message.includes('収入データを同期')?'収入データを同期中':
+  message.includes('クラウドへ保存しました')?'明細の保存完了':
+  message.includes('接続')?'OneDriveへ接続中':'保存結果を確認中';
+ saveStage.textContent=`${match?`${match[1]} / ${match[2]}件 · `:''}${phase}`;
+ if(pct){
+  const n=Math.min(100,Math.max(0,Number(pct[1])));
+  saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width=`${n}%`;
+  saveProgress.setAttribute('aria-valuenow',String(n));
+ }else{
+  saveProgress.classList.add('is-indeterminate');saveProgressFill.style.width='28%';
+  saveProgress.removeAttribute('aria-valuenow');
+ }
+ saveStatus.textContent=message;
+ saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。完了後、自動的にホームへ戻ります。';
+ updateSaveClock();
+}
 let toastTimeout: ReturnType<typeof setTimeout> | undefined;
 
 function notice(message: string): void {
@@ -410,6 +463,7 @@ function removeFile(id: number): void {
 function addFiles(files: File[]): void {
   if (saving) { notice("保存処理中はPDFを追加できません。"); return; }
   if (!files.length) return;
+  saveFeedback.hidden=true;
   let rejected = 0;
   let added = 0;
   for (const file of files) {
@@ -682,6 +736,7 @@ function updateSaveState(): void {
   const locked = saving || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
   fileInput.disabled = saving;
+  dropZone.setAttribute("aria-disabled",saving?"true":"false");
   clearButton.disabled = saving;
   for (const button of Array.from(fileList.querySelectorAll<HTMLButtonElement>("button"))) button.disabled = saving;
   const pending = entries.some(entry => entry.status === "queued" || entry.status === "reading");
@@ -732,13 +787,16 @@ saveButton.addEventListener("click", async () => {
   saving = true;
   clearInlineError(saveStatus);
   updateSaveState();
+  beginSaveFeedback();
   try {
+    saveStatus.textContent = '保存前のPDFを検証しています…';
     // 保存前に形式とSHA-256を再確認する。ハッシュがないまま重複検査を素通りさせない。
     for (const entry of uploadable) {
       verifyPdfBytes(new Uint8Array(await entry.file.arrayBuffer()));
       if (!entry.hash) throw new Error("PDFのSHA-256を確認できません。localhost/HTTPSで開いて再読み込みしてください。");
     }
-    // 同一トランザクションで全件を登録。途中失敗なら一件も登録しない。
+    // OneDriveの複数ファイル書込みは一括トランザクションではない。
+    // 1件ずつ保存確認し、途中で失敗すれば件数と不完全保存の可能性を通知する。
     const records: SavedPayrollRecordInput[] = uploadable.map(entry => ({
       fileName: storedPdfName(entry.form.job, entry.form.kind, entry.form.paymentDate, entry.file.name),
       originalFileName: entry.file.name,
@@ -753,22 +811,39 @@ saveButton.addEventListener("click", async () => {
         ...validatePayrollForm(entry.form).warnings,
       ], reviewedAt: new Date().toISOString() } : {}),
     }));
-    const result = await saveRecordsSkippingDuplicates(records);
+    const result = await saveRecordsSkippingDuplicates(records, message => {
+      showSaveProgress(message);
+      saveButtonLabel.textContent = '保存中…';
+    });
     const batchDuplicateCount = entries.length - uploadable.length;
-    if (result.skipped.length || batchDuplicateCount) {
-      const detail = result.skipped.map(item => `・${item.fileName}：${item.reason.includes('pdf') ? 'PDFが重複' : '勤務先・種類・年月が重複'}`).join('\n');
-      window.alert(`${result.saved}件を保存し、重複${result.skipped.length + batchDuplicateCount}件はスキップしました。\n既存の明細・手動修正・PDF原本は変更していません。${batchDuplicateCount ? `\n一覧内の同一PDF ${batchDuplicateCount}件を除外。` : ''}\n${detail}`);
-    }
+    const skipped=result.skipped.length+batchDuplicateCount;
     if (result.saved) {
+      stopSaveClock();
+      saveFeedback.classList.add('is-complete');saveFeedback.classList.remove('is-failed');
+      saveStage.textContent='OneDriveへの保存完了';
+      saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='100%';
+      saveProgress.setAttribute('aria-valuenow','100');
+      saveStatus.textContent = `${result.saved}件をOneDriveへ保存・検証しました。${skipped?`重複${skipped}件は保存していません。`:''}`;
+      saveGuidance.textContent='保存完了を確認しました。ホームへ戻ります。';
+      saveButtonLabel.textContent = '保存完了';
       leavingAfterSave = true;
-      window.location.assign("../index.html");
+      window.setTimeout(() => window.location.assign('../index.html'), 1500);
     } else {
-      notice('すべて既存の明細と重複しているため、新しい保存は行いませんでした。');
-      saving = false;
+      stopSaveClock();saving = false;
       updateSaveState();
+      saveFeedback.classList.add('is-complete');
+      saveStage.textContent='新しく保存する明細はありません';
+      saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='100%';
+      saveProgress.setAttribute('aria-valuenow','100');
+      saveStatus.textContent=`重複${skipped}件を除外しました。新しい保存は行っていません。`;
+      saveGuidance.textContent='明細を追加するか、ホームへ戻れます。';
     }
   } catch (error) {
     leavingAfterSave = false;
+    stopSaveClock();saveFeedback.classList.add('is-failed');
+    saveStage.textContent='保存を完了できませんでした';
+    saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='0%';
+    saveGuidance.textContent='OneDriveの保存済み一覧を確認してから再試行してください。途中まで保存されたファイルが残っている可能性があります。';
     console.error("明細保存に失敗", error);
     saving = false;
     updateSaveState();
@@ -824,8 +899,17 @@ diagnosticDialog.addEventListener("click", event => {
 });
 // 一覧にあるPDFは保存前。保存成功時のみ離脱確認を抑止する。
 // beforeunloadの文言はブラウザ標準（任意の文面は表示されない）。
+// 保存中のアプリ内移動は抑止。ページを閉じる操作にもbeforeunloadで警告する。
+document.addEventListener('click',event=>{
+ if(!saving)return;
+ const target=event.target;
+ if(!(target instanceof Element))return;
+ const link=target.closest<HTMLAnchorElement>('a[href]');
+ if(!link)return;
+ event.preventDefault();notice('OneDriveへ保存中です。完了後に移動してください。');
+},true);
 window.addEventListener("beforeunload", event => {
-  if (entries.length === 0 || leavingAfterSave) return;
+  if ((!saving && entries.length === 0) || leavingAfterSave) return;
   event.preventDefault();
   event.returnValue = "";
 });

@@ -31,66 +31,18 @@ for (const offset of [6, 8, 14, 18, 22]) {
   assert.throws(() => readZip(changed), /ファイル位置/, 'ローカル領域の重複・改ざんを拒否');
 }
 
-const { payrollSnapshot, replaceAllRecords, toSummary } = await sourceModule('src/storage/payrollStore.ts');
-const record = (id, month) => ({
-  id, fileName: `${month}.pdf`, pdf: new Blob(['%PDF-1.4\nTEST']),
-  savedAt: '2026-11-14T00:00:00.000Z', revision: 1,
-  pages: 1, warningsAcknowledged: false,
-  form: { job: 'main', kind: 'salary', targetMonth: month, paymentDate: `${month}-25`, gross: '100', net: '100' },
-});
-const saved = [toSummary(record(1, '2026-09'))];
-const baseline = payrollSnapshot(saved);
-let writes = 0;
-let changes = saved;
-const mockDb = {
-  open(name, version) {
-    assert.equal(name, 'payroll-local-v1');
-    assert.equal(version, 2);
-    const request = {
-      result: {
-        close() {},
-        transaction(names, mode) {
-          assert.equal(mode, 'readwrite');
-          assert.deepEqual(names, ['payroll-records', 'payroll-record-index']);
-          const tx = {
-            objectStore(name) {
-              return {
-                getAll() {
-                  assert.equal(name, 'payroll-record-index');
-                  const req = { result: changes };
-                  queueMicrotask(() => {
-                    req.onsuccess?.();
-                    queueMicrotask(() => { if (!tx.aborted) tx.oncomplete?.(); });
-                  });
-                  return req;
-                },
-                clear() { writes++; },
-                put() { writes++; },
-              };
-            },
-            abort() { tx.aborted = true; tx.onabort?.(); },
-          };
-          return tx;
-        },
-      },
-    };
-    queueMicrotask(() => request.onsuccess?.());
-    return request;
-  },
-};
-const originalWindow = globalThis.window;
-const originalIndexedDb = globalThis.indexedDB;
-try {
-  globalThis.window = { indexedDB: mockDb };
-  globalThis.indexedDB = mockDb;
-  changes = [toSummary(record(1, '2026-09')), toSummary(record(2, '2026-10'))];
-  await assert.rejects(replaceAllRecords([record(3, '2026-11')], baseline), /変更されています/);
-  assert.equal(writes, 0, '別タブで変化があれば削除処理を実行しない');
-  changes = saved;
-  await replaceAllRecords([record(3, '2026-11')], baseline);
-  assert.equal(writes, 4, '状態が一致すれば原子的な復元処理へ進む');
-} finally {
-  if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
-  if (originalIndexedDb === undefined) delete globalThis.indexedDB; else globalThis.indexedDB = originalIndexedDb;
-}
-console.log('OK: ZIP構造検証、従来ZIP互換性、別タブ更新時の復元中止、通常復元');
+// IndexedDB復元テストはCloud移行に伴い独立した3-way mergeテストへ置き換え。
+const { mergeAnnual } = await sourceModule('src/cloud/vault.ts');
+const base = {format:'payroll-annual-v1',records:[],deleted:[]};
+const r = (id, gross) => ({id,fileName:`${id}.pdf`,originalId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',originalMonth:'2026-11',pdfSize:20,pdfType:'application/pdf',savedAt:'2026-11-16T00:00:00Z',pages:1,warningsAcknowledged:true,form:{job:'main',kind:'salary',targetMonth:'2026-11',paymentDate:'2026-11-27',gross:String(gross),net:String(gross)}});
+const first = { ...base, records:[r(1,100)] };
+const second = { ...base, records:[r(2,200)] };
+const merged = mergeAnnual(base, first, second);
+assert.deepEqual(merged.records.map(x=>x.id).sort(),[1,2],'独立IDの追加は両方残す');
+const changedA = {...first,records:[{...r(1,100),form:{...r(1,100).form,gross:'150'}}]};
+const changedB = {...first,records:[{...r(1,100),form:{...r(1,100).form,net:'160'}}]};
+assert.equal(mergeAnnual(first,changedA,changedB).records[0].form.net,'160');
+assert.equal(mergeAnnual(first,changedA,changedB).records[0].form.gross,'150');
+const clash = {...first,records:[{...r(1,100),form:{...r(1,100).form,gross:'999'}}]};
+assert.throws(()=>mergeAnnual(first,changedA,clash),/別端末/,'同じ入力項目を上書きしない');
+console.log('OK: ZIP検証、独立IDの3方向統合、異なる項目の統合、同一項目競合の拒否');

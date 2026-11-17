@@ -1,0 +1,86 @@
+/** OneDrive保存のUX回帰テスト。実アカウント・ネットワーク不要。 */
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
+import {build} from 'esbuild';
+const source = relative => readFileSync(new URL('../'+relative,import.meta.url),'utf8');
+const keyWorker=source('public/payroll-cloud-session.js');
+const fakeSelf = {};
+let now=0;
+const WorkerDate={now:()=>now};
+vm.runInNewContext(keyWorker,{self:fakeSelf,Date:WorkerDate,Map,RegExp});
+const port = ()=>({onmessage:null,start(){},messages:[],postMessage(msg){this.messages.push(msg);}});
+const a=port(),b=port();
+fakeSelf.onconnect({ports:[a]});fakeSelf.onconnect({ports:[b]});
+const key={type:'secret',algorithm:{name:'AES-GCM'},extractable:false};
+a.onmessage({data:{id:1,action:'set',scope:'client:account',key,salt:'salt1'}});
+assert.equal(a.messages.at(-1).result,true);
+b.onmessage({data:{id:2,action:'get',scope:'client:account'}});
+assert.equal(b.messages.at(-1).result.key,key,'別ページでも同じCryptoKeyインスタンスを利用');
+b.onmessage({data:{id:3,action:'get',scope:'client:another'}});
+assert.equal(b.messages.at(-1).result,null,'Microsoftアカウントごとに鍵を分離');
+now=30*60*1000+1;
+b.onmessage({data:{id:4,action:'get',scope:'client:account'}});
+assert.equal(b.messages.at(-1).result,null,'一定時間経過でセッション鍵は期限切れ');
+a.onmessage({data:{id:5,action:'set',scope:'client:account',key,salt:'salt1'}});
+b.onmessage({data:{id:6,action:'clear',scope:'client:account'}});
+a.onmessage({data:{id:7,action:'get',scope:'client:account'}});
+assert.equal(a.messages.at(-1).result,null,'解除・切替時は明示的に鍵を消去');
+const fakeExport={type:'secret',algorithm:{name:'AES-GCM'},extractable:true};
+a.onmessage({data:{id:8,action:'set',scope:'client:account',key:fakeExport,salt:'salt1'}});
+assert.equal(a.messages.at(-1).result,null,'抽出可能な鍵の共有を拒否');
+console.log('PASS: SharedWorkerメモリ鍵、アカウント分離、30分失効、明示削除');
+
+// Graph URLとフォルダーIDの不要な往復を検出。
+const graphResult=await build({
+ entryPoints:[new URL('../src/cloud/graph.ts',import.meta.url).pathname],
+ bundle:true,platform:'node',format:'esm',target:'es2022',write:false,logLevel:'silent',
+});
+const graph=await import('data:text/javascript;base64,'+Buffer.from(graphResult.outputFiles[0].contents).toString('base64'));
+let rootCalls=0,folderCalls=0,fileCalls=0;
+const remote=async (url)=>{
+ if(url.endsWith('/me/drive/special/approot')){rootCalls++;return Response.json({id:'root'});}
+ if(url.includes(':/payroll')||url.includes(':/statements')){folderCalls++;return Response.json({id:url.includes('statements')?'statements':'payroll'});}
+ if(url.includes(':/2026.enc')){fileCalls++;return new Response('',{status:404});}
+ throw new Error('未定義の模擬アクセス: '+url.split('?')[0]);
+};
+const store=new graph.PayrollGraph('test-token',remote);
+assert.equal(await store.read(['payroll','statements'],'2026.enc',100),null);
+assert.equal(await store.read(['payroll','statements'],'2026.enc',100),null);
+assert.equal(rootCalls,1);
+assert.equal(folderCalls,2,'フォルダーごとのメタデータ再取得を回避');
+assert.equal(fileCalls,2,'個別ファイルの更新確認は都度行う');
+console.log('PASS: GraphフォルダーIDのみをキャッシュし、明細ファイルの存在確認は継続');
+
+const auth=source('src/cloud/auth.ts'),vault=source('src/cloud/vault.ts');
+const upload=source('src/upload.ts'),storeCode=source('src/storage/payrollStore.ts');
+assert.match(auth,/restoredKey\(/);
+assert.match(auth,/rememberKey\(/);
+assert.match(auth,/await candidate\.unlockWithKey\(/);
+assert.match(auth,/cacheLocation:'sessionStorage'/,'MSALのトークンをlocalStorageへ永続化しない');
+assert.match(vault,/async unlockWithKey\(/);
+assert.doesNotMatch(vault,/try\{await this\.refresh\(\);await this\.syncIncome\(\);\}/,'初回の収入全年度再同期禁止');
+assert.match(vault,/async syncIncome\(changedYears\?/);
+assert.match(vault,/if\(retry>0\)await this\.refresh\(\)/);
+assert.match(storeCode,/onProgress\?\./);
+assert.match(upload,/saveRecordsSkippingDuplicates\(records, message =>/);
+assert.match(upload,/保存・検証しました/);
+assert.match(source('.gitignore'),/!\/public\/payroll-cloud-session\.js/);
+console.log('PASS: 認証画面・同一オリジンの鍵継承・保存進捗・変更年のみの同期');
+
+// UX regressions: connected account must not advertise a no-op button; upload must tell users when to navigate.
+const html=source('public/upload/index.html'),css=source('public/styles/cloud.css');
+assert.match(auth,/payroll-cloud-account is-checking/);
+assert.match(auth,/ui\.login\.hidden=state==='connected'/);
+assert.match(auth,/ui\.button\.disabled=state!=='connected'/);
+assert.match(css,/payroll-cloud-account\.is-connected/);
+assert.match(html,/id="save-feedback"/);
+assert.match(html,/id="save-progress-track"/);
+assert.match(html,/ブラウザで暗号化|端末内で暗号化/);
+assert.doesNotMatch(html,/IndexedDBへ保存します/);
+assert.match(upload,/saveElapsed\.textContent/);
+assert.match(upload,/通信応答を待っています/);
+assert.match(upload,/document\.addEventListener\('click',event=>/);
+assert.match(upload,/stopSaveClock\(\)/);
+assert.doesNotMatch(upload,/window\.alert\(`\$\{result\.saved\}/);
+console.log('PASS: connected Microsoft UI, visible cloud progress, safe navigation, no stale IndexedDB notice');

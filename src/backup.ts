@@ -1,7 +1,10 @@
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
-import { loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
+import { migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, deleteVerifiedLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
+import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
+import {clearNavigationSnapshot} from './cloud/snapshot';
+import type {CloudFolderItem} from './cloud/graph';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -20,6 +23,21 @@ const restorePreview = $<HTMLElement>('restore-preview');
 const ack = $<HTMLInputElement>('restore-ack');
 const restoreButton = $<HTMLButtonElement>('restore-button');
 const status = $<HTMLElement>('backup-status');
+const changeCurrent=$<HTMLInputElement>('change-current');
+const changeNew=$<HTMLInputElement>('change-new');
+const changeConfirm=$<HTMLInputElement>('change-confirm');
+const changeAck=$<HTMLInputElement>('change-ack');
+const changeButton=$<HTMLButtonElement>('change-passphrase-button');
+const changeStatus=$<HTMLElement>('change-passphrase-status');
+type OldCloudPlan={generation:string;indexEtag:string;targets:Array<{parent:string[];item:CloudFolderItem}>;files:number;bytes:number};
+let oldCloudPlan:OldCloudPlan|undefined;
+let oldLocalCount:number|undefined;
+const cloudCheck=$<HTMLButtonElement>('cloud-cleanup-check');
+const cloudDelete=$<HTMLButtonElement>('cloud-cleanup-delete');
+const cloudStatus=$<HTMLElement>('cloud-cleanup-status');
+const localCheck=$<HTMLButtonElement>('legacy-cleanup-check');
+const localDelete=$<HTMLButtonElement>('legacy-cleanup-delete');
+const localStatus=$<HTMLElement>('legacy-cleanup-status');
 let preview: LoadedBackup | undefined;
 let currentCount = 0;
 let initialSnapshot: string[] | undefined;
@@ -29,7 +47,12 @@ let encryptedFile = false;
 const sizes = (n: number) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`;
 function updateButtons(): void {
   exportButton.disabled = busy || !loadedDb;
+  changeButton.disabled=busy;
+  $<HTMLButtonElement>('payroll-income-publish').disabled=busy;
+  cloudCheck.disabled=busy;cloudDelete.disabled=busy||!oldCloudPlan;localCheck.disabled=busy;localDelete.disabled=busy||oldLocalCount===undefined;
+  for(const item of [changeCurrent,changeNew,changeConfirm,changeAck])item.disabled=busy;
   filePicker.disabled = busy;
+  document.querySelector<HTMLButtonElement>('#migrate-legacy-cloud')?.toggleAttribute('disabled',busy);
   restorePassword.disabled = busy || !encryptedFile;
   verifyButton.disabled = busy || !encryptedFile || !filePicker.files?.length || !restorePassword.value;
   ack.disabled = busy || !preview;
@@ -45,20 +68,32 @@ function resetPreview(): void {
   updateButtons();
 }
 async function refreshCount(): Promise<void> {
-  const records = await loadRecordSummaries();
+  const records = await loadRecordSummaries({priorityYears:[]});
   currentCount = records.length;
   initialSnapshot = payrollSnapshot(records);
   loadedDb = true;
   const bytes = records.reduce((sum, r) => sum + r.pdfSize, 0);
-  exportSummary.textContent = `保存済み ${currentCount}件 ・ PDF原本 ${sizes(bytes)}`;
+  exportSummary.textContent = `明細 ${currentCount}件 / PDF ${sizes(bytes)}`;
 }
 exportButton.addEventListener('click', async () => {
   if (busy || !loadedDb) return;
   if (exportPassword.value !== exportConfirm.value) { info('2つのパスワードが一致しません。', true); return; }
   if ([...exportPassword.value].length < 12) { info('パスワードは12文字以上にしてください。', true); return; }
   busy = true; updateButtons(); info('暗号化バックアップを作成しています…');
+  const started = performance.now();
+  let step='OneDriveの原本PDFを確認しています…';
+  let timer:ReturnType<typeof setInterval>|undefined;
+  const display=()=>info(`${step}（経過 ${Math.round((performance.now()-started)/1000)}秒）`);
+  timer=setInterval(display,1000);
   try {
-    const zip = await createBackup(await loadRecords());
+    display();
+    const records=await loadRecords((completed,total)=>{
+      step=`PDF原本 ${completed}/${total}件を取得・照合しました`;
+      display();
+    });
+    step='ZIPファイルを作成しています…';display();
+    const zip=await createBackup(records);
+    step='バックアップを暗号化しています…';display();
     const blob = await encryptBackup(zip, exportPassword.value);
     const today = new Date();
     const stamp = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2,'0')}-${String(today.getHours()).padStart(2,'0')}${String(today.getMinutes()).padStart(2,'0')}${String(today.getSeconds()).padStart(2,'0')}`;
@@ -74,7 +109,7 @@ exportButton.addEventListener('click', async () => {
     exportConfirm.value = '';
     info(`暗号化バックアップを作成しました（${sizes(blob.size)}）。保存先でファイルがあることを確認してください。`);
   } catch (error) { info(`バックアップに失敗しました: ${error instanceof Error ? error.message : String(error)}`, true); }
-  finally { busy = false; updateButtons(); }
+  finally { if(timer)clearInterval(timer);busy = false;updateButtons(); }
 });
 
 async function verifyRestore(file: File, password?: string): Promise<void> {
@@ -86,7 +121,7 @@ async function verifyRestore(file: File, password?: string): Promise<void> {
     preview = loaded;
     restorePassword.value = '';
     restorePreview.textContent = `検証完了：${loaded.records.length}件 ・ PDF ${sizes(loaded.bytes)}\n作成日時：${new Date(loaded.exportedAt).toLocaleString('ja-JP')}${loaded.unreviewedWarnings ? `\n旧データの検算未承認：${loaded.unreviewedWarnings}件` : ''}${loaded.legacyDuplicates ? `\n旧データの重複候補：${loaded.legacyDuplicates}件` : ''}`;
-    info('ZIP・PDF.js・PDFハッシュの検証が完了しました。内容を確認して復元してください。');
+    info('バックアップを検証しました。復元内容を確認してください。');
   } catch (error) {
     preview = undefined;
     restorePreview.textContent = '検証失敗。既存データは変更されていません。';
@@ -104,10 +139,10 @@ filePicker.addEventListener('change', async () => {
     restorePasswordRow.hidden = !encryptedFile;
     verifyButton.hidden = !encryptedFile;
     if (encryptedFile) {
-      restorePreview.textContent = '暗号化されたPayrollバックアップです。パスワードを入力して検証してください。';
+      restorePreview.textContent = '暗号化バックアップ。パスワードを入力して検証してください。';
       info('暗号化バックアップを検出しました。');
     } else {
-      restorePreview.textContent = '従来のZIPを確認します。';
+      restorePreview.textContent = 'ZIPファイルを検証中…';
     }
   } catch (error) {
     info(`ファイルを読み取れませんでした: ${error instanceof Error ? error.message : String(error)}`, true);
@@ -136,15 +171,62 @@ restoreButton.addEventListener('click', async () => {
     resetPreview();
     restorePreview.textContent = '復元を中断しました。バックアップの検証からやり直してください。';
     try { await refreshCount(); } catch { /* データの読み込み失敗は以下の詳細エラーを優先 */ }
-    info(`復元に失敗しました。元のデータは保持されています: ${error instanceof Error ? error.message : String(error)}`, true);
+    info(`復元が途中で停止しました。OneDriveの明細を確認してください: ${error instanceof Error ? error.message : String(error)}`, true);
     busy = false; updateButtons();
   }
 });
-void refreshCount().then(updateButtons).catch(error => {
+const cloudState=$<HTMLElement>('backup-cloud-status');
+const cloudLogin=$<HTMLButtonElement>('backup-cloud-login');
+const cloudId=$<HTMLInputElement>('backup-cloud-client-id');
+const cloudSave=$<HTMLButtonElement>('backup-cloud-save');
+$<HTMLElement>('backup-cloud-redirect-uri').textContent=cloudRedirectUri();
+async function refreshCloudSettings():Promise<boolean>{
+ const state=await cloudConnectionState();
+ cloudId.value=state.clientId;
+ cloudState.textContent=state.error??(state.user?`サインイン済み · ${state.user}`:state.clientId?'未ログイン':'Client ID未設定');
+ cloudState.dataset.error=String(Boolean(state.error));
+ cloudLogin.disabled=!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(state.clientId);
+ cloudLogin.textContent=state.user?'別のアカウントでログイン':'Microsoftにログイン';
+ return Boolean(state.user);
+}
+cloudSave.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ cloudSave.disabled=true;
+ try{
+  const changed=await saveCloudClientId(cloudId.value);
+  if(changed==='changed'){location.reload();return;}
+  cloudState.textContent='Client IDは設定済みです。';
+ }catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';}
+ finally{cloudSave.disabled=false;}
+})()});
+cloudLogin.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ cloudLogin.disabled=true;
+ try{await chooseMicrosoftAccount();}
+ catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';cloudLogin.disabled=false;}
+})()});
+void refreshCloudSettings().then(connected=>{
+ if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';return;}
+ return refreshCount().then(updateButtons);
+}).catch(error => {
   exportSummary.textContent = '保存済みデータを確認できませんでした。';
-  info(error instanceof Error ? error.message : 'データベースの読み込みに失敗しました。', true);
+  info(error instanceof Error ? error.message : 'OneDriveのデータを取得できませんでした。', true);
   updateButtons();
 });
+
+// Existing saved salaries can be republished without editing or duplicating their PDF records.
+$<HTMLButtonElement>('payroll-income-publish').addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ busy=true;updateButtons();
+ const label=$<HTMLElement>('payroll-income-publish-status');
+ label.textContent='保存済み明細を確認して、収入情報を暗号化して更新しています…';
+ try{
+  const vault=await cloudVault();
+  await vault.syncIncome();
+  label.textContent='全年度のFinance連携データを更新・読み戻し照合しました。';
+ }catch(error){label.textContent=`連携データの更新に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;}
+ finally{busy=false;updateButtons();}
+})()});
 
 // 表示状態は入力欄ごとに独立。パスワード値をログ・保存領域に出さない。
 for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('[data-toggle-password]'))) {
@@ -159,3 +241,92 @@ for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('[d
     button.setAttribute('aria-label', visible ? 'パスワードを隠す' : 'パスワードを表示');
   });
 }
+
+const migrateButton=document.querySelector<HTMLButtonElement>('#migrate-legacy-cloud');
+const migrateStatus=document.querySelector<HTMLElement>('#migrate-legacy-cloud-status');
+migrateButton?.addEventListener('click',()=>{void(async()=>{
+ if(!migrateStatus)return;
+ if(!confirm('旧IndexedDBの給与明細をOneDriveへ移行します。移行前にバックアップを保管しましたか？'))return;
+ migrateButton.disabled=true;
+ try{
+  const result=await migrateFromLegacyIndexedDb(message=>{migrateStatus.textContent=message;});
+  migrateStatus.textContent=`旧データ ${result.found}件中、新規に${result.migrated}件を移行しました。旧IndexedDBは削除していません。`;
+  await refreshCount();
+ }catch(error){migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
+ finally{migrateButton.disabled=false;}
+ })();});
+
+// データ書換中はタブを閉じる前に確認。ページ遷移ではロックと転送状況を守る。
+window.addEventListener('beforeunload',event=>{
+ if(busy){event.preventDefault();event.returnValue='';}
+});
+changeButton.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ if(changeNew.value!==changeConfirm.value){changeStatus.textContent='新しいパスフレーズが一致しません。';return;}
+ if([...changeCurrent.value].length<12||[...changeNew.value].length<12){changeStatus.textContent='現在・新しいパスフレーズを12文字以上で入力してください。';return;}
+ if(changeCurrent.value===changeNew.value){changeStatus.textContent='現在と異なるパスフレーズを指定してください。';return;}
+ if(!changeAck.checked){changeStatus.textContent='バックアップと他タブの終了を確認してください。';return;}
+ if(!window.confirm('OneDriveの全暗号ファイルを新しい鍵へ移行します。完了まで画面移動はできません。開始しますか？'))return;
+ busy=true;updateButtons();
+ const started=performance.now();let stage='変更の準備中…';
+ const report=()=>{changeStatus.textContent=`${stage}（経過 ${Math.round((performance.now()-started)/1000)}秒）`;};
+ const timer=setInterval(report,1000);
+ try{
+  const vault=await cloudVault();
+  clearNavigationSnapshot();
+  await vault.changePassphrase(changeCurrent.value,changeNew.value,value=>{stage=value;report();});
+  // 移行はこの時点でOneDriveに確定済み。旧タブ鍵を消し、メモリ鍵を更新する。
+  changeCurrent.value='';changeNew.value='';changeConfirm.value='';changeAck.checked=false;
+  try{await refreshSessionAfterKeyRotation();}
+  catch{changeStatus.textContent='OneDriveの変更は完了しました。セッションの引継ぎに失敗したため、次回は新しいパスフレーズで解除してください。';return;}
+  changeStatus.textContent='パスフレーズを変更しました。次回の解除には新しいパスフレーズを使用してください。';
+ }catch(error){changeStatus.textContent=`変更を完了できませんでした: ${error instanceof Error?error.message:String(error)}`;}
+ finally{clearInterval(timer);busy=false;updateButtons();}
+})()});
+
+cloudCheck.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;oldCloudPlan=undefined;cloudDelete.hidden=true;busy=true;updateButtons();
+ cloudStatus.textContent='OneDriveの旧暗号領域を確認しています…';
+ try{
+  const vault=await cloudVault();
+  const plan=await vault.inspectOldEncryptedData();
+  oldCloudPlan=plan;
+  cloudStatus.textContent=plan.targets.length?`旧暗号フォルダー ${plan.targets.length}件 / 暗号ファイル ${plan.files}件（約${sizes(plan.bytes)}）。現行の保存世代は対象外です。`:'整理できる旧暗号データはありません。';
+  cloudDelete.hidden=!plan.targets.length;
+ }catch(error){cloudStatus.textContent=error instanceof Error?error.message:String(error);}
+ finally{busy=false;updateButtons();}
+})()});
+cloudDelete.addEventListener('click',()=>{void(async()=>{
+ if(busy||!oldCloudPlan)return;
+ const plan=oldCloudPlan;
+ if(!confirm(`現行データ・PDFをすべて照合したあと、旧暗号フォルダー ${plan.targets.length}件をOneDriveのごみ箱へ移動します。\nごみ箱には古いパスフレーズで開けるファイルが残ります。\n暗号化バックアップを別途保存し、他タブを閉じましたか？`))return;
+ if(prompt('削除するには「整理」と入力してください。')!=='整理')return;
+ oldCloudPlan=undefined;cloudDelete.hidden=true;busy=true;updateButtons();
+ try{
+  const vault=await cloudVault();
+  const count=await vault.cleanupOldEncryptedData(plan,text=>{cloudStatus.textContent=text;});
+  cloudStatus.textContent=`旧暗号フォルダー ${count}件をごみ箱に移動しました。完全に消す場合はOneDriveのごみ箱も空にしてください。`;
+ }catch(error){cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
+ finally{busy=false;updateButtons();}
+})()});
+localCheck.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;oldLocalCount=undefined;localDelete.hidden=true;busy=true;updateButtons();
+ try{
+  const result=await inspectLegacyIndexedDb();
+  if(!result.exists){localStatus.textContent='旧IndexedDBはありません。';return;}
+  oldLocalCount=result.count;
+  localStatus.textContent=`旧IndexedDB：${result.count}件。削除時にOneDriveの明細・原本と全件照合します。`;
+  localDelete.hidden=false;
+ }catch(error){localStatus.textContent=error instanceof Error?error.message:String(error);}
+ finally{busy=false;updateButtons();}
+})()});
+localDelete.addEventListener('click',()=>{void(async()=>{
+ if(busy||oldLocalCount===undefined)return;
+ if(!confirm(`この端末の旧IndexedDB（${oldLocalCount}件）を、OneDriveと全件照合できた場合にだけ削除します。バックアップを保管しましたか？`))return;
+ oldLocalCount=undefined;localDelete.hidden=true;busy=true;updateButtons();
+ try{
+  const count=await deleteVerifiedLegacyIndexedDb(text=>{localStatus.textContent=text;});
+  localStatus.textContent=`旧IndexedDBを削除しました（照合済み ${count}件）。Microsoft接続情報や一時鍵は保持しています。`;
+ }catch(error){localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ finally{busy=false;updateButtons();}
+})()});

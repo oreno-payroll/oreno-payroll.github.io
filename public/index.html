@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="theme-color" content="#f5f7fb">
   <title>Payroll | 給与明細管理</title>
   <link rel="stylesheet" href="./styles/ress.css">
   <link rel="stylesheet" href="./styles/style.css">
   <link rel="stylesheet" href="./styles/dashboard.css">
   <script type="module" src="./main.js"></script>
-</head>
+
+  <link rel="stylesheet" href="./styles/cloud.css"></head>
 <body>
   <!-- 外部アイコンライブラリは使わない。共通アイコンはページ内のSVGシンボルを参照する。 -->
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -29,7 +30,7 @@
         <span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span>
       </a>
       <div class="header-actions">
-        <a class="btn btn--secondary" href="./backup/index.html"><svg class="icon" aria-hidden="true"><use href="#icon-backup"></use></svg><span>バックアップ・復元</span></a>
+        <a class="btn btn--secondary" href="./backup/index.html"><svg class="icon" aria-hidden="true"><use href="#icon-backup"></use></svg><span>設定</span></a>
         <a class="btn btn--primary" href="./upload/index.html"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span>明細をアップロード</span></a>
       </div>
     </header>

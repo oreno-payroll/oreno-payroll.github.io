@@ -381,3 +381,20 @@
   .diagnostic-dialog__actions { flex-wrap: wrap; }
   .diagnostic-dialog__actions .btn { min-width: 0; width: 100%; }
 }
+
+/* OneDrive save activity: show honest per-file byte progress and elapsed cloud wait. */
+.save-feedback{display:grid;gap:6px;width:100%;max-width:560px;padding-top:3px}
+.save-feedback__top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--color-text);font-size:12px;font-weight:800}
+#save-elapsed{color:var(--color-muted);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.save-feedback__track{height:6px;background:#e7edf6;border-radius:8px;overflow:hidden;position:relative}
+.save-feedback__fill{height:100%;width:0;background:var(--color-primary);border-radius:8px;transition:width .22s ease}
+.save-feedback__track.is-indeterminate .save-feedback__fill{position:absolute;left:0;top:0;width:28%!important;animation:payroll-cloud-upload-wait 1.4s ease-in-out infinite}
+.save-feedback__guidance{margin:0;color:var(--color-muted);font-size:11px;line-height:1.5}
+.save-feedback.is-complete .save-feedback__fill{background:var(--color-success)}
+.save-feedback.is-complete #save-stage{color:var(--color-success)}
+.save-feedback.is-failed #save-stage{color:var(--color-danger)}
+.save-feedback.is-failed .save-feedback__fill{background:var(--color-danger)}
+#drop-zone[aria-disabled="true"]{pointer-events:none;opacity:.5}
+@keyframes payroll-cloud-upload-wait{0%{transform:translateX(-110%)}100%{transform:translateX(390%)}}
+@media(prefers-reduced-motion:reduce){.save-feedback__track.is-indeterminate .save-feedback__fill{animation:none}}
+@media(max-width:640px){.save-feedback__top{font-size:11px}.save-feedback__guidance{font-size:10px}}

@@ -19,6 +19,21 @@ const tests = [
   ['scripts/test-lazy-pdfs.mjs', true],
   ['scripts/test-pdf-view-service-worker.mjs', true],
   ['scripts/test-viewer-flow.mjs', true],
+  ['scripts/test-cloud-core.mjs', true],
+  ['scripts/test-cloud-ux.mjs', true],
+  ['scripts/test-cloud-tab-unlock.mjs', true],
+  ['scripts/test-cloud-upload-ux.mjs', true],
+  ['scripts/test-cloud-batch.mjs', true],
+  ['scripts/test-cloud-startup.mjs', true],
+  ['scripts/test-navigation-session.mjs', true],
+  ['scripts/test-key-rotation-backup.mjs', true],
+  ['scripts/test-readonly-diagnostics.mjs', true],
+  ['scripts/test-graph-read-retry.mjs', true],
+  ['scripts/test-folder-metadata-minimal.mjs', true],
+  ['scripts/test-backup-layout.mjs', true],
+  ['scripts/test-cleanup-guard.mjs', true],
+  ['scripts/test-cleanup-finance-compat.mjs', true],
+  ['scripts/test-income-publication-v132.mjs', true],
 ];
 for (const [relative, required] of tests) {
   const target = path.join(root, relative);

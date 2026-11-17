@@ -1,0 +1,325 @@
+/** Finance v1.1のAppFolder/ETag/事前認証URL方式をPayroll専用APIへ適用。 */
+const BASE = 'https://graph.microsoft.com/v1.0';
+export interface RemoteFile { id: string; etag: string; text: string; size?: number; }
+interface Item { id?: string; name?: string; folder?: Record<string,unknown>; eTag?: string; size?: number; '@microsoft.graph.downloadUrl'?: string }
+export class GraphError extends Error {
+  constructor(readonly status: number, readonly code: string) {
+    super(`OneDrive通信エラー HTTP ${status}${code ? ` (${code})` : ''}`);
+  }
+}
+export const isCollision = (e: unknown): boolean => e instanceof GraphError && (e.status === 409 || e.status === 412);
+export interface CloudFolderItem {id:string;name:string;etag:string;folder:boolean;size:number}
+export class PayrollGraph {
+  private rootId: string | undefined;
+  private rootPending:Promise<string>|undefined;
+  private folders = new Map<string,string>();
+  private folderPending = new Map<string,Promise<string|null>>();
+  constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}) {}
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+    if(init.method && init.method.toUpperCase()!=='GET' && init.method.toUpperCase()!=='HEAD')this.onMutation();
+    const token=typeof this.token==='function'?await this.token():this.token;
+    const r = await this.http(`${BASE}${path}`, { ...init, headers: {Authorization:`Bearer ${token}`,...init.headers}, redirect:'error' });
+    if (!r.ok) {
+      let code = '';
+      try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
+      throw new GraphError(r.status,code);
+    }
+    return r;
+  }
+  /**
+   * Graph の GET メタデータ応答だけを検証して再試行する。
+   * OneDrive の暗号文は解析せず、書き込み・削除の再試行も行わない。
+   * URL・トークン・生のレスポンスはエラーやログへ含めない。
+   */
+  private async readMetadata<T>(path: string, stage: string): Promise<T> {
+    for(let attempt=1;attempt<=3;attempt++) {
+      let response:Response;
+      try {
+        response=await this.request(path,{
+          method:'GET',cache:'no-store',headers:{'Accept':'application/json'},
+        });
+      }catch(error){
+        if(error instanceof GraphError)throw error;
+        throw new Error(`${stage}：GraphのGET開始前（認証など）または通信処理で失敗しました。暗号ファイルは変更していません。`,{cause:error});
+      }
+      const contentType=(response.headers.get('content-type')??'unknown').split(';')[0].trim().toLowerCase();
+      const contentLength=response.headers.get('content-length');
+      if(contentLength && Number(contentLength)>1_048_576)
+        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。クラウドは変更していません。`);
+      let body:string;
+      try {body=await response.text();}
+      catch(error){throw new Error(`${stage}：Graphの応答本文を取得できません。クラウドは変更していません。`,{cause:error});}
+      if(new TextEncoder().encode(body).byteLength>1_048_576)
+        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。クラウドは変更していません。`);
+      try {
+        const parsed:unknown=JSON.parse(body.replace(/^\uFEFF/,''));
+        if(!parsed || typeof parsed!=='object' || Array.isArray(parsed))
+          throw new SyntaxError('Graph metadata is not a JSON object');
+        return parsed as T;
+      }catch(error){
+        if(!(error instanceof SyntaxError))throw error;
+        if(attempt<3){await new Promise<void>(resolve=>setTimeout(resolve,150*attempt));continue;}
+        const actualBytes=new TextEncoder().encode(body).byteLength;
+        const declaredBytes=contentLength!==null&&/^\d+$/.test(contentLength)?Number(contentLength):null;
+        const encoding=response.headers.get('content-encoding');
+        // Content-Length は転送時（圧縮前後）の数値の場合がある。圧縮中は不一致を破損と断定しない。
+        const lengthStatus=declaredBytes===null?'Content-Length不明':`Content-Length ${declaredBytes}バイト、取得後 ${actualBytes}バイト${encoding?'（転送圧縮あり・直接比較不可）':declaredBytes!==actualBytes?'（サイズ不一致）':''}`;
+        throw new Error(`${stage}：Graph APIのメタデータJSONが不正です（HTTP ${response.status}、MIME ${contentType}、本文 ${body.length}文字、${lengthStatus}、3回試行）。暗号ファイルは変更していません。`,{cause:error});
+      }
+    }
+    throw new Error(`${stage}：Graphのメタデータ取得に失敗しました。`);
+  }
+  private async root(): Promise<string> {
+    if (this.rootId) return this.rootId;
+    if (!this.rootPending) this.rootPending = (async()=>{
+      const item=await this.readMetadata<Item>('/me/drive/special/approot','AppFolderの照会');
+      if (!item.id) throw new Error('AppFolderが見つかりません。');
+      return (this.rootId=item.id);
+    })();
+    const pending=this.rootPending;
+    try{return await pending;}finally{if(this.rootPending===pending)this.rootPending=undefined;}
+  }
+  /**
+   * `versions` は Graph でも DriveItem の履歴一覧リソース名。
+   * /items/{parent}:/versions のパス指定では API ルートと衝突し得るため、
+   * 親IDの children を列挙し、name が厳密一致するフォルダーを探す。
+   * 暗号化ファイルは読み書きしない。ページングも同一Graph URLに限定する。
+   */
+  private async reservedFolder(parent: string, name: string): Promise<Item | null> {
+    const endpoint = `/me/drive/items/${encodeURIComponent(parent)}/children`;
+    let path = `${endpoint}?$select=id,name,folder&$top=200`;
+    for(let page=0;page<50;page++) {
+      const response = await this.readMetadata<{value?:Item[]; '@odata.nextLink'?:string}>(path,'保存世代フォルダー一覧の照会');
+      if(!Array.isArray(response.value))
+        throw new Error('保存世代フォルダーの一覧形式が不正です。クラウドは変更していません。');
+      const matches = response.value.filter(item=>item.name===name);
+      if(matches.length>1)
+        throw new Error('同名の保存世代フォルダーが複数存在します。クラウドは変更していません。');
+      if(matches.length===1) {
+        const found=matches[0];
+        if(!found.id || !found.folder || typeof found.folder!=='object')
+          throw new Error('保存世代の名前と一致する項目はフォルダーではありません。クラウドは変更していません。');
+        return found;
+      }
+      const next=response['@odata.nextLink'];
+      if(!next)return null;
+      let url: URL;
+      try {url=new URL(next);}catch{throw new Error('GraphのページングURLが不正です。クラウドは変更していません。');}
+      if(url.protocol!=='https:' || url.hostname!=='graph.microsoft.com' || url.port ||
+         url.username || url.password || url.pathname!==`/v1.0${endpoint}`)
+        throw new Error('GraphのページングURLが許可された範囲外です。クラウドは変更していません。');
+      path=url.pathname.slice('/v1.0'.length)+url.search;
+    }
+    throw new Error('保存世代フォルダーの一覧が多すぎます。クラウドは変更していません。');
+  }
+  private async folder(parts: string[], create: boolean): Promise<string | null> {
+    if (!parts.length) return this.root();
+    const cacheKey=parts.join('/');
+    const cached=this.folders.get(cacheKey);
+    if(cached)return cached;
+    const pendingKey=`${create?'create':'read'}:${cacheKey}`;
+    const current=this.folderPending.get(pendingKey);
+    if(current)return current;
+    const pending=(async():Promise<string|null>=>{
+      const parent=await this.folder(parts.slice(0,-1),create);
+      if(!parent)return null;
+      const name=parts[parts.length-1];
+      if (!/^[A-Za-z0-9-]{1,64}$/.test(name)) throw new Error('OneDriveのフォルダー名が不正です。');
+      // IDだけを取得するために全メタデータを読む必要はない。Graphの巨大な応答を避ける。
+      // $select は Graph v1.0 driveItem GET の正式なオプション。
+      const lookup=`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}?$select=id,name,folder`;
+      // 通常のフォルダー名は従来の経路を維持する。reserved名だけID一覧検索。
+      // Graph の /items/{id}/versions は履歴APIなので、パスとして使ってはいけない。
+      const reserved=name==='versions';
+      let item:Item|null=null;
+      if(reserved) item=await this.reservedFolder(parent,name);
+      else {
+        try {item=await this.readMetadata<Item>(lookup,'フォルダー階層の照会');}
+        catch(e) {if(!(e instanceof GraphError&&e.status===404))throw e;}
+      }
+      if(!item) {
+        if(!create)return null;
+        try {
+          item=await (await this.request(`/me/drive/items/${encodeURIComponent(parent)}/children`,{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name,folder:{},'@microsoft.graph.conflictBehavior':'fail'}),
+          })).json() as Item;
+        }catch(collision) {
+          if(!isCollision(collision))throw collision;
+          item=reserved
+            ? await this.reservedFolder(parent,name)
+            : await this.readMetadata<Item>(lookup,'フォルダー階層の照会');
+        }
+      }
+      if(!item?.id)throw new Error('OneDriveのフォルダーIDが取得できません。');
+      this.folders.set(cacheKey,item.id);
+      return item.id;
+    })();
+    this.folderPending.set(pendingKey,pending);
+    try{return await pending;}finally{if(this.folderPending.get(pendingKey)===pending)this.folderPending.delete(pendingKey);}
+  }
+  /** 同時編集検査専用。本文をダウンロードせずETagとサイズだけ取得。 */
+  async metadata(parts:string[],name:string):Promise<{id:string;etag:string;size?:number}|null> {
+    if(!/^[A-Za-z0-9_.-]{1,100}$/.test(name))throw new Error('ファイル名が不正です。');
+    const parent=await this.folder(parts,false);
+    if(!parent)return null;
+    let item:Item;
+    try{item=await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}`,'暗号ファイル情報の照会');}
+    catch(e){if(e instanceof GraphError&&e.status===404)return null;throw e;}
+    if(!item.id||!item.eTag)throw new Error('クラウドファイルのIDまたはETagがありません。');
+    return {id:item.id,etag:item.eTag,size:item.size};
+  }
+  async read(parts: string[], name: string, limit: number): Promise<RemoteFile|null> {
+    if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('ファイル名が不正です。');
+    const parent = await this.folder(parts,false);
+    if (!parent) return null;
+    let item: Item;
+    try { item = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}`,'年度暗号ファイル情報の照会'); }
+    catch (e) { if (e instanceof GraphError && e.status === 404) return null; throw e; }
+    if (!item.id || !item.eTag) throw new Error('クラウドファイルのIDまたはETagがありません。');
+    if (item.size !== undefined && item.size > limit) throw new Error('OneDriveファイルの容量が上限を超えています。');
+    let url = item['@microsoft.graph.downloadUrl'];
+    if (!url) { const refreshed = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(item.id)}`,'ダウンロード情報の照会'); url = refreshed['@microsoft.graph.downloadUrl']; }
+    if (!url || new URL(url).protocol !== 'https:') throw new Error('OneDriveのダウンロード先URLが不正です。');
+    // 署名付きダウンロードURLにBearerトークンを付けてはいけない。
+    const response = await this.http(url,{credentials:'omit',cache:'no-store'});
+    if (!response.ok) throw new Error(`OneDriveの取得に失敗しました (HTTP ${response.status})。`);
+    // Graph のダウンロード先が成功応答でログインHTMLなどを返しても、暗号ファイルと誤認しない。
+    const mime = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    if (mime === 'text/html' || mime === 'application/xhtml+xml') {
+      throw new Error(`OneDriveのファイル配信先がHTMLを返しました (HTTP ${response.status}, MIME: ${mime})。暗号化データとして扱わず、クラウドは変更していません。`);
+    }
+    if (Number(response.headers.get('content-length') ?? 0) > limit) throw new Error('ダウンロードサイズが大きすぎます。');
+    const checked = (text: string, byteLength: number): RemoteFile => {
+      // HTMLのエラーページを成功レスポンスとして読み込む等の取り違えを検出する。
+      if (item.size !== undefined && item.size !== byteLength)
+        throw new Error(`OneDriveのファイルサイズが一致しません (メタデータ ${item.size}バイト、取得 ${byteLength}バイト)。クラウドは変更していません。`);
+      return {id:item.id!,etag:item.eTag!,text,size:item.size};
+    };
+    const body = response.body;
+    if (!body) { const text=await response.text();const size=new TextEncoder().encode(text).length;if(size>limit)throw new Error('ダウンロードサイズ超過。');return checked(text,size); }
+    const reader=body.getReader();const chunks:Uint8Array[]=[];let size=0;
+    try { for (;;) { const {value,done}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit)throw new Error('ダウンロードサイズ超過。');chunks.push(value); } }
+    finally {reader.releaseLock();}
+    const bytes=new Uint8Array(size);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.length;}
+    return checked(new TextDecoder('utf-8',{fatal:true}).decode(bytes),size);
+  }
+  /** 旧暗号領域の整理用。指定したPayroll配下だけを一覧化し、名前・ID・ETagを返す。 */
+  async listFolder(parts:string[]):Promise<CloudFolderItem[]|null> {
+    const parent=await this.folder(parts,false);
+    if(!parent)return null;
+    const endpoint=`/me/drive/items/${encodeURIComponent(parent)}/children`;
+    let path=`${endpoint}?$select=id,name,folder,file,eTag,size&$top=200`;
+    const result:CloudFolderItem[]=[];
+    for(let page=0;page<25;page++) {
+      const data=await this.readMetadata<{value?:Item[];'@odata.nextLink'?:string}>(path,'整理対象フォルダーの照会');
+      if(!Array.isArray(data.value))throw new Error('OneDriveのフォルダー一覧が不正です。削除を中断しました。');
+      for(const item of data.value) {
+        if(!item.id||typeof item.name!=='string'||!item.eTag||(!item.folder && !('file' in item)))
+          throw new Error('OneDriveの項目情報が不正です。削除を中断しました。');
+        result.push({id:item.id,name:item.name,etag:item.eTag,folder:Boolean(item.folder),size:item.size??0});
+        if(result.length>5000)throw new Error('整理対象が多すぎます。自動削除を中断しました。');
+      }
+      const next=data['@odata.nextLink'];if(!next)return result;
+      let u:URL;try{u=new URL(next);}catch{throw new Error('一覧の次ページURLが不正です。');}
+      if(u.protocol!=='https:'||u.hostname!=='graph.microsoft.com'||u.port||u.username||u.password||u.pathname!==`/v1.0${endpoint}`)
+        throw new Error('不正なページングURLを拒否しました。');
+      path=u.pathname.slice('/v1.0'.length)+u.search;
+    }
+    throw new Error('OneDriveのフォルダー一覧が大きすぎます。');
+  }
+  /** 対象の親パス・名前・ID・ETagが一致した場合のみ、ごみ箱へ移動する。 */
+  async trashFolder(parts:string[],item:CloudFolderItem):Promise<void> {
+    if(!item.folder)throw new Error('フォルダー以外は一括整理できません。');
+    const latest=(await this.listFolder(parts))?.find(x=>x.name===item.name);
+    if(!latest||latest.id!==item.id||latest.etag!==item.etag||!latest.folder)
+      throw new Error('整理対象が別端末で更新されました。削除を中断します。');
+    await this.request(`/me/drive/items/${encodeURIComponent(item.id)}`,{
+      method:'DELETE',headers:{'If-Match':item.etag},
+    });
+    // フォルダーIDキャッシュは削除した旧データを指し続けないよう破棄。
+    this.folders.clear();
+  }
+  /** 初回作成中断で残った「0バイト索引」を、明示同意後に非破壊で退避する。
+   * 他のPayrollファイルがあれば新規作成を禁止し、既存データを保護する。 */
+  async archiveEmptyIndex(): Promise<string> {
+    const parent = await this.folder(['payroll'],false);
+    if (!parent) throw new Error('Payrollフォルダーが見つかりません。');
+    const list = await (await this.request(`/me/drive/items/${encodeURIComponent(parent)}/children?$select=id,name,size,eTag&$top=200`)).json() as {
+      value?: Array<{id?:string;name?:string;size?:number;eTag?:string}>;
+      '@odata.nextLink'?:string;
+    };
+    const indexFiles = Array.isArray(list.value) ? list.value.filter(v=>v.name==='index.enc') : [];
+    const otherFiles = Array.isArray(list.value) ? list.value.filter(v=>v.name!=='index.enc') : [];
+    const onlyEmptyArchives = otherFiles.every(v=>v.size===0 &&
+      /^index-empty-[0-9TZ-]+-[0-9a-f-]{36}\.enc$/i.test(v.name??''));
+    if (list['@odata.nextLink'] || !Array.isArray(list.value) || indexFiles.length !== 1 ||
+        !onlyEmptyArchives || indexFiles[0]?.size !== 0 ||
+        !indexFiles[0].id || !indexFiles[0].eTag)
+      throw new Error('Payrollフォルダーに空の索引以外のデータがあります。自動復旧は行いません。');
+    const candidate = indexFiles[0];
+    const actual = await this.read(['payroll'],'index.enc',1_000_000);
+    if (!actual || actual.size !== 0 || actual.text.length !== 0 ||
+        actual.id !== candidate.id || actual.etag !== candidate.eTag)
+      throw new Error('空ファイルの状態が変化しました。OneDriveデータは変更していません。');
+    const archive = `index-empty-${new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z')}-${crypto.randomUUID()}.enc`;
+    const result = await (await this.request(`/me/drive/items/${encodeURIComponent(candidate.id)}`,{
+      method:'PATCH',headers:{'Content-Type':'application/json','If-Match':candidate.eTag},
+      body:JSON.stringify({name:archive}),
+    })).json() as Item & {name?:string};
+    if (result.id !== candidate.id || result.name !== archive)
+      throw new Error('空ファイルの退避結果を確認できません。クラウドを再確認してください。');
+    const remaining = await this.read(['payroll'],'index.enc',1_000_000);
+    if (remaining) throw new Error('退避後も旧索引が見つかります。新規作成を中止しました。');
+    return archive;
+  }
+  async write(parts: string[], name: string, text: string, prior: Pick<RemoteFile,'id'|'etag'>|null, limit: number, progress?:(sent:number,total:number)=>void): Promise<void> {
+    if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('クラウドファイル名が不正です。');
+    const bytes = new TextEncoder().encode(text);
+    if (!bytes.length || bytes.length > limit) throw new Error('暗号化ファイルのサイズが不正です。');
+    progress?.(0,bytes.length);
+    const parent = await this.folder(parts,true);
+    if (!parent) throw new Error('保存先フォルダーがありません。');
+    // 新規の小さな暗号ファイルは Graph の一括PUTで確定する。
+    // createUploadSessionの途中中断で0バイトのプレースホルダーが残る事態を避ける。
+    // 更新ではETag付きアップロードセッションを維持して競合を検知する。
+    if (!prior && bytes.byteLength <= 4 * 1024 * 1024) {
+      const path = `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
+      const response = await this.request(path,{
+        method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes,
+      });
+      const created = await response.json() as Item;
+      if (!created.id || created.size !== bytes.byteLength)
+        throw new Error('OneDriveへの新規保存後のサイズが一致しません。保存成功とみなせません。');
+      progress?.(bytes.length,bytes.length);
+      return;
+    }
+    const path = prior
+      ? `/me/drive/items/${encodeURIComponent(prior.id)}/createUploadSession`
+      : `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/createUploadSession`;
+    const sessionResponse=await this.request(path,{
+      method:'POST',headers:{'Content-Type':'application/json',...(prior?{'If-Match':prior.etag}:{})},
+      body:JSON.stringify({item:{'@microsoft.graph.conflictBehavior':prior?'replace':'fail'}}),
+    });
+    const session=await sessionResponse.json() as {uploadUrl?:string};
+    if (!session.uploadUrl || new URL(session.uploadUrl).protocol !== 'https:') throw new Error('OneDriveアップロードURLが不正です。');
+    const size=3276800;
+    for(let start=0;start<bytes.length;start+=size) {
+      const end=Math.min(start+size,bytes.length);
+      const response=await this.http(session.uploadUrl,{
+        method:'PUT',credentials:'omit',headers:{'Content-Range':`bytes ${start}-${end-1}/${bytes.length}`},body:bytes.slice(start,end),
+      });
+      if (!response.ok) {
+        if(response.status===409||response.status===412)throw new GraphError(response.status,'conflict');
+        throw new Error(`OneDriveのアップロードに失敗しました (HTTP ${response.status})。`);
+      }
+      if (end<bytes.length && response.status!==202) throw new Error('分割アップロードが途中終了しました。');
+      if (end===bytes.length) {
+        if(response.status!==200&&response.status!==201)throw new Error('OneDriveが保存完了を返しませんでした。');
+        const item=await response.json() as Item;
+        if(!item.id || item.size !== bytes.length)throw new Error('OneDriveの保存IDまたはサイズが一致しません。');
+      }
+      progress?.(end,bytes.length);
+    }
+  }
+}

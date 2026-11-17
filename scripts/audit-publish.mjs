@@ -4,7 +4,8 @@
  * 個人情報や秘密情報の完全な検出器ではないため、人間による確認も必要。
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { findSensitiveContent } from './audit-rules.mjs';
@@ -15,6 +16,9 @@ const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root })
 const required = [
   'public/view/index.html',
   'public/view/pdf-sw.js',
+  'public/payroll-cloud-session.js',
+  'public/vendor/msal/msal-browser.bundle.js',
+  'public/vendor/msal/LICENSE.txt',
   'src/view.ts',
   'src/export/sidePdfs.ts',
   'scripts/audit-publish.mjs',
@@ -27,13 +31,39 @@ const allowed = (file) => [
   || /^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.tsx?$/.test(file)
   || /^public\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:html|css)$/.test(file)
   || file === 'public/view/pdf-sw.js'
+  || file === 'public/payroll-cloud-session.js'
+  || file === 'public/vendor/msal/msal-browser.bundle.js'
+  || file === 'public/vendor/msal/LICENSE.txt'
   || /^scripts\/[a-zA-Z0-9_-]+\.(?:mjs|js|cjs|sh)$/.test(file);
 const problems = [];
 const staged = process.argv.includes('--staged');
+// パッチ適用時限定。未追跡の指定vendorファイルも内容・ハッシュを検査する。
+// 通常実行および--stagedではGit登録を必須とする。CIの審査は緩めない。
+const installCheck = process.argv.includes('--install-check');
+if (staged && installCheck) problems.push('--staged と --install-check は併用できません');
+const vendor = ['public/vendor/msal/msal-browser.bundle.js', 'public/vendor/msal/LICENSE.txt'];
+const installAssets=[...vendor,'public/payroll-cloud-session.js'];
+const untrackedVendor = [];
 for (const file of required) {
-  if (!tracked.includes(file)) problems.push(`必要なファイルがGit未追跡です: ${file}`);
+  if (tracked.includes(file)) continue;
+  if (!installCheck || !installAssets.includes(file)) {
+    problems.push(`必要なファイルがGit未追跡です: ${file}`);
+    continue;
+  }
+  if (!existsSync(path.join(root, file))) {
+    problems.push(`必要な導入用ファイルがありません: ${file}`);
+    continue;
+  }
+  try {
+    // ignore指定されたvendorは次のGitコミットに含められないため失敗させる。
+    execFileSync('git', ['check-ignore', '-q', '--', file], { cwd: root, stdio: 'pipe' });
+    problems.push(`必要な導入用ファイルが.gitignoreで除外されています: ${file}`);
+  } catch (error) {
+    if (error.status !== 1) problems.push(`Git除外状態を検査できません: ${file}`);
+  }
+  untrackedVendor.push(file);
 }
-for (const file of tracked) {
+for (const file of [...tracked, ...untrackedVendor]) {
   if (!allowed(file)) {
     problems.push(`Git公開対象に想定外のファイルがあります: ${file}`);
     continue;
@@ -48,6 +78,13 @@ for (const file of tracked) {
     problems.push(`追跡対象を読み取れません: ${file}`);
     continue;
   }
+  // MSAL vendorは公開前にSHA-256で固定する。誤検出を理由に汎用検査を緩めない。
+  if (file === 'public/vendor/msal/msal-browser.bundle.js') {
+    if (createHash('sha256').update(contents).digest('hex') !== 'c67b25140e021f60b83f8c0201d6f1ec9d2f4ac63f7b29f59cafbe67588a0a8c') {
+      problems.push('MSALバンドルが監査済みの内容と一致しません。');
+    }
+    continue;
+  }
   for (const label of findSensitiveContent(contents)) {
     problems.push(`公開前の手動確認が必要（${label}）: ${file}`);
   }
@@ -56,5 +93,5 @@ if (problems.length) {
   console.error('[公開前監査] 検査不合格:\n' + problems.map(s => `  - ${s}`).join('\n'));
   process.exitCode = 1;
 } else {
-  console.log(`[公開前監査] OK: Git管理${tracked.length}ファイル。必要なPDF閲覧ファイルが揃い、禁止ファイル・主要な秘密情報パターンは検出されませんでした。`);
+  console.log(`[公開前監査] OK: Git管理${tracked.length}ファイル${installCheck ? `・適用前vendor ${untrackedVendor.length}件` : ''}。必要なPDF閲覧ファイルが揃い、禁止ファイル・主要な秘密情報パターンは検出されませんでした。`);
 }

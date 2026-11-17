@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {toPublicIncomeRecord} from '../src/cloud/income.ts';
+const form={paymentDate:'2026-11-27',targetMonth:'2026-10',kind:'salary',job:'main',gross:'245800',net:'198700',taxable:'230000'};
+const published=toPublicIncomeRecord({id:101,revision:2,form});
+assert.deepEqual(published,{id:101,paymentDate:'2026-11-27',targetMonth:'2026-10',kind:'salary',job:'main',netPaymentYen:198700,grossPaymentYen:245800,taxablePaymentYen:230000,revision:2});
+assert.equal(toPublicIncomeRecord({id:102,form:{...form,kind:'bonus',taxable:''}}).taxablePaymentYen,undefined);
+assert.throws(()=>toPublicIncomeRecord({id:102,form:{...form,net:'-2'}}),/不正/);
+assert.throws(()=>toPublicIncomeRecord({id:102,form:{...form,gross:'invalid'}}),/不正/);
+const vault=readFileSync(new URL('../src/cloud/vault.ts',import.meta.url),'utf8');
+assert.match(vault,/filter\(r=>incomeYear\(r\)===year\)\.map\(toPublicIncomeRecord\)/);
+assert.match(vault,/encryptJson\('income',doc,this\.unlocked\(\),this\.salt\)/);
+assert.match(vault,/await this\.graph\.read\(this\.storagePath\('income'\)/);
+const backup=readFileSync(new URL('../src/backup.ts',import.meta.url),'utf8');
+assert.match(backup,/await vault\.syncIncome\(\)/);
+console.log('OK: Finance公開データの手取り・額面・課税額・再生成操作のテスト');

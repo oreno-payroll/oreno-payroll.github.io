@@ -1,31 +1,125 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"><title>バックアップ・復元 | Payroll</title><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../backup.js"></script></head><body>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'"><title>設定 | Payroll</title><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../backup.js"></script>
+  <link rel="stylesheet" href="../styles/cloud.css"></head><body>
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
 <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
 <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M4 17v3h16v-3"/></symbol>
 </svg>
 <div class="app-shell"><header class="site-header"><a class="brand" href="../index.html" aria-label="Payroll ホーム"><span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span><span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span></a><a class="btn btn--secondary" href="../index.html"><svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg>ホームへ戻る</a></header>
-<main class="vault-page backup-page"><nav class="breadcrumb"><a href="../index.html">ホーム</a><span class="breadcrumb__separator">/</span><span aria-current="page">バックアップ・復元</span></nav>
-<div class="vault-heading"><h1>バックアップ・復元</h1><p>明細とPDF原本をまとめて保護・復元します。</p></div>
-<div class="vault-stack">
-<section class="card vault-section">
- <div class="vault-section__head"><h2>暗号化バックアップを書き出す</h2></div>
- <p id="export-summary" class="vault-info">保存済みデータを確認しています…</p>
- <div class="backup-secret-fields">
-  <label for="export-password">パスワード（12文字以上）</label><span class="password-field"><input id="export-password" type="password" autocomplete="new-password" maxlength="512" placeholder="復元時に必要なパスワード"><button type="button" class="password-visibility" data-toggle-password="export-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
-  <label for="export-confirm">パスワードを再入力</label><span class="password-field"><input id="export-confirm" type="password" autocomplete="new-password" maxlength="512" placeholder="確認のためもう一度入力"><button type="button" class="password-visibility" data-toggle-password="export-confirm" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
- </div>
- <div class="backup-export-row"><p class="vault-small">AES-256-GCMでZIP全体を保護します。パスワードは保存されず、忘れると復元できません。</p><button type="button" id="export-button" class="btn btn--primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>暗号化バックアップを保存</button></div>
-</section>
-<section class="card vault-section">
- <div class="vault-section__head"><h2>バックアップを復元する</h2></div>
- <div class="backup-file-control"><label class="vault-file-label" for="restore-file">バックアップファイルを選択</label><input type="file" id="restore-file" accept=".payroll,.zip,application/zip,application/octet-stream" class="vault-file-input"></div>
- <div id="restore-password-row" class="backup-secret-fields" hidden><label for="restore-password">復元パスワード</label><span class="password-field"><input id="restore-password" type="password" autocomplete="off" maxlength="512" placeholder="バックアップ作成時のパスワード"><button type="button" class="password-visibility" data-toggle-password="restore-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span></div>
- <button type="button" id="verify-button" class="btn btn--secondary" hidden disabled>パスワードで復号・検証</button>
- <p id="restore-preview" class="vault-info" aria-live="polite">暗号化ファイル（.payroll）と従来ZIPに対応しています。</p>
- <div class="backup-restore-actions"><p class="backup-restore-warning">復元すると現在の明細はすべて置き換わります。</p><label class="vault-check"><input type="checkbox" id="restore-ack" disabled>現在の保存内容がすべて置き換わることを確認しました</label><button type="button" id="restore-button" class="btn btn--danger" disabled>完全復元する</button></div>
-</section>
-</div><p id="backup-status" class="vault-status" role="status" aria-live="polite"></p>
+<main class="vault-page backup-page settings-page">
+  <div class="vault-heading settings-heading"><h1>設定</h1></div>
+
+  <section class="settings-group" aria-labelledby="settings-backup-title">
+    <div class="settings-group__head"><h2 id="settings-backup-title">バックアップ</h2></div>
+    <div class="vault-stack backup-grid">
+      <section class="card vault-section" aria-labelledby="backup-export-title">
+        <div class="vault-section__head">
+          <h3 id="backup-export-title">作成</h3>
+          <p id="export-summary" class="vault-info" aria-live="polite">データを確認中…</p>
+        </div>
+        <div class="backup-secret-fields">
+          <label for="export-password">パスワード（12文字以上）</label>
+          <span class="password-field"><input id="export-password" type="password" autocomplete="new-password" maxlength="512" placeholder="パスワード"><button type="button" class="password-visibility" data-toggle-password="export-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
+          <label for="export-confirm">パスワードの確認</label>
+          <span class="password-field"><input id="export-confirm" type="password" autocomplete="new-password" maxlength="512" placeholder="もう一度入力"><button type="button" class="password-visibility" data-toggle-password="export-confirm" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
+        </div>
+        <div class="backup-card__footer">
+          <p class="backup-footnote">復元にはこのパスワードが必要です。</p>
+          <button type="button" id="export-button" class="btn btn--primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>バックアップを保存</button>
+        </div>
+      </section>
+
+      <section class="card vault-section" aria-labelledby="backup-restore-title">
+        <div class="vault-section__head"><h3 id="backup-restore-title">復元</h3></div>
+        <div class="backup-file-control">
+          <label class="vault-file-label" for="restore-file">バックアップファイル</label>
+          <input type="file" id="restore-file" accept=".payroll,.zip,application/zip,application/octet-stream" class="vault-file-input">
+        </div>
+        <div id="restore-password-row" class="backup-secret-fields" hidden>
+          <label for="restore-password">復元パスワード</label>
+          <span class="password-field"><input id="restore-password" type="password" autocomplete="off" maxlength="512" placeholder="パスワード"><button type="button" class="password-visibility" data-toggle-password="restore-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
+        </div>
+        <button type="button" id="verify-button" class="btn btn--secondary backup-verify" hidden disabled>ファイルを検証</button>
+        <p id="restore-preview" class="vault-info" aria-live="polite">.payroll / .zip</p>
+        <div class="backup-card__footer backup-restore-actions">
+          <p class="backup-restore-warning">現在の明細をすべて置き換えます。</p>
+          <label class="vault-check"><input type="checkbox" id="restore-ack" disabled>全件置き換えを確認</label>
+          <button type="button" id="restore-button" class="btn btn--danger-outline" disabled>復元する</button>
+        </div>
+      </section>
+    </div>
+    <p id="backup-status" class="vault-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="settings-group settings-auth" aria-labelledby="settings-auth-title">
+    <div class="settings-group__head"><h2 id="settings-auth-title">認証</h2></div>
+    <div class="settings-auth-grid">
+      <section class="card settings-panel backup-key-change" aria-labelledby="settings-security-title">
+        <div class="settings-panel__head"><h3 id="settings-security-title">保管庫のパスフレーズ</h3></div>
+        <div class="backup-key-change__body">
+          <div class="backup-key-change__fields backup-secret-fields">
+            <div class="settings-field"><label for="change-current">現在のパスフレーズ</label>
+              <span class="password-field"><input id="change-current" type="password" autocomplete="current-password" maxlength="512" placeholder="現在のパスフレーズ"><button type="button" class="password-visibility" data-toggle-password="change-current" aria-label="パスフレーズを表示" aria-pressed="false">表示</button></span></div>
+            <div class="settings-field"><label for="change-new">新しいパスフレーズ（12文字以上）</label>
+              <span class="password-field"><input id="change-new" type="password" autocomplete="new-password" maxlength="512" placeholder="新しいパスフレーズ"><button type="button" class="password-visibility" data-toggle-password="change-new" aria-label="パスフレーズを表示" aria-pressed="false">表示</button></span></div>
+            <div class="settings-field"><label for="change-confirm">新しいパスフレーズの確認</label>
+              <span class="password-field"><input id="change-confirm" type="password" autocomplete="new-password" maxlength="512" placeholder="もう一度入力"><button type="button" class="password-visibility" data-toggle-password="change-confirm" aria-label="パスフレーズを表示" aria-pressed="false">表示</button></span></div>
+          </div>
+          <label class="vault-check"><input type="checkbox" id="change-ack">バックアップを保存し、他のタブを閉じました</label>
+          <div class="settings-action-row"><button type="button" id="change-passphrase-button" class="btn btn--secondary">パスフレーズを変更</button></div>
+          <p id="change-passphrase-status" class="vault-status" role="status" aria-live="polite"></p>
+          <div class="settings-cleanup">
+            <div><strong>旧暗号データ</strong><p>現行データを照合して旧世代をごみ箱へ移動します。Finance互換のため旧incomeは保持します。</p></div>
+            <button type="button" id="cloud-cleanup-check" class="btn btn--secondary">削除対象を確認</button>
+          </div>
+          <p id="cloud-cleanup-status" class="vault-status" role="status" aria-live="polite"></p>
+          <button type="button" id="cloud-cleanup-delete" class="btn btn--danger-outline" hidden disabled>旧暗号データをごみ箱へ移動</button>
+        </div>
+      </section>
+
+      <section class="card settings-panel backup-cloud-settings" aria-labelledby="backup-cloud-title">
+        <div class="settings-panel__head"><h3 id="backup-cloud-title">Microsoft接続</h3></div>
+        <div class="settings-connection-grid">
+          <div class="settings-connection-account">
+            <p class="settings-field-label">接続アカウント</p>
+            <p id="backup-cloud-status" role="status" aria-live="polite">接続状態を確認中…</p>
+            <button type="button" id="backup-cloud-login" class="btn btn--secondary" disabled>Microsoftにログイン</button>
+          </div>
+          <div class="backup-cloud-settings__form">
+            <label for="backup-cloud-client-id">Microsoft Entra Client ID</label>
+            <div class="backup-cloud-settings__input"><input id="backup-cloud-client-id" type="text" autocomplete="off" spellcheck="false" inputmode="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"><button type="button" id="backup-cloud-save" class="btn btn--secondary">保存</button></div>
+            <p class="settings-redirect">リダイレクトURI <code id="backup-cloud-redirect-uri"></code></p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+
+  <section class="settings-group" aria-labelledby="settings-finance-income-title">
+    <div class="settings-group__head"><h2 id="settings-finance-income-title">Financeへの給与連携</h2></div>
+    <div class="card settings-panel settings-finance-income">
+      <p class="settings-note">給与明細の保存・編集・削除時に自動更新されます。必要なときだけ、過去分を含む収入データを再生成できます。</p>
+      <button type="button" id="payroll-income-publish" class="btn btn--secondary">連携データを再生成</button>
+      <p id="payroll-income-publish-status" class="vault-status" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <section class="settings-group settings-legacy" aria-labelledby="settings-legacy-title">
+    <div class="settings-group__head"><h2 id="settings-legacy-title">旧データの移行</h2></div>
+    <div class="card settings-panel backup-legacy">
+      <div class="settings-inline-panel">
+        <p class="settings-legacy-caption">この端末に旧IndexedDBの明細がある場合</p>
+        <div class="settings-legacy-actions">
+          <button type="button" id="migrate-legacy-cloud" class="btn btn--secondary">旧データを確認・移行</button>
+          <button type="button" id="legacy-cleanup-check" class="btn btn--secondary">旧DBを検査</button>
+          <button type="button" id="legacy-cleanup-delete" class="btn btn--danger-outline" hidden disabled>移行済み旧DBを削除</button>
+        </div>
+      </div>
+      <p id="migrate-legacy-cloud-status" class="vault-status" role="status" aria-live="polite"></p>
+      <p id="legacy-cleanup-status" class="vault-status" role="status" aria-live="polite"></p>
+    </div>
+  </section>
 </main></div><div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="../build-info.js"></script></body></html>

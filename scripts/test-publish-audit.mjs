@@ -38,6 +38,8 @@ try {
   for (const relative of [
     'scripts/audit-publish.mjs', 'scripts/audit-rules.mjs', 'scripts/test-audit-fixes.mjs',
     'public/view/index.html', 'public/view/pdf-sw.js', 'src/view.ts', 'src/export/sidePdfs.ts',
+    'public/vendor/msal/msal-browser.bundle.js', 'public/vendor/msal/LICENSE.txt',
+    'public/payroll-cloud-session.js',
   ]) {
     fs.mkdirSync(path.dirname(path.join(temp, relative)), { recursive: true });
     fs.copyFileSync(path.join(root, relative), path.join(temp, relative));
@@ -45,9 +47,22 @@ try {
   // Gitの追跡対象に入っていても、コミット時のindexに危険な内容があれば拒否。
   const git = (...args) => execFileSync('git', args, { cwd: temp, stdio: 'pipe' });
   git('init', '-q');
-  git('add', '-A');
+  // 新規vendorがGit未追跡でも、適用前検査は内容とハッシュを検証する。
+  git('add', '--', 'scripts', 'public/view', 'src');
   const runAudit = (...args) => spawnSync(process.execPath, ['scripts/audit-publish.mjs', ...args], { cwd: temp, encoding: 'utf8' });
-  assert.equal(runAudit('--staged').status, 0, '正常な構成を誤検出しない');
+  assert.notEqual(runAudit().status, 0, '通常監査は未追跡vendorを拒否する');
+  assert.notEqual(runAudit('--staged').status, 0, 'Git index監査は未追跡vendorを拒否する');
+  assert.equal(runAudit('--install-check').status, 0, '適用時のみ未追跡vendorをハッシュ検証して許可する');
+  const msal = path.join(temp, 'public/vendor/msal/msal-browser.bundle.js');
+  fs.appendFileSync(msal, '\n// tamper\n');
+  assert.notEqual(runAudit('--install-check').status, 0, '未追跡vendorの改ざんは拒否する');
+  fs.copyFileSync(path.join(root, 'public/vendor/msal/msal-browser.bundle.js'), msal);
+  const license = path.join(temp, 'public/vendor/msal/LICENSE.txt');
+  fs.unlinkSync(license);
+  assert.notEqual(runAudit('--install-check').status, 0, '必要なライセンスファイルの欠落は拒否する');
+  fs.copyFileSync(path.join(root, 'public/vendor/msal/LICENSE.txt'), license);
+  git('add', '--', 'public/vendor/msal/msal-browser.bundle.js', 'public/vendor/msal/LICENSE.txt', 'public/payroll-cloud-session.js');
+  assert.equal(runAudit('--staged').status, 0, 'Git追跡後の監査が通る');
   const target = path.join(temp, 'src/view.ts');
   fs.appendFileSync(target, `\n// ${mobile}\n`);
   assert.notEqual(runAudit().status, 0, '変更済みの携帯番号を検出する');

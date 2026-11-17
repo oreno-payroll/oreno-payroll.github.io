@@ -55,3 +55,10 @@
 !/.github/workflows/
 /.github/workflows/**
 !/.github/workflows/deploy.yml
+
+# Finance v1.1と同じバージョンのレビュー済みMSALバンドルとライセンスのみ許可。
+!/public/vendor/msal/msal-browser.bundle.js
+!/public/vendor/msal/LICENSE.txt
+
+# SharedWorkerは復号鍵をメモリだけで受け渡すための監査済みのソース。
+!/public/payroll-cloud-session.js

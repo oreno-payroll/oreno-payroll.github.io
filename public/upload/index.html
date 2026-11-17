@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="theme-color" content="#f5f7fb">
   <title>明細アップロード | Payroll</title>
   <link rel="stylesheet" href="../styles/ress.css">
   <link rel="stylesheet" href="../styles/style.css">
   <link rel="stylesheet" href="../styles/upload.css">
   <script type="module" src="../upload.js"></script>
-</head>
+
+  <link rel="stylesheet" href="../styles/cloud.css"></head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
@@ -52,7 +53,7 @@
 
       <div class="notice notice--privacy" role="note">
         <svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg>
-        <div><strong>PDFはこのブラウザ内で処理します。</strong><span>外部サーバーへの送信はありません。「すべて保存」でPDF原本と明細情報をこのブラウザのIndexedDBへ保存します。</span></div>
+        <div><strong>PDFはこのブラウザ内で処理します。</strong><span>「すべて保存」でPDF原本と解析データを端末内で暗号化し、OneDriveへ保存します。</span></div>
       </div>
 
       <section class="workspace" aria-label="PDF解析と内容確認">
@@ -177,6 +178,11 @@
       <div class="save-bar" aria-label="明細の一括保存">
         <div class="save-bar__status">
           <strong id="save-status" role="status" aria-live="polite">PDFを追加すると、ここからまとめて保存できます。</strong>
+          <div id="save-feedback" class="save-feedback" hidden aria-label="OneDriveへの保存状況">
+            <div class="save-feedback__top"><span id="save-stage">準備中</span><span id="save-elapsed">経過 0:00</span></div>
+            <div id="save-progress-track" class="save-feedback__track is-indeterminate" role="progressbar" aria-label="PDF送信の進捗" aria-valuemin="0" aria-valuemax="100"><div id="save-progress-fill" class="save-feedback__fill"></div></div>
+            <p id="save-guidance" class="save-feedback__guidance">保存中はページを移動しないでください。</p>
+          </div>
         </div>
         <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>
           <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
@@ -193,7 +199,7 @@
       </div>
       <button id="diagnostic-close" class="diagnostic-dialog__close" type="button" aria-label="診断画面を閉じる">×</button>
     </div>
-    <p class="diagnostic-dialog__description">最初はローカルの原文を表示します。共有するときは「文字をすべて伏せる」を使えます。PDFは外部へ送信しません。</p>
+    <p class="diagnostic-dialog__description">最初はローカルの原文を表示します。共有するときは「文字をすべて伏せる」を使えます。PDF原本はOneDriveへ暗号化して保存します。診断テキストを外部の解析サービスへ送信しません。</p>
     <div class="diagnostic-dialog__warning" role="note"><strong>この欄には氏名・会社名・社員番号・口座情報・実際の金額が含まれる可能性があります。</strong> 共有する前に「文字をすべて伏せる」を使うか、ご自身で内容を編集してください。</div>
     <p id="diagnostic-state" class="diagnostic-dialog__state" role="status" aria-live="polite"></p>
     <label for="diagnostic-shared" class="diagnostic-dialog__label">抽出した文字・座標（編集可能／共有前に伏字推奨）</label>

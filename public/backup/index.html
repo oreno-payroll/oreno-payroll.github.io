@@ -18,6 +18,7 @@
         <div class="vault-section__head">
           <h3 id="backup-export-title">作成</h3>
           <p id="export-summary" class="vault-info" aria-live="polite">データを確認中…</p>
+          <button type="button" id="backup-cloud-load" class="btn btn--secondary" hidden>OneDriveの明細を読み込む</button>
         </div>
         <div class="backup-secret-fields">
           <label for="export-password">パスワード（12文字以上）</label>
@@ -108,14 +109,14 @@
   </section>
 
   <section class="settings-group settings-legacy" aria-labelledby="settings-legacy-title">
-    <div class="settings-group__head"><h2 id="settings-legacy-title">旧データの移行</h2></div>
+    <div class="settings-group__head"><h2 id="settings-legacy-title">旧データの整理・移行</h2></div>
     <div class="card settings-panel backup-legacy">
       <div class="settings-inline-panel">
-        <p class="settings-legacy-caption">この端末に旧IndexedDBの明細がある場合</p>
+        <p class="settings-legacy-caption">不要になったこの端末の旧IndexedDBを整理します。削除時のOneDrive照合は不要ですが、未移行の明細も消えるため確認してから実行してください。</p>
         <div class="settings-legacy-actions">
-          <button type="button" id="migrate-legacy-cloud" class="btn btn--secondary">旧データを確認・移行</button>
+          <button type="button" id="legacy-cleanup-delete" class="btn btn--danger-outline">旧DBを削除</button>
           <button type="button" id="legacy-cleanup-check" class="btn btn--secondary">旧DBを検査</button>
-          <button type="button" id="legacy-cleanup-delete" class="btn btn--danger-outline" hidden disabled>移行済み旧DBを削除</button>
+          <button type="button" id="migrate-legacy-cloud" class="btn btn--secondary">旧データを確認・移行</button>
         </div>
       </div>
       <p id="migrate-legacy-cloud-status" class="vault-status" role="status" aria-live="polite"></p>

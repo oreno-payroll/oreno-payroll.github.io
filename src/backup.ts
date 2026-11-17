@@ -1,5 +1,5 @@
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
-import { migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, deleteVerifiedLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
+import { migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
 import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
@@ -13,6 +13,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 const exportButton = $<HTMLButtonElement>('export-button');
 const exportSummary = $<HTMLElement>('export-summary');
+const cloudLoad=$<HTMLButtonElement>('backup-cloud-load');
 const exportPassword = $<HTMLInputElement>('export-password');
 const exportConfirm = $<HTMLInputElement>('export-confirm');
 const filePicker = $<HTMLInputElement>('restore-file');
@@ -31,7 +32,6 @@ const changeButton=$<HTMLButtonElement>('change-passphrase-button');
 const changeStatus=$<HTMLElement>('change-passphrase-status');
 type OldCloudPlan={generation:string;indexEtag:string;targets:Array<{parent:string[];item:CloudFolderItem}>;files:number;bytes:number};
 let oldCloudPlan:OldCloudPlan|undefined;
-let oldLocalCount:number|undefined;
 const cloudCheck=$<HTMLButtonElement>('cloud-cleanup-check');
 const cloudDelete=$<HTMLButtonElement>('cloud-cleanup-delete');
 const cloudStatus=$<HTMLElement>('cloud-cleanup-status');
@@ -47,9 +47,10 @@ let encryptedFile = false;
 const sizes = (n: number) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`;
 function updateButtons(): void {
   exportButton.disabled = busy || !loadedDb;
+  cloudLoad.disabled=busy;
   changeButton.disabled=busy;
   $<HTMLButtonElement>('payroll-income-publish').disabled=busy;
-  cloudCheck.disabled=busy;cloudDelete.disabled=busy||!oldCloudPlan;localCheck.disabled=busy;localDelete.disabled=busy||oldLocalCount===undefined;
+  cloudCheck.disabled=busy;cloudDelete.disabled=busy||!oldCloudPlan;localCheck.disabled=busy;localDelete.disabled=busy;
   for(const item of [changeCurrent,changeNew,changeConfirm,changeAck])item.disabled=busy;
   filePicker.disabled = busy;
   document.querySelector<HTMLButtonElement>('#migrate-legacy-cloud')?.toggleAttribute('disabled',busy);
@@ -205,13 +206,35 @@ cloudLogin.addEventListener('click',()=>{void(async()=>{
  try{await chooseMicrosoftAccount();}
  catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';cloudLogin.disabled=false;}
 })()});
-void refreshCloudSettings().then(connected=>{
- if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';return;}
- return refreshCount().then(updateButtons);
-}).catch(error => {
-  exportSummary.textContent = '保存済みデータを確認できませんでした。';
-  info(error instanceof Error ? error.message : 'OneDriveのデータを取得できませんでした。', true);
+// 旧DBが見つかればクラウド解除の自動開始を避け、ローカルの整理を優先する。
+// 明細を読み込みたい場合だけ、利用者が明示的にOneDrive読み込みを開始する。
+cloudLoad.addEventListener('click',()=>{void(async()=>{
+ if(busy||loadedDb)return;
+ cloudLoad.disabled=true;
+ exportSummary.textContent='OneDriveの明細を読み込んでいます…';
+ try{await refreshCount();cloudLoad.hidden=true;}
+ catch(error){
+  exportSummary.textContent='OneDrive明細を読み込めませんでした。';
+  info(error instanceof Error?error.message:String(error),true);
+ }finally{cloudLoad.disabled=false;updateButtons();}
+})()});
+void(async()=>{
+ let legacyExists=false;
+ try{legacyExists=(await inspectLegacyIndexedDb()).exists;}
+ catch{ /* 旧DB確認が非対応なら従来どおりクラウド情報を表示する。 */ }
+ if(legacyExists){
+  cloudLoad.hidden=false;
+  exportSummary.textContent='旧DBの整理を優先できます。OneDriveの明細は必要なときだけ読み込んでください。';
   updateButtons();
+ }
+ const connected=await refreshCloudSettings();
+ if(legacyExists)return;
+ if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';return;}
+ await refreshCount();updateButtons();
+})().catch(error=>{
+ exportSummary.textContent='保存済みデータを確認できませんでした。';
+ info(error instanceof Error?error.message:'OneDriveのデータを取得できませんでした。',true);
+ updateButtons();
 });
 
 // Existing saved salaries can be republished without editing or duplicating their PDF records.
@@ -245,15 +268,15 @@ for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('[d
 const migrateButton=document.querySelector<HTMLButtonElement>('#migrate-legacy-cloud');
 const migrateStatus=document.querySelector<HTMLElement>('#migrate-legacy-cloud-status');
 migrateButton?.addEventListener('click',()=>{void(async()=>{
- if(!migrateStatus)return;
+ if(!migrateStatus||busy)return;
  if(!confirm('旧IndexedDBの給与明細をOneDriveへ移行します。移行前にバックアップを保管しましたか？'))return;
- migrateButton.disabled=true;
+ busy=true;updateButtons();
  try{
   const result=await migrateFromLegacyIndexedDb(message=>{migrateStatus.textContent=message;});
   migrateStatus.textContent=`旧データ ${result.found}件中、新規に${result.migrated}件を移行しました。旧IndexedDBは削除していません。`;
   await refreshCount();
  }catch(error){migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
- finally{migrateButton.disabled=false;}
+ finally{busy=false;updateButtons();}
  })();});
 
 // データ書換中はタブを閉じる前に確認。ページ遷移ではロックと転送状況を守る。
@@ -309,24 +332,25 @@ cloudDelete.addEventListener('click',()=>{void(async()=>{
  }catch(error){cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
+// 旧DBの検査は任意。削除ボタンは検査・OneDriveサインイン前でも押せる。
 localCheck.addEventListener('click',()=>{void(async()=>{
- if(busy)return;oldLocalCount=undefined;localDelete.hidden=true;busy=true;updateButtons();
+ if(busy)return;busy=true;updateButtons();
+ localStatus.textContent='この端末の旧IndexedDBを確認しています…';
  try{
   const result=await inspectLegacyIndexedDb();
-  if(!result.exists){localStatus.textContent='旧IndexedDBはありません。';return;}
-  oldLocalCount=result.count;
-  localStatus.textContent=`旧IndexedDB：${result.count}件。削除時にOneDriveの明細・原本と全件照合します。`;
-  localDelete.hidden=false;
- }catch(error){localStatus.textContent=error instanceof Error?error.message:String(error);}
+  localStatus.textContent=result.exists?`旧IndexedDB：${result.count}件。OneDriveとの照合なしで、この端末から削除できます。`:'この端末に旧IndexedDBはありません。';
+ }catch(error){localStatus.textContent=`旧DBを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 localDelete.addEventListener('click',()=>{void(async()=>{
- if(busy||oldLocalCount===undefined)return;
- if(!confirm(`この端末の旧IndexedDB（${oldLocalCount}件）を、OneDriveと全件照合できた場合にだけ削除します。バックアップを保管しましたか？`))return;
- oldLocalCount=undefined;localDelete.hidden=true;busy=true;updateButtons();
+ if(busy)return;busy=true;updateButtons();
  try{
-  const count=await deleteVerifiedLegacyIndexedDb(text=>{localStatus.textContent=text;});
-  localStatus.textContent=`旧IndexedDBを削除しました（照合済み ${count}件）。Microsoft接続情報や一時鍵は保持しています。`;
+  // 誤って空の新規DBを作らず、既存の旧DBだけを列挙する。
+  const result=await inspectLegacyIndexedDb();
+  if(!result.exists){localStatus.textContent='この端末に旧IndexedDBはありません。';return;}
+  if(!window.confirm(`この端末の旧IndexedDB（${result.count}件）を削除します。\nOneDriveとの照合は行いません。未移行の明細があれば失われ、元に戻せません。\nバックアップを確認したうえで削除しますか？`))return;
+  const deleted=await deleteLegacyIndexedDb(result.count,text=>{localStatus.textContent=text;});
+  localStatus.textContent=`この端末の旧IndexedDBを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;
  }catch(error){localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});

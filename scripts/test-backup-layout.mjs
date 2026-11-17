@@ -25,7 +25,7 @@ assert.match(html,/<section class="card settings-panel backup-key-change"/);
 assert.doesNotMatch(html,/<details\b|<summary\b/,'settings should not need accordions');
 assert.match(html,/<h2 id="settings-backup-title">バックアップ<\/h2>/);
 assert.match(html,/<h2 id="settings-auth-title">認証<\/h2>/);
-assert.match(html,/<h2 id="settings-legacy-title">旧データの移行<\/h2>/);
+assert.match(html,/<h2 id="settings-legacy-title">旧データの整理・移行<\/h2>/);
 assert.match(html,/<h2 id="settings-finance-income-title">Financeへの給与連携<\/h2>/);
 assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,4,'four settings groups including Finance income');
 assert.ok(html.indexOf('id="settings-backup-title"')<html.indexOf('id="settings-auth-title"'),'backup precedes auth');

@@ -241,40 +241,19 @@ export async function inspectLegacyIndexedDb():Promise<{exists:boolean;count:num
   return {exists:true,count};
  }finally{db.close();}
 }
-/** 旧IndexedDB明細がOneDriveと完全に一致したときだけ指定したDBを削除。 */
-export async function deleteVerifiedLegacyIndexedDb(progress?:(text:string)=>void):Promise<number>{
- const info=await inspectLegacyIndexedDb();if(!info.exists)return 0;
- const db=await new Promise<IDBDatabase>((resolve,reject)=>{
-  const req=indexedDB.open('payroll-local-v1');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
- });
- let legacy:SavedPayrollRecord[];
- try{
-  if(!db.objectStoreNames.contains('payroll-records'))throw new Error('旧DBの構造が異なります。');
-  legacy=await new Promise((resolve,reject)=>{
-   const req=db.transaction('payroll-records','readonly').objectStore('payroll-records').getAll();
-   req.onsuccess=()=>resolve(req.result as SavedPayrollRecord[]);req.onerror=()=>reject(req.error);
-  });
- }finally{db.close();}
- if(legacy.length!==info.count)throw new Error('確認中に旧DBが変更されました。');
- const vault=await cloudVault();
- const remote=await vault.refresh({forceFresh:true});
- for(let i=0;i<legacy.length;i++){
-  const rec=legacy[i];assertValid(rec,true);
-  const saved=remote.find(item=>item.id===rec.id);
-  if(!saved||recordSignature(saved)!==recordSignature(rec))
-   throw new Error(`旧DBの明細ID ${rec.id} がOneDriveと一致しません。移行・照合を先に完了してください。`);
-  const pdf=await vault.original(saved);
-  const oldBytes=new Uint8Array(await rec.pdf.arrayBuffer());
-  const currentBytes=new Uint8Array(await pdf.arrayBuffer());
-  if(oldBytes.length!==currentBytes.length||oldBytes.some((v,n)=>v!==currentBytes[n]))
-   throw new Error(`旧DBの明細ID ${rec.id} のPDFが一致しません。削除しません。`);
-  progress?.(`旧DBのPDFを照合中：${i+1}/${legacy.length}`);
- }
- if((await inspectLegacyIndexedDb()).count!==legacy.length)throw new Error('旧DBの件数が変更されました。削除しません。');
+/** 現行OneDriveとは独立して、既知の旧IndexedDBだけを削除する。明細の移行・照合は行わない。 */
+export async function deleteLegacyIndexedDb(expectedCount:number,progress?:(text:string)=>void):Promise<number>{
+ if(!Number.isSafeInteger(expectedCount)||expectedCount<0)throw new Error('旧DBの削除対象件数が不正です。');
+ const info=await inspectLegacyIndexedDb();
+ if(!info.exists)return 0;
+ if(info.count!==expectedCount)throw new Error('確認後に旧DBの件数が変わりました。削除を中断します。');
+ progress?.('この端末の旧IndexedDBだけを削除しています…');
  await new Promise<void>((resolve,reject)=>{
+  // Microsoft/MSAL・OneDrive・その他のIndexedDBには一切触れない。
   const req=indexedDB.deleteDatabase('payroll-local-v1');
-  req.onsuccess=()=>resolve();req.onerror=()=>reject(req.error);
-  req.onblocked=()=>progress?.('別のタブが旧DBを使用中です。旧画面を閉じると削除を続行します。');
+  req.onsuccess=()=>resolve();
+  req.onerror=()=>reject(req.error??new Error('旧DBの削除に失敗しました。'));
+  req.onblocked=()=>progress?.('ほかのタブが旧DBを使用中です。旧画面を閉じると削除が進みます。');
  });
- return legacy.length;
+ return expectedCount;
 }

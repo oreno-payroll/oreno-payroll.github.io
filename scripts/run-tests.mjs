@@ -32,6 +32,7 @@ const tests = [
   ['scripts/test-folder-metadata-minimal.mjs', true],
   ['scripts/test-backup-layout.mjs', true],
   ['scripts/test-cleanup-guard.mjs', true],
+  ['scripts/test-local-db-cleanup.mjs', true],
   ['scripts/test-cleanup-finance-compat.mjs', true],
   ['scripts/test-income-publication-v132.mjs', true],
 ];

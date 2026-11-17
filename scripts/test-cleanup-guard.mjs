@@ -76,10 +76,11 @@ async function prepared(){const g=new CloudMock(),v=new PayrollVault(g);await v.
   assert.ok(code.includes(id));
  }
  assert.match(local,/inspectLegacyIndexedDb/);
- assert.match(local,/recordSignature\(saved\)!==recordSignature\(rec\)/);
- assert.match(local,/vault\.original\(saved\)/);
- assert.match(local,/indexedDB\.deleteDatabase\('payroll-local-v1'\)/);
- assert.doesNotMatch(local,/indexedDB\.deleteDatabase\(\s*[^'"\s]/);
+ assert.match(local,/export async function deleteLegacyIndexedDb\(/);
+ const localCleanup=local.slice(local.indexOf('export async function deleteLegacyIndexedDb('));
+ assert.doesNotMatch(localCleanup,/cloudVault\(|vault\.|recordSignature\(/,'local cleanup must not use OneDrive');
+ assert.match(localCleanup,/indexedDB\.deleteDatabase\('payroll-local-v1'\)/);
+ assert.doesNotMatch(localCleanup,/indexedDB\.deleteDatabase\(\s*[^'"\s]/);
  assert.match(code,/prompt\('削除するには/);
  console.log('PASS: cleanup controls and safe known-DB-only checks');
 }

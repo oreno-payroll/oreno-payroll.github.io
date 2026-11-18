@@ -14,6 +14,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root })
   .toString('utf8').split('\0').filter(Boolean);
 const required = [
+  'public/favicon.ico',
+  'public/apple-touch-icon.png',
   'public/view/index.html',
   'public/view/pdf-sw.js',
   'public/payroll-cloud-session.js',
@@ -30,6 +32,8 @@ const allowed = (file) => [
 ].includes(file)
   || /^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.tsx?$/.test(file)
   || /^public\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:html|css)$/.test(file)
+  || file === 'public/favicon.ico'
+  || file === 'public/apple-touch-icon.png'
   || file === 'public/view/pdf-sw.js'
   || file === 'public/payroll-cloud-session.js'
   || file === 'public/vendor/msal/msal-browser.bundle.js'
@@ -42,7 +46,7 @@ const staged = process.argv.includes('--staged');
 const installCheck = process.argv.includes('--install-check');
 if (staged && installCheck) problems.push('--staged と --install-check は併用できません');
 const vendor = ['public/vendor/msal/msal-browser.bundle.js', 'public/vendor/msal/LICENSE.txt'];
-const installAssets=[...vendor,'public/payroll-cloud-session.js'];
+const installAssets=[...vendor,'public/payroll-cloud-session.js','public/favicon.ico','public/apple-touch-icon.png'];
 const untrackedVendor = [];
 for (const file of required) {
   if (tracked.includes(file)) continue;
@@ -66,6 +70,20 @@ for (const file of required) {
 for (const file of [...tracked, ...untrackedVendor]) {
   if (!allowed(file)) {
     problems.push(`Git公開対象に想定外のファイルがあります: ${file}`);
+    continue;
+  }
+  // Review approved icon binaries by their exact SHA-256. No generic PNG/ICO allowlist.
+  if (file === 'public/favicon.ico' || file === 'public/apple-touch-icon.png') {
+    const expected = file === 'public/favicon.ico'
+      ? 'b06ca0c9bedb2193a918a61d39ddc6ce1e21f7c570742b67041ba57c360555fa'
+      : 'd53c3d124cc364447214027bf6dcc8090cedf74a083f0ea8390d2bf368535fa6';
+    try {
+      const bytes = staged
+        ? execFileSync('git', ['show', `:${file}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 })
+        : readFileSync(path.join(root, file));
+      if (createHash('sha256').update(bytes).digest('hex') !== expected)
+        problems.push(`ファビコンが監査済みの内容と一致しません: ${file}`);
+    } catch { problems.push(`ファビコンを読み取れません: ${file}`); }
     continue;
   }
   // 通常は作業ディレクトリを検査。--stagedならコミット予定のGit indexを検査。

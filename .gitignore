@@ -31,6 +31,10 @@
 !/public/**/*.html
 !/public/**/*.css
 
+# Only these two reviewed favicon assets are allowed; all other images remain ignored.
+!/public/favicon.ico
+!/public/apple-touch-icon.png
+
 # PDF閲覧用Service Workerだけは、JavaScriptを明示的にGit管理する。
 # ビルド成果物ではなく public/view/ にある原本ソース。
 !/public/view/pdf-sw.js

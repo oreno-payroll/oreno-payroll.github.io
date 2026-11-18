@@ -159,7 +159,11 @@ export async function updateRecord(record:SavedPayrollRecord,approvals:Replaceme
  const allowed=new Map(approvals.map(a=>[a.id,a]));
  if(conflicting.length!==allowed.size||conflicting.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))throw new Error('重複する明細が変更されました。再度確認してください。');
  await vault.save({...record,revision:(prior.revision??0)+1});
- for(const other of conflicting)await vault.remove(other.id);
+ let removed=0;
+ for(const other of conflicting){
+  try{await vault.remove(other.id);removed++;}
+  catch(error){throw new Error(`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+ }
 }
 export async function deleteRecord(id:number,expectedSignature:string):Promise<void> {
  if(!Number.isSafeInteger(id)||id<=0||!expectedSignature)throw new Error('削除対象が不正です。');
@@ -169,6 +173,11 @@ export async function deleteRecord(id:number,expectedSignature:string):Promise<v
  await vault.remove(id);
 }
 export function payrollSnapshot(records:readonly SavedPayrollSummary[]):string[] {return records.map(recordSignature).sort();}
+/** Legacy hashes may be missing. Compare actual PDF bytes before changing any records. */
+async function pdfSha256(blob:Blob):Promise<string> {
+ const digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
+ return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
 /** バックアップ復元：旧データを先に消さず、クラウドへ全件アップロード・照合してから余剰明細を論理削除。 */
 export async function replaceAllRecords(records:SavedPayrollRecord[],expectedSnapshot:readonly string[]):Promise<void> {
  const vault=await cloudVault();const old=await vault.refresh();
@@ -176,10 +185,25 @@ export async function replaceAllRecords(records:SavedPayrollRecord[],expectedSna
  const ids=new Set<number>();
  for(const record of records){assertValid(record,true);if(!Number.isSafeInteger(record.id)||record.id<=0||ids.has(record.id))throw new Error('復元元のIDが不正です。');ids.add(record.id);}
  if(records.length>MAX_RECORDS||records.reduce((sum,r)=>sum+r.pdf.size,0)>MAX_TOTAL_PDF_BYTES)throw new Error('復元データが容量上限を超えています。');
+ // Check all matching IDs first: never partially restore records before a PDF mismatch is discovered.
+ const byId=new Map(old.map(r=>[r.id,r]));
  for(const record of records){
-  const current=await vault.refresh(),prior=current.find(r=>r.id===record.id);
+  const prior=byId.get(record.id);
+  if(!prior)continue;
+  const original=await vault.original(prior);
+  const [storedHash,backupHash]=await Promise.all([pdfSha256(original),pdfSha256(record.pdf)]);
+  if(storedHash!==backupHash)throw new Error(`明細ID ${record.id} のPDF原本がバックアップと異なります。既存データは更新していません。`);
+  if(record.fileHash&&record.fileHash!==backupHash)throw new Error(`明細ID ${record.id} のバックアップ内PDFハッシュが不正です。`);
+ }
+ const afterCheck=await vault.refresh({forceFresh:true});
+ if(JSON.stringify(payrollSnapshot(afterCheck))!==JSON.stringify(expectedSnapshot))throw new Error('PDF照合中に別端末が明細を変更しました。復元を中断しました。');
+ for(const record of records){
+  const current=await vault.refresh({forceFresh:true}),prior=current.find(r=>r.id===record.id);
+  // Never assume an ID found after preflight belongs to the same physical PDF.
+  if(prior&&!byId.has(record.id))throw new Error('復元中に別端末が同じIDの明細を追加しました。復元を中断します。');
+  if(!prior&&byId.has(record.id))throw new Error('復元中に元の明細が削除されました。復元を中断します。');
   if(prior&&recordSignature(prior)===recordSignature(record))continue;
-  if(prior&&prior.fileHash&&record.fileHash&&prior.fileHash!==record.fileHash)throw new Error(`明細ID ${record.id} のPDFが既存データと異なります。上書きしません。`);
+  if(prior&&byId.has(record.id)&&recordSignature(prior)!==recordSignature(byId.get(record.id)!))throw new Error('復元中に同じIDの明細が更新されました。再確認してください。');
   await vault.save(record);
  }
  for(const record of old){if(!ids.has(record.id))await vault.remove(record.id);}

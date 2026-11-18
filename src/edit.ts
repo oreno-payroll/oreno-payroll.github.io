@@ -131,7 +131,12 @@ saveButton.addEventListener('click', async () => {
   } catch (error) {
     leavingAfterSave = false;
     saving = false;
-    showError(error instanceof Error ? `保存できませんでした: ${error.message}` : '保存できませんでした。');
+    const detail=error instanceof Error?error.message:String(error);
+    if(detail.includes('保存済みですが')){
+      window.alert(`編集内容の保存は完了していますが、一部の連携更新に失敗しました。\n${detail}`);
+      leavingAfterSave=true;window.location.assign(homeHref);return;
+    }
+    showError(`保存処理を完了できませんでした。再読込して最新の状態を確認してください。\n${detail}`);
     updateUI();
   }
 });
@@ -149,7 +154,14 @@ deleteButton.addEventListener('click', async () => {
   } catch (error) {
     leavingAfterSave = false;
     saving = false;
-    showError(error instanceof Error ? `削除できませんでした: ${error.message}` : '削除できませんでした。');
+    const detail=error instanceof Error?error.message:String(error);
+    if(detail.includes('削除済みですが')){
+      window.alert(`給与明細の削除は完了しました。収入連携データの同期だけが未完了です。\n${detail}`);
+      leavingAfterSave=true;
+      window.location.assign(homeHref);
+      return;
+    }
+    showError(`削除処理を完了できませんでした。処理が一部確定した可能性があるため、最新の明細一覧を確認してください。\n${detail}`);
     updateUI();
   }
 });

@@ -20,6 +20,7 @@ const tests = [
   ['scripts/test-pdf-view-service-worker.mjs', true],
   ['scripts/test-viewer-flow.mjs', true],
   ['scripts/test-cloud-core.mjs', true],
+  ['scripts/test-integrity-hardening.mjs', true],
   ['scripts/test-delete-copy-readme.mjs', true],
   ['scripts/test-cloud-ux.mjs', true],
   ['scripts/test-ui-polish.mjs', true],

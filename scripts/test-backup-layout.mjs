@@ -6,7 +6,8 @@ const css=readFileSync(new URL('../public/styles/vault.css',import.meta.url),'ut
 const script=readFileSync(new URL('../src/backup.ts',import.meta.url),'utf8');
 const ids=['export-summary','export-password','export-confirm','export-button','restore-file',
  'restore-password-row','restore-password','verify-button','restore-preview','restore-ack',
- 'restore-button','backup-status','migrate-legacy-cloud','migrate-legacy-cloud-status'];
+ 'restore-button','backup-status','migrate-legacy-cloud','migrate-legacy-cloud-status',
+ 'orphan-year-check','orphan-year-recover','orphan-year-status'];
 for(const id of ids){
  assert.equal((html.match(new RegExp('id="'+id+'"','g'))??[]).length,1,'duplicate/missing control id: '+id);
  assert.ok(script.includes(id),'handler no longer references '+id);
@@ -27,9 +28,12 @@ assert.match(html,/<h2 id="settings-backup-title">バックアップ<\/h2>/);
 assert.match(html,/<h2 id="settings-auth-title">認証<\/h2>/);
 assert.match(html,/<h2 id="settings-legacy-title">旧データの整理・移行<\/h2>/);
 assert.match(html,/<h2 id="settings-finance-income-title">Financeへの給与連携<\/h2>/);
-assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,4,'four settings groups including Finance income');
+assert.match(html,/<h2 id="settings-orphan-title">年度データの復旧<\/h2>/);
+assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,5,'five settings groups including Finance income and orphan recovery');
 assert.ok(html.indexOf('id="settings-backup-title"')<html.indexOf('id="settings-auth-title"'),'backup precedes auth');
-assert.ok(html.indexOf('id="settings-auth-title"')<html.indexOf('id="settings-legacy-title"'),'migration is last');
+assert.ok(html.indexOf('id="settings-auth-title"')<html.indexOf('id="settings-legacy-title"'),'migration follows auth');
+assert.ok(html.indexOf('id="settings-finance-income-title"')<html.indexOf('id="settings-orphan-title"'),'orphan recovery follows Finance');
+assert.ok(html.indexOf('id="settings-orphan-title"')<html.indexOf('id="settings-legacy-title"'),'legacy cleanup remains last');
 assert.ok(html.indexOf('id="settings-security-title"')<html.indexOf('id="backup-cloud-title"'),'key change is left column');
 assert.match(css,/\.settings-page \.settings-auth-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 assert.match(css,/\.settings-page \.backup-key-change__fields\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
@@ -51,4 +55,4 @@ assert.match(html, /class="card settings-panel settings-finance-income"/, 'Finan
 assert.match(html, /id="payroll-income-publish"/, 'Finance regeneration must remain available');
 assert.match(css, /\.settings-page \.settings-finance-income\s*\{[^}]*padding:\s*28px 30px/, 'Finance card desktop padding');
 assert.doesNotMatch(html, /payroll\/income\//, 'avoid fixed path wording after password rotation');
-console.log('PASS: four sections with Finance / two-column auth / responsive / preserved IDs');
+console.log('PASS: five sections including orphan recovery / Finance / two-column auth / responsive / preserved IDs');

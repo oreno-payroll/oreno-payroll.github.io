@@ -9,7 +9,7 @@ assert.throws(()=>toPublicIncomeRecord({id:102,form:{...form,net:'-2'}}),/不正
 assert.throws(()=>toPublicIncomeRecord({id:102,form:{...form,gross:'invalid'}}),/不正/);
 const vault=readFileSync(new URL('../src/cloud/vault.ts',import.meta.url),'utf8');
 assert.match(vault,/filter\(r=>incomeYear\(r\)===year\)\.map\(toPublicIncomeRecord\)/);
-assert.match(vault,/encryptJson\('income',doc,this\.unlocked\(\),this\.salt\)/);
+assert.match(vault,/encryptJson\('income',current,this\.unlocked\(\),this\.salt\)/);
 assert.match(vault,/await this\.graph\.read\(this\.storagePath\('income'\)/);
 const backup=readFileSync(new URL('../src/backup.ts',import.meta.url),'utf8');
 assert.match(backup,/await vault\.syncIncome\(\)/);

@@ -61,7 +61,12 @@ assert.match(auth,/cacheLocation:'sessionStorage'/,'MSALのトークンをlocalS
 assert.match(vault,/async unlockWithKey\(/);
 assert.doesNotMatch(vault,/try\{await this\.refresh\(\);await this\.syncIncome\(\);\}/,'初回の収入全年度再同期禁止');
 assert.match(vault,/async syncIncome\(changedYears\?/);
-assert.match(vault,/if\(retry>0\)await this\.refresh\(\)/);
+// The income writer now refreshes source statements before and after the ETag write.
+const incomeSync=vault.slice(vault.indexOf(' async syncIncome(changedYears?'));
+assert.match(incomeSync,/for\(let attempt=0;attempt<8;attempt\+\+\)/);
+assert.match(incomeSync,/await this\.refresh\(\{forceFresh:true\}\)/);
+assert.match(incomeSync,/if\(!same\(sourceNow,current\.records\)\)continue/);
+assert.match(incomeSync,/same\(sourceAfter,current\.records\)/);
 assert.match(storeCode,/onProgress\?\./);
 assert.match(upload,/saveRecordsSkippingDuplicates\(records, message =>/);
 assert.match(upload,/保存・検証しました/);

@@ -69,7 +69,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
  await vault.saveBatch(group,status=>updates.push(status));
  assert.equal(graph.count('payroll/originals/'),8,'each PDF must be independently uploaded');
  assert.ok(graph.maxOriginals<=2&&graph.maxOriginals===2,'no more than 2 concurrent original uploads');
- assert.equal(graph.count('payroll/statements/'),1,'one annual JSON update for 8 records');
+ assert.equal(graph.count('payroll/statements/'),2,'initial empty year + one annual JSON update for 8 records');
  assert.equal(graph.count('payroll/income/'),1,'one income JSON update for same payment year');
  assert.equal(graph.writes.get('payroll/index.enc'),3,'index created once plus two distinct year registrations');
  assert.equal(vault.records().length,8,'all 8 records visible after commit');
@@ -85,7 +85,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
 {
  const {vault,graph}=await start();
  await vault.saveBatch(await entries(['2025-12','2026-01','2026-04','2026-05']));
- assert.equal(graph.count('payroll/statements/'),2,'two fiscal years => two JSON files');
+ assert.equal(graph.count('payroll/statements/'),4,'two fiscal years => two verified empty + two populated year files');
  assert.equal(graph.count('payroll/income/'),2,'two payment years => two income files');
  assert.equal(vault.records().length,4);
  console.log('PASS: independent fiscal-year partitions and payment-year income partitions');
@@ -93,6 +93,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
 {
  const {vault,graph}=await start();
  const records=await entries(['2026-04','2026-05']);
+ await vault.prepareYearForWrite('2026');
  let hit=false;
  graph.hooks.read=async(path,g)=>{
   if(path!=='payroll/statements/2026.enc'||hit)return;
@@ -102,8 +103,8 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
   const text=await encryptJson('year',doc,vault.sessionKey().key,vault.sessionKey().salt);
   g.files.set(path,{id:path,etag:'concurrent',text,size:encoder.encode(text).length});
  };
- await assert.rejects(vault.saveBatch(records),/同じ給与を保存/);
- assert.equal(graph.count('payroll/statements/'),0,'conflicting remote period must never be overwritten');
+ await assert.rejects(vault.saveBatch(records),/同じ明細またはID|同じ給与を保存/);
+ assert.equal(graph.count('payroll/statements/'),1,'initial empty year may exist but populated conflict must never be overwritten');
  assert.equal(graph.count('payroll/income/'),0,'income must not sync for conflicted write');
  console.log('PASS: another device inserting same period before commit stops batch safely');
 }
@@ -118,6 +119,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
 {
  const {vault,graph}=await start();
  const initial=await entries(['2026-04']);
+ await vault.prepareYearForWrite('2026');
  let conflictOnce=false;
  graph.hooks.write=async(path,g)=>{
   if(path==='payroll/statements/2026.enc'&&!conflictOnce){
@@ -129,7 +131,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
   }
  };
  await vault.saveBatch(initial);
- assert.equal(graph.count('payroll/statements/'),2,'ETag mismatch causes safe retry');
+ assert.equal(graph.count('payroll/statements/'),3,'empty creation plus ETag mismatch plus safe retry');
  assert.deepEqual(vault.records().map(r=>r.id).sort((a,b)=>a-b),[101,9999]);
  console.log('PASS: ETag collision retries merge independent records without data loss');
 }
@@ -138,7 +140,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
  const {vault,graph}=await start();
  graph.hooks.write=async path=>{if(path==='payroll/income/2026.enc')throw new Error('simulated income outage');};
  await assert.rejects(vault.saveBatch(await entries(['2026-04','2026-05'])),/一部の年度ファイルや収入連携データが更新済みの可能性/);
- assert.equal(graph.count('payroll/statements/'),1,'annual records may be committed before income outage');
+ assert.equal(graph.count('payroll/statements/'),2,'empty creation plus annual records committed before income outage');
  assert.equal(graph.count('payroll/income/'),1,'income write fails and is never reported as success');
  assert.equal(vault.records().length,2,'confirmed annual records remain visible for recovery');
  console.log('PASS: failure after annual commit reports partial state, never claims all saved');

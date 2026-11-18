@@ -108,6 +108,18 @@
     </div>
   </section>
 
+  <section class="settings-group" aria-labelledby="settings-orphan-title">
+    <div class="settings-group__head"><h2 id="settings-orphan-title">年度データの復旧</h2></div>
+    <div class="card settings-panel">
+      <p class="settings-note">通信中断などで明細が保存されても索引に登録されなかった年度を検出します。検査は読み取り専用で、復旧には確認が必要です。</p>
+      <div class="settings-action-row">
+        <button type="button" id="orphan-year-check" class="btn btn--secondary">孤立年度を検査・復旧</button>
+        <button type="button" id="orphan-year-recover" class="btn btn--secondary" hidden disabled>確認した年度を復旧</button>
+      </div>
+      <p id="orphan-year-status" class="vault-status" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+
   <section class="settings-group settings-legacy" aria-labelledby="settings-legacy-title">
     <div class="settings-group__head"><h2 id="settings-legacy-title">旧データの整理・移行</h2></div>
     <div class="card settings-panel backup-legacy">

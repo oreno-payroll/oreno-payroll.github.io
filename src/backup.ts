@@ -1,5 +1,6 @@
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
-import { migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
+import type {OrphanAnnualYear} from './cloud/vault';
+import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
 import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
@@ -38,6 +39,10 @@ const cloudStatus=$<HTMLElement>('cloud-cleanup-status');
 const localCheck=$<HTMLButtonElement>('legacy-cleanup-check');
 const localDelete=$<HTMLButtonElement>('legacy-cleanup-delete');
 const localStatus=$<HTMLElement>('legacy-cleanup-status');
+let orphanYears:OrphanAnnualYear[]|undefined;
+const orphanCheck=$<HTMLButtonElement>('orphan-year-check');
+const orphanRecover=$<HTMLButtonElement>('orphan-year-recover');
+const orphanStatus=$<HTMLElement>('orphan-year-status');
 let preview: LoadedBackup | undefined;
 let currentCount = 0;
 let initialSnapshot: string[] | undefined;
@@ -46,6 +51,7 @@ let loadedDb = false;
 let encryptedFile = false;
 const sizes = (n: number) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`;
 function updateButtons(): void {
+  orphanCheck.disabled=busy;orphanRecover.disabled=busy||!orphanYears?.length;
   exportButton.disabled = busy || !loadedDb;
   cloudLoad.disabled=busy;
   changeButton.disabled=busy;
@@ -238,6 +244,33 @@ void(async()=>{
 });
 
 // Existing saved salaries can be republished without editing or duplicating their PDF records.
+orphanCheck.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;busy=true;orphanYears=undefined;orphanRecover.hidden=true;updateButtons();
+ orphanStatus.textContent='OneDriveの索引未登録年度を検査しています…';
+ try {
+  const vault=await cloudVault();
+  orphanYears=await vault.inspectOrphanYears();
+  orphanStatus.textContent=orphanYears.length
+   ? `孤立した年度：${orphanYears.map(v=>`${v.year}年度（${v.records}件）`).join('、')}。内容を確認してから復旧してください。`
+   : '索引未登録の明細データは見つかりませんでした。';
+  orphanRecover.hidden=!orphanYears.length;
+ }catch(error){orphanStatus.textContent=`検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ finally{busy=false;updateButtons();}
+})()});
+orphanRecover.addEventListener('click',()=>{void(async()=>{
+ if(busy||!orphanYears?.length)return;
+ const expected=orphanYears;
+ if(!window.confirm(`索引に登録されていない年度 ${expected.length}件を復旧します。\n対象：${expected.map(v=>`${v.year}年度（${v.records}件）`).join('、')}\n\n暗号化ファイルを照合して年度索引に追加し、収入情報を同期します。よろしいですか？`))return;
+ busy=true;updateButtons();orphanStatus.textContent='年度索引を復旧しています…';
+ try{
+  const vault=await cloudVault();
+  const count=await vault.recoverOrphanYears(expected);
+  orphanYears=undefined;orphanRecover.hidden=true;
+  orphanStatus.textContent=`${count}年度を復旧しました。最新の明細一覧を確認してください。`;
+  loadedDb=false;await refreshCount();
+ }catch(error){orphanYears=undefined;orphanRecover.hidden=true;orphanStatus.textContent=`復旧を完了できませんでした。年度索引が一部更新済みの可能性があります：${error instanceof Error?error.message:String(error)}`;}
+ finally{busy=false;updateButtons();}
+})()});
 $<HTMLButtonElement>('payroll-income-publish').addEventListener('click',()=>{void(async()=>{
  if(busy)return;
  busy=true;updateButtons();

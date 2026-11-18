@@ -318,13 +318,13 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     remove.className = 'btn btn--icon btn--delete';
     remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>';
     remove.setAttribute('aria-label', `${record.fileName} を削除`);
-    remove.title = '保存済みの明細とPDF原本を削除';
+    remove.title = '保存済みの明細を削除（暗号化PDF原本はOneDriveに保持）';
     remove.disabled = deletingRecordIds.has(record.id);
     remove.addEventListener('click', async () => {
       if (deletingRecordIds.has(record.id)) return;
       const label = record.form.job === 'main' ? '本業' : '副業';
       const kind = record.form.kind === 'bonus' ? '賞与' : '給与';
-      const message = `保存済みの明細を1件削除します。\n\n${label} / ${record.form.targetMonth}分 / ${kind}\nファイル: ${record.fileName}\n\n入力情報とPDF原本を両方削除します。元に戻すには削除前のバックアップが必要です。\n\n本当に削除しますか？`;
+      const message = `保存済みの明細を1件削除します。\n\n${label} / ${record.form.targetMonth}分 / ${kind}\nファイル: ${record.fileName}\n\n解析・入力情報とFinance連携用の収入情報からこの明細を除外します。\n暗号化PDF原本はOneDriveに残りますが、アプリの明細一覧からは参照できなくなります。\n復元には削除前のバックアップなどが必要です。\n\n本当に削除しますか？`;
       if (!window.confirm(message)) return;
       deletingRecordIds.add(record.id);
       remove.disabled = true;

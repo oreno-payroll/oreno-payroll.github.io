@@ -121,7 +121,7 @@ saveButton.addEventListener('click', async () => {
     const conflicts = await inspectReplacementConflicts([updated], updated.id);
     if (conflicts.length) {
       const lines = conflicts.map(c => `・${c.fileName}（${c.period.replaceAll('|', ' / ')}）`).join('\n');
-      if (!window.confirm(`編集後の明細が保存済みデータと重複します。\n${lines}\n\n「OK」で上記${conflicts.length}件を完全に削除し、編集中の明細を残します。よろしいですか？`)) {
+      if (!window.confirm(`編集後の明細が保存済みデータと重複します。\n${lines}\n\n「OK」で上記${conflicts.length}件を明細一覧・収入情報から除外し、編集中の明細を残します。\n暗号化PDF原本はOneDriveに保持されます。よろしいですか？`)) {
         saving = false; updateUI(); return;
       }
     }
@@ -139,7 +139,7 @@ deleteButton.addEventListener('click', async () => {
   if (!record || saving) return;
   const job = record.form.job === 'main' ? '本業' : '副業';
   const kind = record.form.kind === 'bonus' ? '賞与' : '給与';
-  if (!window.confirm(`保存済み明細を1件削除します。\n\n${job} / ${record.form.targetMonth}分 / ${kind}\nファイル: ${record.fileName}\n\n保存済みの入力情報とPDF原本が削除されます。編集中の未保存内容も破棄され、元に戻すには削除前のバックアップが必要です。\n\n本当に削除しますか？`)) return;
+  if (!window.confirm(`保存済み明細を1件削除します。\n\n${job} / ${record.form.targetMonth}分 / ${kind}\nファイル: ${record.fileName}\n\n保存済みの入力情報とFinance連携用の収入情報から除外します。\n暗号化PDF原本はOneDriveに保持されますが、明細一覧からは参照できなくなります。\n編集中の未保存内容も破棄されます。復元には削除前のバックアップなどが必要です。\n\n本当に削除しますか？`)) return;
   saving = true;
   updateUI();
   try {

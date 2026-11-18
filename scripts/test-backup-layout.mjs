@@ -55,4 +55,26 @@ assert.match(html, /class="card settings-panel settings-finance-income"/, 'Finan
 assert.match(html, /id="payroll-income-publish"/, 'Finance regeneration must remain available');
 assert.match(css, /\.settings-page \.settings-finance-income\s*\{[^}]*padding:\s*28px 30px/, 'Finance card desktop padding');
 assert.doesNotMatch(html, /payroll\/income\//, 'avoid fixed path wording after password rotation');
+// Finance連携と年度復旧の余白・行間を同一に保つ回帰テスト。
+assert.match(html, /class="card settings-panel settings-orphan-recovery"/);
+const financeSpacing = css.match(/\.settings-page \.settings-finance-income\s*\{([^}]+)\}/)?.[1];
+const orphanSpacing = css.match(/\.settings-page \.settings-orphan-recovery\s*\{([^}]+)\}/)?.[1];
+assert.ok(financeSpacing && orphanSpacing, 'two setting card layout rules must exist');
+for(const prop of ['display','justify-items','align-content','gap','padding']){
+ const read = rule => {
+  const regex=new RegExp(String.raw`(?:^|;)\s*${prop}\s*:\s*([^;]+)`);
+  const m=rule.match(regex);
+  assert.ok(m,'missing '+prop);
+  return m[1].trim();
+ };
+ assert.equal(read(orphanSpacing),read(financeSpacing),'Finance/年度復旧のレイアウト不一致: '+prop);
+}
+for(const selector of ['finance-income','orphan-recovery']){
+ const noteSelector=new RegExp(String.raw`\.settings-page \.settings-${selector} \.settings-note\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*1\.8;`);
+ const rowSelector=new RegExp(String.raw`\.settings-page \.settings-${selector} \.settings-action-row\s*\{\s*width:\s*100%;`);
+ const mobileSelector=new RegExp(String.raw`\.settings-page \.settings-${selector}\s*\{\s*padding:\s*21px 18px;\s*gap:\s*16px;`);
+ assert.match(css,noteSelector);
+ assert.match(css,rowSelector);
+ assert.match(css,mobileSelector);
+}
 console.log('PASS: five sections including orphan recovery / Finance / two-column auth / responsive / preserved IDs');

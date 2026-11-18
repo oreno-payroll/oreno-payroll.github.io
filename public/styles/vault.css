@@ -157,6 +157,26 @@
 .settings-page #cloud-cleanup-delete { margin-top: 8px; }
 @media (max-width: 480px) { .settings-page .settings-cleanup .btn { width: 100%; } }
 
+/* 年度復旧カードもFinance給与連携カードと同じ余白・行間・操作配置にする。 */
+.settings-page .settings-orphan-recovery {
+  display: grid;
+  justify-items: stretch;
+  align-content: start;
+  gap: 19px;
+  padding: 28px 30px;
+}
+.settings-page .settings-orphan-recovery .settings-action-row { width: 100%; }
+.settings-page .settings-orphan-recovery .settings-note {
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.settings-page .settings-orphan-recovery .vault-status { margin: 0; }
+@media (max-width: 480px) {
+  .settings-page .settings-orphan-recovery { padding: 21px 18px; gap: 16px; }
+  .settings-page .settings-orphan-recovery .settings-action-row > .btn { width: 100%; }
+}
+
 /* Finance収入連携: 単独カードを追加せず、既存の設定パネルと同じ余白体系に揃える。 */
 .settings-page .settings-finance-income {
   display: grid;

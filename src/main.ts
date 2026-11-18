@@ -1,6 +1,7 @@
 import { safePdfFileName } from './storage/fileNaming';
+import { preparePdfHandoff } from './pdf/handoff';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
-import { deleteRecord, getRecord, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
+import { deleteRecord, getRecord, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import {PayrollPartialSuccessError} from './storage/operationError';
 import {mutationEpoch} from './cloud/snapshot';
 import { amountOrMissing } from './storage/payrollValidation';
@@ -269,10 +270,17 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     link.className = 'statement-link';
     link.textContent = record.fileName;
     link.title = '原本PDFを別タブで開く';
-    // 閲覧専用ページがクリック時にIDBから原本1件だけ取得する。
+    // 元タブの認証済み保管庫で原本を取得し、閲覧タブへPDF Blobだけ渡す。
+    // 右クリックでURLを開いた場合などは、従来の閲覧ページへフォールバック。
     link.href = `./view/index.html?id=${encodeURIComponent(String(record.id))}`;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
+    const handoffPdf = () => preparePdfHandoff(link, record.id, async () => ({
+      fileName: record.fileName,
+      pdf: await getOriginalForCurrentView(record.id, recordSignature(record)),
+    }));
+    link.addEventListener('click', event => { if (!event.defaultPrevented) handoffPdf(); });
+    link.addEventListener('auxclick', event => { if (event.button === 1 && !event.defaultPrevented) handoffPdf(); });
     const caption = document.createElement('span');
     caption.className = 'statement-item__meta';
     const gross = amountOrMissing(record.form.gross);

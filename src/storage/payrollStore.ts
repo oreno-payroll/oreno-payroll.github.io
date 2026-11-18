@@ -76,6 +76,19 @@ export async function getRecord(id:number):Promise<SavedPayrollRecord|undefined>
  const pdf=await vault.original(rec);
  return {...rest,pdf};
 }
+/**
+ * 閲覧専用: ホームで読み込み・検証済みの年度別明細を再利用する。
+ * 読み取りに限り索引の全年度再取得を省き、暗号化PDF原本だけを取得する。
+ * 元タブの認証済み鍵を使い、PDFサイズ・SHA-256の照合は vault.original() が行う。
+ * 保存・編集・削除の際のOneDrive再検証には一切影響しない。
+ */
+export async function getOriginalForCurrentView(id:number,expectedSignature:string):Promise<Blob> {
+ const vault=await cloudVault();
+ const rec=vault.records().find(r=>r.id===id);
+ if(!rec||recordSignature(rec)!==expectedSignature)
+  throw new Error('表示中の明細が更新されました。ホームを最新の状態にして開き直してください。');
+ return vault.original(rec);
+}
 /** バックアップ用。一度取得した年度JSONを使い、PDF原本だけ最大2件並行取得する。
  * すべてのPDFが揃った後にもう一度明細の署名を確認し、途中更新を拒否する。 */
 export async function loadRecords(onProgress?:(completed:number,total:number)=>void):Promise<SavedPayrollRecord[]> {

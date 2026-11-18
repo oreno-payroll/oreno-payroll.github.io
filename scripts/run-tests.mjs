@@ -20,6 +20,7 @@ const tests = [
   ['scripts/test-lazy-pdfs.mjs', true],
   ['scripts/test-pdf-view-service-worker.mjs', true],
   ['scripts/test-viewer-flow.mjs', true],
+  ['scripts/test-pdf-oneclick.mjs', true],
   ['scripts/test-cloud-core.mjs', true],
   ['scripts/test-integrity-hardening.mjs', true],
   ['scripts/test-partial-success-types.mjs', true],

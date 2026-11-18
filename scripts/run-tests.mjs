@@ -27,6 +27,7 @@ const tests = [
   ['scripts/test-delete-copy-readme.mjs', true],
   ['scripts/test-cloud-ux.mjs', true],
   ['scripts/test-ui-polish.mjs', true],
+  ['scripts/test-ui-flow-footer.mjs', true],
   ['scripts/test-cloud-auth-form.mjs', true],
   ['scripts/test-cloud-tab-unlock.mjs', true],
   ['scripts/test-cloud-upload-ux.mjs', true],

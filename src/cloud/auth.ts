@@ -224,10 +224,10 @@ async function beginUnlock():Promise<PayrollVault> {
 }
 /** A lock action is available on the home page without adding clutter to each subpage. */
 function installHomeLock(scope:string):void {
- const footer=document.querySelector<HTMLElement>('.site-footer');
- if(!footer||footer.querySelector('#payroll-cloud-lock'))return;
+ const footerActions=document.querySelector<HTMLElement>('.site-footer__actions');
+ if(!footerActions||footerActions.querySelector('#payroll-cloud-lock'))return;
  const button=document.createElement('button');button.id='payroll-cloud-lock';
- button.type='button';button.className='payroll-cloud-lock';button.textContent='保管庫をロック';
+ button.type='button';button.className='payroll-cloud-lock site-footer__button';button.textContent='保管庫をロック';
  button.title='このタブの一時的な解除状態を破棄します';
  button.addEventListener('click',()=>{void(async()=>{
   button.disabled=true;
@@ -235,7 +235,7 @@ function installHomeLock(scope:string):void {
   vault?.lock();vault=undefined;unlocking=undefined;
   window.location.reload();
  })();});
- footer.append(button);
+ footerActions.append(button);
 }
 
 /** ページ移動・Ctrl+R後は同じMicrosoftアカウントを確認してサイレント復号。

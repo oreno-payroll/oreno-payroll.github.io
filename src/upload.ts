@@ -829,18 +829,19 @@ saveButton.addEventListener("click", async () => {
       saveStatus.textContent = `${result.saved}件をOneDriveへ保存・検証しました。${skipped?`重複${skipped}件は保存していません。`:''}`;
       saveGuidance.textContent='保存完了を確認しました。ホームへ戻ります。';
       saveButtonLabel.textContent = '保存完了';
-      leavingAfterSave = true;
-      window.setTimeout(() => window.location.assign('../index.html'), 1500);
     } else {
-      stopSaveClock();saving = false;
-      updateSaveState();
+      stopSaveClock();
       saveFeedback.classList.add('is-complete');
       saveStage.textContent='新しく保存する明細はありません';
       saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='100%';
       saveProgress.setAttribute('aria-valuenow','100');
       saveStatus.textContent=`重複${skipped}件を除外しました。新しい保存は行っていません。`;
-      saveGuidance.textContent='明細を追加するか、ホームへ戻れます。';
+      saveGuidance.textContent='重複を確認しました。ホームへ戻ります。';
+      saveButtonLabel.textContent='重複確認済み';
     }
+    // 保存成功・重複のみの両方で帰還。エラーの場合は catch で画面を保持。
+    leavingAfterSave = true;
+    window.setTimeout(() => window.location.assign('../index.html'), 1500);
   } catch (error) {
     leavingAfterSave = false;
     stopSaveClock();saveFeedback.classList.add('is-failed');

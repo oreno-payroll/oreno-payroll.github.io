@@ -160,11 +160,12 @@
 /* Finance収入連携: 単独カードを追加せず、既存の設定パネルと同じ余白体系に揃える。 */
 .settings-page .settings-finance-income {
   display: grid;
-  justify-items: start;
+  justify-items: stretch;
   align-content: start;
   gap: 19px;
   padding: 28px 30px;
 }
+.settings-page .settings-finance-income .settings-action-row { width: 100%; }
 .settings-page .settings-finance-income .settings-note {
   width: 100%;
   font-size: 12px;
@@ -173,7 +174,7 @@
 .settings-page .settings-finance-income .vault-status { margin: 0; }
 @media (max-width: 480px) {
   .settings-page .settings-finance-income { padding: 21px 18px; gap: 16px; }
-  .settings-page .settings-finance-income > .btn { width: 100%; }
+  .settings-page .settings-finance-income .settings-action-row > .btn { width: 100%; }
 }
 
 @media (max-width: 700px) {

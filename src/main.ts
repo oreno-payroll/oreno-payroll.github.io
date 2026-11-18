@@ -460,12 +460,14 @@ window.addEventListener('pageshow', event => {
  if(event.persisted && (dashboardMutationEpoch!==mutationEpoch()||Date.now()>=dashboardValidUntil))
   void refreshDashboard(true);
 });
-const footer=document.querySelector<HTMLElement>('.site-footer');
-if(footer&&!footer.querySelector('#payroll-refresh-data')) {
+// フッターの操作領域へだけ追加し、説明文と動的ボタンを均等配置しない。
+const footerActions=document.querySelector<HTMLElement>('.site-footer__actions');
+if(footerActions&&!footerActions.querySelector('#payroll-refresh-data')) {
  const control=document.createElement('span');control.className='payroll-data-sync';
  const state=document.createElement('span');state.id='payroll-data-freshness';state.textContent='確認中…';
- const refresh=document.createElement('button');refresh.id='payroll-refresh-data';refresh.type='button';refresh.textContent='最新を確認';
+ state.setAttribute('role','status');state.setAttribute('aria-live','polite');
+ const refresh=document.createElement('button');refresh.id='payroll-refresh-data';refresh.type='button';refresh.className='site-footer__button';refresh.textContent='最新を確認';
  refresh.addEventListener('click',()=>{void refreshDashboard(true);});
- control.append(state,refresh);footer.append(control);
+ control.append(state,refresh);footerActions.append(control);
 }
 void refreshDashboard();

@@ -19,11 +19,11 @@ includes(email, 'メールアドレス');
 for (const value of [mobile, fixed, phone]) includes(value, '日本の電話番号らしい数列');
 includes(secret, 'ハードコードされた認証情報');
 includes(key, '秘密鍵');
-// PDF.js を読み込まない編集画面と原本ビューアは、動的コード評価を許可しない。
-for (const relative of ['public/edit/index.html', 'public/view/index.html']) {
+// 全ページでJavaScriptの動的評価を禁止。PDF.js向けのWebAssemblyのみ別途許可。
+for (const relative of ['public/index.html', 'public/upload/index.html', 'public/backup/index.html', 'public/edit/index.html', 'public/view/index.html']) {
   const html = fs.readFileSync(path.join(root, relative), 'utf8');
   assert.match(html, /script-src 'self'/);
-  assert.doesNotMatch(html, /unsafe-eval/);
+  assert.doesNotMatch(html, /(?<![\w-])'unsafe-eval'/, 'JavaScript unsafe-eval must be disabled');
 }
 for (const harmless of ['2026-11-15', 'v1.1.0', 'PAYROLL=2026', '1234567890']) {
   assert.deepEqual(findSensitiveContent(harmless), [], `架空データ誤検出: ${harmless}`);

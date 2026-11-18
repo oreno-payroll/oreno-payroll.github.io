@@ -13,6 +13,7 @@ globalThis.sessionStorage={
  removeItem(name){box.delete(name);},
 };
 const originalNow=Date.now;
+assert.equal(TAB_TTL_MS, 2 * 60 * 60 * 1000, 'tab key TTL must be exactly two hours');
 const scope='client-123:account-456';
 const salt=createSalt();
 const pass='test-passphrase-that-is-not-real';
@@ -46,7 +47,7 @@ try {
  Date.now=()=>expiration+1;
  assert.equal(await restoredTabUnlock(scope),null,'strict expiration');
  assert.equal(box.size,0,'expired unlock deleted');
- console.log('PASS: strict 8-hour expiry removes stored secret');
+ console.log('PASS: strict 2-hour expiry removes stored secret');
 
  Date.now=originalNow;
  assert.equal(rememberTabUnlock(scope,new Uint8Array(32).fill(23),salt),true);
@@ -62,6 +63,11 @@ try {
  clearTabUnlock();assert.equal(box.size,0);
  console.log('PASS: corrupted cache and explicit lock clear the tab key');
 
+ // 旧8時間キャッシュの残存時間が短くても、v2では再利用しない。
+ box.set('payroll-ephemeral-tab-unlock-v1', JSON.stringify({version:1,scope,salt,key:'A'.repeat(43)+'=',expiresAt:originalNow()+1000}));
+ assert.equal(await restoredTabUnlock(scope),null);
+ assert.equal(box.has('payroll-ephemeral-tab-unlock-v1'),false);
+ console.log('PASS: obsolete 8-hour session cache is rejected and removed');
  const sessionSource=readFileSync(new URL('../src/cloud/session.ts',import.meta.url),'utf8');
  assert.match(sessionSource,/const keyData:\s*ArrayBuffer\s*=\s*new ArrayBuffer\(32\)/,'CryptoKey import material must have explicit ArrayBuffer type for TypeScript 7');
  assert.match(sessionSource,/subtle\.importKey\('raw',keyData,/,'restore must import from ArrayBuffer, not Uint8Array<ArrayBufferLike>');

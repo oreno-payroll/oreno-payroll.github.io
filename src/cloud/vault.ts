@@ -269,7 +269,7 @@ export class PayrollVault {
     if(shardYear(rec)!==year)throw new Error(`${year}年度のファイルに対象年度の異なる明細が含まれています。`);
     await this.original(rec); // Authenticate/decrypt actual PDF, including size and SHA when recorded.
    }
-   if(doc.records.length||doc.deleted.length)candidates.push({year,etag:file.etag,records:doc.records.length});
+   candidates.push({year,etag:file.etag,records:doc.records.length});
   }
   return candidates.sort((a,b)=>a.year.localeCompare(b.year));
  }
@@ -540,7 +540,7 @@ export class PayrollVault {
   const originalIndex=validateIndex(await decryptJson<Index>('index',root.text,entered));
   this.ensureRotationAllowed(originalIndex);
   const orphans=await this.inspectOrphanYears();
-  if(orphans.length)throw new Error(`索引未登録の年度ファイル（${orphans.map(v=>v.year).join('、')}年度）に明細または削除履歴があります。パスフレーズを変更する前に、設定画面の「年度データの復旧」で確認・復旧してください。`);
+  if(orphans.length)throw new Error(`索引未登録の年度ファイル（${orphans.map(v=>v.year).join('、')}年度）が存在します（空の年度ファイルを含みます）。パスフレーズを変更する前に、設定画面の「年度データの復旧」で確認・復旧してください。`);
   const originalInventory=await this.listOriginalFiles(originalIndex);
   const gen=crypto.randomUUID(),newSalt=createSalt(),newKey=await deriveKey(newPassphrase,newSalt);
   const lockedIndex:Index={...originalIndex,rotation:{id:gen,startedAt:Date.now()}};
@@ -691,7 +691,18 @@ export class PayrollVault {
   if((await this.inspectOrphanYears()).length)throw new Error('索引未登録の年度が残っています。先に復旧してから旧暗号データを整理してください。');
   // No old copy may be trashed unless all encrypted PDF originals are present in
   // the current generation. This includes originals retained after statement deletion.
-  const retainedOriginals=new Set((await this.listOriginalFiles(index)).map(file=>`${file.month}/${file.uuid}`));
+  const currentOriginalInventory=await this.listOriginalFiles(index);
+  const retainedOriginals=new Set(currentOriginalInventory.map(file=>`${file.month}/${file.uuid}`));
+  // Deleted and unreferenced PDFs have no current statement record. Authenticate
+  // their ciphertext as well, rather than treating a matching filename as proof.
+  for(const entry of currentOriginalInventory){
+   const encrypted=await this.graph.read(entry.path,entry.name,MAX_ORIGINAL);
+   if(!encrypted||encrypted.etag!==entry.etag||encrypted.size!==entry.size)
+    throw new Error(`現行PDF原本 ${entry.month}/${entry.uuid} が検査中に変更されました。整理を中断します。`);
+   const clear=await decryptBytes('original',encrypted.text,this.unlocked());
+   if(clear.byteLength<1)throw new Error('現行のPDF原本が空です。旧暗号領域の整理を中断します。');
+  }
+
   const verifyOldStatements=async(oldIndex:Index):Promise<void>=>{
    for(const file of await this.graph.listFolder(this.pathFor(oldIndex,'statements'))??[]){
     if(file.folder||!/^(19|20|21)\d{2}\.enc$/.test(file.name))throw new Error('旧年度ファイルに未知の項目があります。整理を中断します。');
@@ -837,7 +848,18 @@ export class PayrollVault {
   // 対象年変更時は移動元を削除履歴へ。原本は回復のため削除しない。
   for(const [other,base] of [...this.shards])if(other!==year&&base.records.some(r=>r.id===record.id)) {
    const changed=copy(base);changed.records=changed.records.filter(r=>r.id!==record.id);changed.deleted.push(record.id);
-   await this.commit(other,changed);
+   try{await this.commit(other,changed);}
+   catch(error){
+    let status='移動先年度への保存が完了しましたが、移動元年度の除外は完了していない可能性があります。';
+    try{
+     await this.refresh({forceFresh:true});
+     const sourceStillHasRecord=[...this.shards].filter(([y,d])=>y!==year&&d.records.some(r=>r.id===record.id)).map(([y])=>y);
+     status=sourceStillHasRecord.length
+      ? `移動先の${year}年度には保存済みですが、移動元の${sourceStillHasRecord.join('、')}年度に明細が残っています。`
+      : '移動先年度への保存は完了しました。移動元の除外処理結果を再検証しました。';
+    }catch{ /* Keep a cautious partial-success message if revalidation also fails. */ }
+    throw new PayrollPartialSuccessError('year-move',`明細ID ${record.id} の年度移動が一部完了しました。${status} 明細を再読込して整合性を確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});
+   }
   }
   progress?.('Finance連携用の収入データを同期しています…');
   try{await this.syncIncome(new Set([incomeYear(record),...(originalPrior?[incomeYear(originalPrior)]:[])]));}

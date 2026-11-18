@@ -9,7 +9,7 @@ const built=await build({
 });
 const {PayrollPartialSuccessError}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].contents).toString('base64'));
 const rootError=new Error('offline');
-for(const kind of ['income-sync','duplicate-cleanup']) {
+for(const kind of ['income-sync','duplicate-cleanup','year-move']) {
  const err=new PayrollPartialSuccessError(kind,'明細の保存後に後続処理が失敗',{cause:rootError});
  assert.ok(err instanceof Error);
  assert.equal(err.stage,kind);

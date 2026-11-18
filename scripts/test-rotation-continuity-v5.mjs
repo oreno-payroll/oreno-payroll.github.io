@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const source=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
+const vault=source('src/cloud/vault.ts');
+const edit=source('src/edit.ts');
+const err=source('src/storage/operationError.ts');
+const keyTest=source('scripts/test-key-rotation-backup.mjs');
+assert.match(vault,/candidates\.push\(\{year,etag:file\.etag,records:doc\.records\.length\}\)/);
+assert.doesNotMatch(vault,/if\(doc\.records\.length\|\|doc\.deleted\.length\)candidates\.push/);
+assert.match(vault,/currentOriginalInventory/);
+assert.match(vault,/decryptBytes\('original',encrypted\.text,this\.unlocked\(\)\)/);
+assert.match(vault,/new PayrollPartialSuccessError\('year-move'/);
+assert.match(err,/\| 'year-move'/);
+assert.match(edit,/error\.stage==='year-move'/);
+assert.match(keyTest,/an empty orphan is recoverable before rotation/);
+assert.match(keyTest,/corrupt current-generation deleted-record PDF stops cleanup/);
+assert.match(keyTest,/classified as year-move partial success/);
+console.log('PASS: empty orphan, retained original decrypt and typed year-move safeguards');

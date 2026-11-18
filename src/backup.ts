@@ -251,7 +251,7 @@ orphanCheck.addEventListener('click',()=>{void(async()=>{
   const vault=await cloudVault();
   orphanYears=await vault.inspectOrphanYears();
   orphanStatus.textContent=orphanYears.length
-   ? `孤立した年度：${orphanYears.map(v=>`${v.year}年度（${v.records}件）`).join('、')}。内容を確認してから復旧してください。`
+   ? `孤立した年度：${orphanYears.map(v=>`${v.year}年度（${v.records}件${v.records===0?"・空の年度ファイル":""}）`).join('、')}。内容を確認してから復旧してください。`
    : '索引未登録の明細データは見つかりませんでした。';
   orphanRecover.hidden=!orphanYears.length;
  }catch(error){orphanStatus.textContent=`検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
@@ -260,7 +260,7 @@ orphanCheck.addEventListener('click',()=>{void(async()=>{
 orphanRecover.addEventListener('click',()=>{void(async()=>{
  if(busy||!orphanYears?.length)return;
  const expected=orphanYears;
- if(!window.confirm(`索引に登録されていない年度 ${expected.length}件を復旧します。\n対象：${expected.map(v=>`${v.year}年度（${v.records}件）`).join('、')}\n\n暗号化ファイルを照合して年度索引に追加し、収入情報を同期します。よろしいですか？`))return;
+ if(!window.confirm(`索引に登録されていない年度 ${expected.length}件を復旧します。\n対象：${expected.map(v=>`${v.year}年度（${v.records}件${v.records===0?"・空の年度ファイル":""}）`).join('、')}\n\n暗号化ファイルを照合して年度索引に追加し、収入情報を同期します。よろしいですか？`))return;
  busy=true;updateButtons();orphanStatus.textContent='年度索引を復旧しています…';
  try{
   const vault=await cloudVault();

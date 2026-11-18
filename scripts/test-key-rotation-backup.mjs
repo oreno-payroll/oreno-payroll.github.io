@@ -205,6 +205,53 @@ async function prepared(){
  console.log('PASS: cleanup blocks an unregistered annual file left in an older generation');
 }
 {
+ const {graph,vault}=await prepared();
+ const key=vault.sessionKey();
+ await graph.write(['payroll','statements'],'2027.enc',await encryptJson('year',{
+  format:'payroll-annual-v1',records:[],deleted:[]
+ },key.key,key.salt),null,30_000_000);
+ const orphan=await vault.inspectOrphanYears();
+ assert.equal(orphan.length,1,'even empty orphan years must be discoverable');
+ assert.deepEqual(orphan.map(v=>[v.year,v.records]),[['2027',0]]);
+ await assert.rejects(vault.changePassphrase(previous,changed),/索引未登録/);
+ assert.equal(await vault.recoverOrphanYears(orphan),1);
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);
+ const plan=await reopened.inspectOldEncryptedData();
+ await reopened.cleanupOldEncryptedData(plan);
+ assert.ok(graph.files.has(`payroll/versions/${generation}/statements/2027.enc`));
+ console.log('PASS: an empty orphan is recoverable before rotation and does not block subsequent old-folder cleanup');
+}
+{
+ const {graph,vault}=await prepared();
+ const prior=vault.records()[0];await vault.remove(prior.id);
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const path=`payroll/versions/${generation}/originals/2026/11/${prior.originalId}.enc`;
+ const old=graph.files.get(path);
+ assert.ok(old);
+ const tampered=old.text.slice(0,-4)+'xxxx';
+ graph.files.set(path,{...old,text:tampered,size:encoder.encode(tampered).length,etag:'tampered-original-copy'});
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);
+ await assert.rejects(reopened.inspectOldEncryptedData(),'corrupt deleted-original ciphertext must block cleanup');
+ assert.ok(graph.files.has(`payroll/originals/2026/11/${prior.originalId}.enc`));
+ console.log('PASS: corrupt current-generation deleted-record PDF stops cleanup before old copy is trashed');
+}
+{
+ const {graph,vault}=await prepared();
+ const input=await sample();input.form={...input.form,targetMonth:'2027-04',paymentDate:'2027-04-27'};
+ graph.failOn='/statements/2026.enc';
+ await assert.rejects(vault.save(input),e=>{
+  assert.equal(e.name,'PayrollPartialSuccessError');
+  assert.equal(e.stage,'year-move');
+  assert.match(e.message,/移動先|年度移動/);
+  return true;
+ });
+ graph.failOn=null;
+ assert.ok(graph.files.has('payroll/statements/2027.enc'));
+ assert.ok(graph.files.has('payroll/statements/2026.enc'));
+ console.log('PASS: failure removing source year after destination write is classified as year-move partial success');
+}
+{
  const code=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
  assert.match(code,/export async function loadRecords\(onProgress/);
  assert.match(code,/const list=await vault\.refresh\(\)/);

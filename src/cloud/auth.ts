@@ -103,7 +103,7 @@ function mount():GateUI {
  <label for="payroll-passphrase">復号パスフレーズ</label>
  <input id="payroll-passphrase" type="password" name="password" autocomplete="current-password" placeholder="パスフレーズを入力" required />
  </div>
- <label class="payroll-cloud-remember"><input id="payroll-remember" type="checkbox" /><span>このタブでは再入力を省略する（最長8時間）</span></label>
+ <label class="payroll-cloud-remember"><input id="payroll-remember" type="checkbox" /><span>このタブでは再入力を省略する（最長2時間）</span></label>
  <p class="payroll-cloud-remember-note">選択時は復号に使える一時鍵をタブ内に保持します。共有端末では選択しないでください。</p>
  <button id="payroll-unlock" type="submit" class="payroll-cloud-primary" disabled>保管庫を開く</button>
  </form>

@@ -136,7 +136,9 @@ saveButton.addEventListener('click', async () => {
     if(error instanceof PayrollPartialSuccessError){
       const heading=error.stage==='duplicate-cleanup'
         ? '編集内容は保存済みですが、重複明細の整理が途中までしか完了していません。'
-        : '編集内容は保存済みですが、Finance連携用の収入同期が未完了です。';
+        : error.stage==='year-move'
+          ? '編集内容は移動先年度に保存済みですが、移動元年度の明細整理が未完了の可能性があります。'
+          : '編集内容は保存済みですが、Finance連携用の収入同期が未完了です。';
       window.alert(`${heading}\n${detail}`);
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }

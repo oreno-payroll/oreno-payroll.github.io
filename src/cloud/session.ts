@@ -1,6 +1,7 @@
-/** 同一オリジン内のページ遷移用、メモリ限定の鍵引き継ぎ。
+/** 同一オリジン内のページ遷移用SharedWorker鍵はメモリ限定。
  * SharedWorkerが終了した場合は通常のパスフレーズ入力に戻る。
- * localStorage/sessionStorage/IndexedDBへ鍵やパスフレーズを保存しない。 */
+ * 明示的に選択した場合のみ、復号可能な鍵素材をsessionStorageへ最長2時間保存する。
+ * パスフレーズや給与明細自体は永続化しない。 */
 type SessionResult = {key:CryptoKey;salt:string};
 type Reply = {id:number;result:unknown};
 let port:MessagePort|undefined;
@@ -49,21 +50,23 @@ export async function clearKey(scope:string):Promise<void> {await send('clear',s
  * This is a deliberate usability/security trade-off: any script in the same
  * origin can read sessionStorage during the time window (e.g. after XSS).
  * No salary record, PDF, or passphrase is stored here. */
-const TAB_KEY='payroll-ephemeral-tab-unlock-v1';
-export const TAB_TTL_MS=8*60*60*1000;
-interface TabPayload {version:1;scope:string;salt:string;key:string;expiresAt:number}
+const TAB_KEY='payroll-ephemeral-tab-unlock-v2';
+const LEGACY_TAB_KEY='payroll-ephemeral-tab-unlock-v1';
+export const TAB_TTL_MS=2*60*60*1000;
+interface TabPayload {version:2;scope:string;salt:string;key:string;expiresAt:number}
 function tabStore():Storage|null {
  try {return typeof sessionStorage==='undefined'?null:sessionStorage;}catch{return null;}
 }
 export function clearTabUnlock():void {
- try {tabStore()?.removeItem(TAB_KEY);}catch{ /* storage may be blocked */ }
+ try {const store=tabStore();store?.removeItem(TAB_KEY);store?.removeItem(LEGACY_TAB_KEY);}catch{ /* storage may be blocked */ }
 }
 export function rememberTabUnlock(scope:string, raw:Uint8Array, salt:string):boolean {
  if(raw.length!==32||!scope||!salt)return false;
  const store=tabStore();if(!store)return false;
  try {
   const secret=btoa(String.fromCharCode(...raw));
-  const data:TabPayload={version:1,scope,salt,key:secret,expiresAt:Date.now()+TAB_TTL_MS};
+  store.removeItem(LEGACY_TAB_KEY); // 旧8時間方式の鍵を次回のログインで破棄する。
+  const data:TabPayload={version:2,scope,salt,key:secret,expiresAt:Date.now()+TAB_TTL_MS};
   store.setItem(TAB_KEY,JSON.stringify(data));
   return true;
  }catch{return false;}
@@ -71,10 +74,11 @@ export function rememberTabUnlock(scope:string, raw:Uint8Array, salt:string):boo
 export async function restoredTabUnlock(scope:string):Promise<SessionResult|null> {
  const store=tabStore();if(!store)return null;
  let raw:Uint8Array|undefined;
+ try{store.removeItem(LEGACY_TAB_KEY);}catch{ /* legacy cleanup is best effort */ }
  try {
   const saved=store.getItem(TAB_KEY);if(!saved)return null;
   const data=JSON.parse(saved) as Partial<TabPayload>;
-  if(data.version!==1||data.scope!==scope||typeof data.salt!=='string'||
+  if(data.version!==2||data.scope!==scope||typeof data.salt!=='string'||
      typeof data.key!=='string'||!/^[a-zA-Z0-9+/]{43}=$/.test(data.key)||
      typeof data.expiresAt!=='number'||!Number.isFinite(data.expiresAt)||
      data.expiresAt<=Date.now()||data.expiresAt>Date.now()+TAB_TTL_MS) {

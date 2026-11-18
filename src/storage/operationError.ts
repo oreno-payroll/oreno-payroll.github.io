@@ -1,5 +1,5 @@
 /** OneDrive multi-file actions can commit a statement before auxiliary work fails. */
-export type PartialOperationStage = 'income-sync' | 'duplicate-cleanup';
+export type PartialOperationStage = 'income-sync' | 'duplicate-cleanup' | 'year-move';
 export class PayrollPartialSuccessError extends Error {
  constructor(readonly stage:PartialOperationStage,message:string,options?:ErrorOptions){
   super(message,options);

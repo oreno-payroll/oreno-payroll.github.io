@@ -6,6 +6,7 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = [
   ['scripts/test-publish-audit.mjs', true],
+  ['scripts/test-security-hardening.mjs', true],
   ['scripts/test-high-priority.mjs', true],
   ['scripts/test-medium-priority.mjs', true],
   ['scripts/test-low-priority.mjs', true],
@@ -22,6 +23,7 @@ const tests = [
   ['scripts/test-cloud-core.mjs', true],
   ['scripts/test-integrity-hardening.mjs', true],
   ['scripts/test-partial-success-types.mjs', true],
+  ['scripts/test-rotation-continuity-v5.mjs', true],
   ['scripts/test-delete-copy-readme.mjs', true],
   ['scripts/test-cloud-ux.mjs', true],
   ['scripts/test-ui-polish.mjs', true],

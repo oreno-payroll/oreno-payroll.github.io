@@ -6,6 +6,7 @@ import {payrollPeriodKey} from '../storage/payrollValidation';
 import {rememberNavigationSnapshot,restoredNavigationSnapshot,clearNavigationSnapshot} from './snapshot';
 import {toPublicIncomeRecord,type PublicIncomeRecord} from './income';
 import {MAX_RECORDS,MAX_TOTAL_PDF_BYTES} from '../storage/storageLimits';
+import {PayrollPartialSuccessError} from '../storage/operationError';
 
 export interface CloudRecord extends SavedPayrollSummary {
   originalId: string;
@@ -16,6 +17,7 @@ interface Index {format:'payroll-index-v1'; years:string[]; incomeYears:string[]
 type IncomeRecord = PublicIncomeRecord;
 interface IncomeDocument {format:'payroll-income-v1';year:string;records:IncomeRecord[]}
 export interface OrphanAnnualYear {year:string;etag:string;records:number}
+interface OriginalInventoryEntry {month:string;uuid:string;path:string[];name:string;etag:string;size:number}
 const emptyDoc=():AnnualDocument=>({format:'payroll-annual-v1',records:[],deleted:[]});
 const emptyIndex=():Index=>({format:'payroll-index-v1',years:[],incomeYears:[]});
 const copy=<T>(v:T):T=>structuredClone(v);
@@ -228,6 +230,29 @@ export class PayrollVault {
    throw new Error(`${year}年度に索引未登録の明細が存在します。上書きせず、設定画面の「孤立年度を検査・復旧」を実行してください。`);
   await this.registerYear(year,'years');
  }
+ /** Scan every encrypted original, including PDFs detached from deleted statements.
+  * The inventory is read-only and bounded; unexpected paths stop key rotation/cleanup. */
+ private async listOriginalFiles(index:Index):Promise<OriginalInventoryEntry[]> {
+  const root=this.pathFor(index,'originals');
+  const years=await this.graph.listFolder(root)??[];
+  const result:OriginalInventoryEntry[]=[];
+  for(const year of years){
+   if(!year.folder||!/^(19|20|21)\d{2}$/.test(year.name))throw new Error('PDF原本領域に未知の項目があります。暗号鍵の変更・整理を中断しました。');
+   const months=await this.graph.listFolder([...root,year.name])??[];
+   for(const month of months){
+    if(!month.folder||!/^(0[1-9]|1[0-2])$/.test(month.name))throw new Error('PDF原本の月フォルダーが想定外です。');
+    const path=[...root,year.name,month.name];
+    const files=await this.graph.listFolder(path)??[];
+    for(const file of files){
+     if(file.folder||!/^[0-9a-f-]{36}\.enc$/i.test(file.name))throw new Error('PDF原本のファイル名または構造が想定外です。');
+     if(!file.etag||!file.id||file.size<1)throw new Error('PDF原本のファイル情報が不正です。');
+     result.push({month:`${year.name}-${month.name}`,uuid:file.name.slice(0,-4),path,name:file.name,etag:file.etag,size:file.size});
+     if(result.length>10000)throw new Error('PDF原本の件数が多すぎるため、自動で鍵変更・整理できません。');
+    }
+   }
+  }
+  return result.sort((a,b)=>(a.month+'/'+a.uuid).localeCompare(b.month+'/'+b.uuid));
+ }
  /** Explicit, read-only discovery; never mutates or exposes data from unknown folders. */
  async inspectOrphanYears():Promise<OrphanAnnualYear[]> {
   this.unlocked();
@@ -235,7 +260,7 @@ export class PayrollVault {
   const entries=await this.graph.listFolder(this.pathFor(index,'statements'))??[];
   const candidates:OrphanAnnualYear[]=[];
   for(const entry of entries) {
-   if(entry.folder||!/^(19|20|21)\d{2}\.enc$/.test(entry.name))continue;
+   if(entry.folder||!/^(19|20|21)\d{2}\.enc$/.test(entry.name))throw new Error('年度ファイルに想定外の項目があります。孤立年度の調査を完了できません。');
    const year=entry.name.slice(0,-4);
    if(index.years.includes(year))continue;
    const {doc,file}=await this.readYear(year,index);
@@ -514,6 +539,9 @@ export class PayrollVault {
   const entered=await deriveKey(currentPassphrase,oldSalt);
   const originalIndex=validateIndex(await decryptJson<Index>('index',root.text,entered));
   this.ensureRotationAllowed(originalIndex);
+  const orphans=await this.inspectOrphanYears();
+  if(orphans.length)throw new Error(`索引未登録の年度ファイル（${orphans.map(v=>v.year).join('、')}年度）に明細または削除履歴があります。パスフレーズを変更する前に、設定画面の「年度データの復旧」で確認・復旧してください。`);
+  const originalInventory=await this.listOriginalFiles(originalIndex);
   const gen=crypto.randomUUID(),newSalt=createSalt(),newKey=await deriveKey(newPassphrase,newSalt);
   const lockedIndex:Index={...originalIndex,rotation:{id:gen,startedAt:Date.now()}};
   const lockedText=await encryptJson('index',lockedIndex,oldKey,oldSalt);
@@ -524,10 +552,13 @@ export class PayrollVault {
    this.rotationId=gen;locked=true;this.index=lockedIndex;
    const lockedRemote=await this.graph.read(['payroll'],'index.enc',MAX_INDEX);
    if(!lockedRemote||!same(await decryptJson<Index>('index',lockedRemote.text,oldKey),lockedIndex))throw new Error('変更ロックの確認に失敗しました。');
+   const lockedOrphans=await this.inspectOrphanYears();
+   if(lockedOrphans.length)throw new Error('変更ロック中に索引未登録の年度を検出しました。旧索引を復旧して中断します。');
+   if(!same(await this.listOriginalFiles(originalIndex),originalInventory))throw new Error('PDF原本の一覧が変更されました。旧鍵を保持して中断します。');
    // 復旧用の元索引。旧原本も保持するので、失敗後も旧パスフレーズで復旧可能。
    await this.graph.write(['payroll','versions',gen,'recovery'],'previous-index.enc',root.text,null,MAX_INDEX);
    const sources:Array<{path:string[];name:string;etag:string;size?:number}>=[];
-   const seenOriginals=new Set<string>();
+   const activeOriginals=new Map<string,CloudRecord[]>();
    let total=originalIndex.years.length+originalIndex.incomeYears.length;
    // 元の年度・給与情報を、ロックした状態でスナップショットとして取得。
    const annual:Array<{year:string;doc:AnnualDocument}>=[];
@@ -537,9 +568,11 @@ export class PayrollVault {
     if(!old)throw new Error(`${year}年度の元データが見つかりません。`);
     const doc=validateDoc(await decryptJson<AnnualDocument>('year',old.text,oldKey));
     annual.push({year,doc});sources.push({path,name:`${year}.enc`,etag:old.etag,size:old.size});
-    for(const rec of doc.records)seenOriginals.add(`${rec.originalMonth}/${rec.originalId}`);
+    for(const rec of doc.records){const name=`${rec.originalMonth}/${rec.originalId}`;activeOriginals.set(name,[...(activeOriginals.get(name)??[]),rec]);}
    }
-   total+=seenOriginals.size;
+   const retainedIds=new Set(originalInventory.map(file=>`${file.month}/${file.uuid}`));
+   for(const key of activeOriginals.keys())if(!retainedIds.has(key))throw new Error('現行明細が参照するPDF原本が一覧にありません。鍵変更を中断します。');
+   total+=originalInventory.length;
    const income:Array<{year:string;clear:Uint8Array}>=[];
    for(const year of originalIndex.incomeYears) {
     const path=this.pathFor(originalIndex,'income');
@@ -565,24 +598,30 @@ export class PayrollVault {
    for(const {year,clear} of income){
     await staged('income',['payroll','versions',gen,'income'],`${year}.enc`,clear,MAX_YEAR);
    }
-   const originals=[...seenOriginals];
-   for(const filename of originals){
-    const [month,uuid]=filename.split('/'),[yyyy,mm]=month.split('-');
-    if(!/^[0-9a-f-]{36}$/i.test(uuid)||!/^\d{4}$/.test(yyyy)||!/^\d{2}$/.test(mm))throw new Error('PDF原本の識別子が不正です。');
-    const path=this.pathFor(originalIndex,'originals',yyyy,mm),name=`${uuid}.enc`;
+   // Deleted and upload-interrupted PDFs have no active record, but still belong to the
+   // encrypted archive. Re-encrypt ALL original files, not just referenced ones.
+   for(const entry of originalInventory){
+    const {month,uuid,path,name}=entry;
     const old=await this.graph.read(path,name,MAX_ORIGINAL);
-    if(!old)throw new Error('元のPDF原本が見つかりません。');
+    if(!old||old.etag!==entry.etag||old.size!==entry.size)throw new Error('PDF原本が鍵変更中に変更されました。');
     const clear=await decryptBytes('original',old.text,oldKey);
-    const metadata=annual.flatMap(a=>a.doc.records).find(rec=>rec.originalId===uuid&&rec.originalMonth===month);
-    if(!metadata||clear.length!==metadata.pdfSize)throw new Error('PDFのサイズが明細データと一致しません。');
-    if(metadata.fileHash && /^[a-f0-9]{64}$/.test(metadata.fileHash)) {
-     const digest=await crypto.subtle.digest('SHA-256',new Uint8Array(clear));
-     const hash=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
-     if(hash!==metadata.fileHash)throw new Error('PDF原本のハッシュが一致しません。');
+    if(clear.length<1)throw new Error('PDF原本を復号できません。');
+    const metadata=activeOriginals.get(`${month}/${uuid}`)??[];
+    for(const rec of metadata){
+     if(clear.length!==rec.pdfSize)throw new Error('PDF原本のサイズが明細データと一致しません。');
+     if(rec.fileHash && /^[a-f0-9]{64}$/.test(rec.fileHash)) {
+      const digest=await crypto.subtle.digest('SHA-256',new Uint8Array(clear));
+      const hash=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
+      if(hash!==rec.fileHash)throw new Error('PDF原本のハッシュが一致しません。');
+     }
     }
     sources.push({path,name,etag:old.etag,size:old.size});
+    const [yyyy,mm]=month.split('-');
     await staged('original',['payroll','versions',gen,'originals',yyyy,mm],name,clear,MAX_ORIGINAL);
    }
+   // A new original created between listing and cutover must not be silently abandoned.
+   if(!same(await this.listOriginalFiles(originalIndex),originalInventory))throw new Error('鍵変更中にPDF原本が増減しました。旧索引を保持して中断します。');
+   if((await this.inspectOrphanYears()).length)throw new Error('鍵変更中に索引未登録の年度が追加されました。旧索引を保持して中断します。');
    onProgress?.('他端末からの同時更新を確認しています…');
    for(const src of sources){
     const now=await this.graph.metadata(src.path,src.name);
@@ -649,6 +688,21 @@ export class PayrollVault {
   if(index.rotation)throw new Error('パスフレーズ変更中は整理できません。');
   if(!index.generation)throw new Error('保存世代の変更履歴がありません。旧暗号領域の削除は不要です。');
   const gen=index.generation;
+  if((await this.inspectOrphanYears()).length)throw new Error('索引未登録の年度が残っています。先に復旧してから旧暗号データを整理してください。');
+  // No old copy may be trashed unless all encrypted PDF originals are present in
+  // the current generation. This includes originals retained after statement deletion.
+  const retainedOriginals=new Set((await this.listOriginalFiles(index)).map(file=>`${file.month}/${file.uuid}`));
+  const verifyOldStatements=async(oldIndex:Index):Promise<void>=>{
+   for(const file of await this.graph.listFolder(this.pathFor(oldIndex,'statements'))??[]){
+    if(file.folder||!/^(19|20|21)\d{2}\.enc$/.test(file.name))throw new Error('旧年度ファイルに未知の項目があります。整理を中断します。');
+    if(!index.years.includes(file.name.slice(0,-4)))throw new Error(`${file.name} は現行索引に登録されていません。旧世代に未移行の年度明細がある可能性があるため、フォルダーを削除できません。`);
+   }
+  };
+  const verifyOldOriginals=async(oldIndex:Index):Promise<void>=>{
+   for(const file of await this.listOriginalFiles(oldIndex)){
+    if(!retainedOriginals.has(`${file.month}/${file.uuid}`))throw new Error(`旧保存世代のPDF原本 ${file.month}/${file.uuid} が現行世代にありません。削除済み明細の原本を失う可能性があるため、旧暗号領域の整理を中断します。`);
+   }
+  };
   const targets:Array<{parent:string[];item:CloudFolderItem}>=[];
   const old=(await this.graph.listFolder(['payroll']))??[];
   // Finance v1.1.1 が固定パス payroll/income/YYYY.enc を参照する可能性があるため、旧incomeは自動削除しない。
@@ -693,7 +747,17 @@ export class PayrollVault {
     }
    }
   };
+  // Validate every old generation before offering a cleanup action.
+  // Even an old version of Payroll that rotated keys before this safeguard
+  // may have left deleted originals behind.
+  if(targets.some(t=>t.parent.length===1&&t.item.name==='statements'))await verifyOldStatements(emptyIndex());
+  if(targets.some(t=>t.parent.length===1&&t.item.name==='originals'))await verifyOldOriginals(emptyIndex());
   for(const target of targets){
+   if(target.parent.length===2 && target.parent[0]==='payroll' && target.parent[1]==='versions'){
+    const oldIndex:Index={...emptyIndex(),generation:target.item.name};
+    await verifyOldStatements(oldIndex);
+    await verifyOldOriginals(oldIndex);
+   }
    const context=target.item.name==='recovery'?'recovery':target.item.name==='originals'?'originals':
      target.item.name==='statements'?'statements':target.item.name==='income'?'income':'generation';
    await scan([...target.parent,target.item.name],context,0);
@@ -777,7 +841,7 @@ export class PayrollVault {
   }
   progress?.('Finance連携用の収入データを同期しています…');
   try{await this.syncIncome(new Set([incomeYear(record),...(originalPrior?[incomeYear(originalPrior)]:[])]));}
-  catch(error){throw new Error(`明細ID ${record.id} の変更は保存済みですが、Finance連携用収入ファイルの同期に失敗しました。設定画面で連携データを再生成してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+  catch(error){throw new PayrollPartialSuccessError('income-sync',`明細ID ${record.id} の変更は保存済みですが、Finance連携用収入ファイルの同期に失敗しました。設定画面で連携データを再生成してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
   progress?.('クラウド保存と検証が完了しました');
  }
  async remove(id:number):Promise<void> {
@@ -786,7 +850,7 @@ export class PayrollVault {
   for(const year of years){const d=copy(this.shards.get(year)!);d.records=d.records.filter(r=>r.id!==id);if(!d.deleted.includes(id))d.deleted.push(id);await this.commit(year,d);}
   if(prior){
    try{await this.syncIncome(new Set([incomeYear(prior)]));}
-   catch(error){throw new Error(`明細ID ${id} は削除済みですが、Finance連携用収入ファイルの更新に失敗しました。設定画面の「連携データを再生成」で再同期してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+   catch(error){throw new PayrollPartialSuccessError('income-sync',`明細ID ${id} は削除済みですが、Finance連携用収入ファイルの更新に失敗しました。設定画面の「連携データを再生成」で再同期してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
   }
   // PDF原本は事故時の復元と監査のためOneDriveに保持。
  }

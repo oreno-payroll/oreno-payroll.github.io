@@ -27,6 +27,23 @@ class FakeGraph {
   const old=this.files.get(path);
   return old?{id:old.id,etag:old.etag,size:old.size}:null;
  }
+ async listFolder(parts){
+  const prefix=parts.join('/')+'/';
+  const contents=new Map();
+  for(const [path,file] of this.files){
+   if(!path.startsWith(prefix))continue;
+   const tail=path.slice(prefix.length),[name,...rest]=tail.split('/');
+   if(rest.length)contents.set(name,{id:'folder:'+prefix+name,name,etag:'folder-etag',folder:true,size:0});
+   else contents.set(name,{id:file.id,name,etag:file.etag,folder:false,size:file.size});
+  }
+  return contents.size?[...contents.values()].sort((a,b)=>a.name.localeCompare(b.name)):null;
+ }
+ async trashFolder(parts,item){
+  const existing=(await this.listFolder(parts))?.find(v=>v.name===item.name);
+  if(!existing||existing.etag!==item.etag||!existing.folder)throw new Error('test cleanup ETag mismatch');
+  const prefix=[...parts,item.name].join('/')+'/';
+  for(const path of [...this.files.keys()])if(path.startsWith(prefix))this.files.delete(path);
+ }
  async write(parts,name,text,prior,limit,progress){
   const path=this.path(parts,name);this.writes.push(path);
   if(this.failOn && path.includes(this.failOn))throw new Error('test offline');
@@ -125,6 +142,67 @@ async function prepared(){
  const unchanged=new PayrollVault(graph);
  assert.equal(await unchanged.unlock(previous),true);
  console.log('PASS: wrong original passphrase cannot modify any cloud data');
+}
+{
+ const {graph,vault}=await prepared();
+ const before=vault.records()[0],secret=vault.sessionKey();
+ const orphan={...before,id:9876,form:{...before.form,targetMonth:'2027-04',paymentDate:'2027-04-27'}};
+ await graph.write(['payroll','statements'],'2027.enc',await encryptJson('year',{
+  format:'payroll-annual-v1',records:[orphan],deleted:[]
+ },secret.key,secret.salt),null,30_000_000);
+ const beforeWrites=graph.writes.length;
+ await assert.rejects(vault.changePassphrase(previous,changed),/索引未登録.*2027|2027.*索引未登録/);
+ assert.equal(graph.writes.length,beforeWrites,'orphan preflight must abort before a lock or staging writes');
+ assert.deepEqual((await vault.inspectOrphanYears()).map(v=>v.year),['2027']);
+ assert.equal(await vault.recoverOrphanYears(await vault.inspectOrphanYears()),1);
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);
+ assert.deepEqual((await reopened.refresh()).map(v=>v.id).sort((a,b)=>a-b),[151,9876]);
+ assert.ok(graph.files.has(`payroll/versions/${generation}/statements/2027.enc`));
+ console.log('PASS: nonempty orphan blocks key rotation with zero writes; explicit recovery preserves orphan in new generation');
+}
+{
+ const {graph,vault}=await prepared();
+ const previousRecord=vault.records()[0];
+ await vault.remove(previousRecord.id);
+ assert.equal(vault.records().length,0);
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const copied=`payroll/versions/${generation}/originals/2026/11/${previousRecord.originalId}.enc`;
+ assert.ok(graph.files.has(copied),'deleted-record original must migrate to new key generation');
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);
+ assert.equal((await reopened.original(previousRecord)).size,previousRecord.pdfSize);
+ const plan=await reopened.inspectOldEncryptedData();
+ assert.ok(plan.targets.length>0);
+ await reopened.cleanupOldEncryptedData(plan);
+ assert.ok(graph.files.has(copied),'old folder cleanup must retain deleted original in current generation');
+ assert.equal((await reopened.original(previousRecord)).size,previousRecord.pdfSize);
+ console.log('PASS: a deleted statement original survives key rotation AND old encrypted-folder cleanup');
+}
+{
+ const {graph,vault}=await prepared();
+ const prior=vault.records()[0];await vault.remove(prior.id);
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const copied=`payroll/versions/${generation}/originals/2026/11/${prior.originalId}.enc`;
+ graph.files.delete(copied);
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);
+ await assert.rejects(reopened.inspectOldEncryptedData(),/旧保存世代のPDF原本.*現行世代にありません/);
+ assert.ok(graph.files.has(`payroll/originals/2026/11/${prior.originalId}.enc`));
+ console.log('PASS: cleanup refuses preexisting old-only deleted original rather than trashing its only copy');
+}
+{
+ const {graph,vault}=await prepared();
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const secret=vault.sessionKey();
+ // Simulate an old-generation statement created by a previous failed upload.
+ // The current key cannot decrypt that old file; merely recognizing the
+ // unindexed year is enough to stop destructive cleanup.
+ const oldGraph=graph.files.get('payroll/statements/2026.enc');
+ graph.files.set('payroll/statements/2027.enc',{...oldGraph,id:'payroll/statements/2027.enc',etag:'old-orphan-2027'});
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);
+ await assert.rejects(reopened.inspectOldEncryptedData(),/2027\.enc.*現行索引に登録されていません/);
+ assert.ok(graph.files.has('payroll/statements/2027.enc'));
+ assert.ok(generation);
+ console.log('PASS: cleanup blocks an unregistered annual file left in an older generation');
 }
 {
  const code=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');

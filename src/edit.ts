@@ -4,6 +4,7 @@ import { deleteRecord, getRecord, updateRecord, inspectReplacementConflicts, rec
 import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
 import { showInlineError, clearInlineError } from './ui/feedback';
+import {PayrollPartialSuccessError} from './storage/operationError';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -132,8 +133,11 @@ saveButton.addEventListener('click', async () => {
     leavingAfterSave = false;
     saving = false;
     const detail=error instanceof Error?error.message:String(error);
-    if(detail.includes('保存済みですが')){
-      window.alert(`編集内容の保存は完了していますが、一部の連携更新に失敗しました。\n${detail}`);
+    if(error instanceof PayrollPartialSuccessError){
+      const heading=error.stage==='duplicate-cleanup'
+        ? '編集内容は保存済みですが、重複明細の整理が途中までしか完了していません。'
+        : '編集内容は保存済みですが、Finance連携用の収入同期が未完了です。';
+      window.alert(`${heading}\n${detail}`);
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }
     showError(`保存処理を完了できませんでした。再読込して最新の状態を確認してください。\n${detail}`);
@@ -155,7 +159,7 @@ deleteButton.addEventListener('click', async () => {
     leavingAfterSave = false;
     saving = false;
     const detail=error instanceof Error?error.message:String(error);
-    if(detail.includes('削除済みですが')){
+    if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
       window.alert(`給与明細の削除は完了しました。収入連携データの同期だけが未完了です。\n${detail}`);
       leavingAfterSave=true;
       window.location.assign(homeHref);

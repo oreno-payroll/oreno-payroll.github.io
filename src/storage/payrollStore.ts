@@ -2,6 +2,7 @@
 import {payrollPeriodKey,validatePayrollForm} from './payrollValidation';
 import {cloudVault} from '../cloud/auth';
 import type {CloudRecord} from '../cloud/vault';
+import {PayrollPartialSuccessError} from './operationError';
 import {MAX_RECORDS,MAX_PDF_SIZE,MAX_TOTAL_PDF_BYTES} from './storageLimits';
 
 export interface SavedPayrollRecordInput {
@@ -162,7 +163,7 @@ export async function updateRecord(record:SavedPayrollRecord,approvals:Replaceme
  let removed=0;
  for(const other of conflicting){
   try{await vault.remove(other.id);removed++;}
-  catch(error){throw new Error(`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+  catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup',`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
  }
 }
 export async function deleteRecord(id:number,expectedSignature:string):Promise<void> {

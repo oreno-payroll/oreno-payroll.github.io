@@ -19,7 +19,7 @@ class CloudMock {
     const folder=after.includes('/');
     const key=prefix+name;
     const old=children.get(name);
-    if(!old||folder){children.set(name,{id:key,name,etag:'etag-folder-'+key,folder,size:folder?0:this.files.get(key)?.size??0});}
+    if(!old||folder){children.set(name,{id:key,name,etag:folder?'etag-folder-'+key:this.files.get(key)?.etag,folder,size:folder?0:this.files.get(key)?.size??0});}
   }
   return [...children.values()];}
   async listFolder(parts){if(this.changed){this.changed=false;this.files.set('payroll/versions/external-change/extra.txt',{id:'external',etag:'external',size:1,text:'x'});}

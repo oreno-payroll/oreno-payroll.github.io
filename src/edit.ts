@@ -1,3 +1,4 @@
+import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import { deleteRecord, getRecord, updateRecord, inspectReplacementConflicts, recordSignature, type SavedPayrollRecord } from './storage/payrollStore';
@@ -14,6 +15,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const form = $<HTMLFormElement>('review-form');
 const errorView = $<HTMLElement>('edit-error');
 const editor = $<HTMLElement>('editor');
+const appStatus=createAppStatus();
 const status = $<HTMLElement>('edit-status');
 const saveButton = $<HTMLButtonElement>('edit-save');
 const deleteButton = $<HTMLButtonElement>('edit-delete');
@@ -83,6 +85,7 @@ function showState(): void {
   state.textContent = JSON.stringify({ ...metadata, pdf: { size: pdf.size, type: pdf.type } }, null, 2);
 }
 function showError(message: string): void {
+  appStatus.error(message);
   showInlineError(errorView, message);
 }
 form.addEventListener('input', event => {
@@ -109,6 +112,7 @@ saveButton.addEventListener('click', async () => {
   if (checked.errors.length) { showError(checked.errors[0]); return; }
   if (checked.warnings.length && !confirmDiff.checked) return;
   saving = true;
+  appStatus.loading('明細の変更を保存しています…');
   updateUI();
   try {
     const updated: SavedPayrollRecord = {
@@ -127,6 +131,7 @@ saveButton.addEventListener('click', async () => {
       }
     }
     await updateRecord(updated, conflicts, recordSignature(record));
+    appStatus.success('明細の変更を保存しました');
     leavingAfterSave = true;
     window.location.assign(homeHref);
   } catch (error) {
@@ -152,9 +157,11 @@ deleteButton.addEventListener('click', async () => {
   const kind = record.form.kind === 'bonus' ? '賞与' : '給与';
   if (!window.confirm(`保存済み明細を1件削除します。\n\n${job} / ${record.form.targetMonth}分 / ${kind}\nファイル: ${record.fileName}\n\n保存済みの入力情報とFinance連携用の収入情報から除外します。\n暗号化PDF原本はOneDriveに保持されますが、明細一覧からは参照できなくなります。\n編集中の未保存内容も破棄されます。復元には削除前のバックアップなどが必要です。\n\n本当に削除しますか？`)) return;
   saving = true;
+  appStatus.loading('明細を削除しています…');
   updateUI();
   try {
     await deleteRecord(record.id, recordSignature(record));
+    appStatus.success('明細を削除しました');
     leavingAfterSave = true;
     window.location.assign(homeHref);
   } catch (error) {
@@ -177,6 +184,7 @@ window.addEventListener('beforeunload', event => {
   event.returnValue = '';
 });
 window.addEventListener('pagehide', () => { if (url) URL.revokeObjectURL(url); });
+appStatus.loading('保存済み明細を読み込んでいます…');
 void (async () => {
   const id = Number(new URLSearchParams(location.search).get('id'));
   if (!Number.isSafeInteger(id) || id <= 0) { showError('明細IDが不正です。ホームに戻って選び直してください。'); return; }
@@ -184,6 +192,7 @@ void (async () => {
     record = await getRecord(id);
     if (!record) { showError('保存済み明細が見つかりません。'); return; }
     editor.hidden = false;
+    appStatus.success('明細を読み込みました');
     $('record-name').textContent = record.fileName;
     $('record-details').textContent = `ID ${record.id} / 登録日時 ${new Date(record.savedAt).toLocaleString('ja-JP')} / PDF ${record.pdf.size.toLocaleString('ja-JP')} bytes`;
     url = URL.createObjectURL(record.pdf);

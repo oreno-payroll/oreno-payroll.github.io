@@ -1,8 +1,10 @@
+import { createAppStatus } from './ui/appStatus';
 /** PDF原本はクリック時だけ取得する。Chrome内蔵PDFビューアには名前付きURLで渡す。 */
 import { getRecord } from './storage/payrollStore';
 import { receivePdfHandoff } from './pdf/handoff';
 
 const status = document.getElementById('pdf-status');
+const appStatus=createAppStatus(status);
 const reader = document.getElementById('pdf-reader') as HTMLIFrameElement | null;
 let fallbackUrl: string | undefined;
 
@@ -28,9 +30,9 @@ async function start(): Promise<void> {
   // 通常のクリックでは、認証済みのホームタブから検証済みPDFのみを受け取る。
   // 直接URLを開いた場合やBroadcastChannel非対応時は、従来の認証経路へ戻る。
   const ticket = new URLSearchParams((location.hash ?? '').slice(1)).get('handoff');
-  if (ticket) status.textContent = '元のPayrollタブからPDFを受信しています…';
+  if (ticket) appStatus.loading('元のタブからPDFを受信しています…');
   const transferred = ticket ? await receivePdfHandoff(id,ticket,()=>{
-    status.textContent = 'OneDriveからPDF原本を取得・検証しています…';
+    appStatus.loading('PDF原本を取得・検証しています…');
   }) : null;
   if (transferred) {
     // 閲覧用の一時的なチケットをブラウザの履歴に残さない。
@@ -48,13 +50,12 @@ async function start(): Promise<void> {
   fallbackUrl = URL.createObjectURL(record.pdf);
   reader.src = fallbackUrl;
   reader.hidden = false;
-  status.hidden = true;
+  appStatus.success('PDFを表示しました');
 }
 
+appStatus.loading('PDF原本を取得しています…');
 void start().catch(error => {
   if (status) {
-    status.hidden = false;
-    status.textContent = `PDFを表示できませんでした：${error instanceof Error ? error.message : String(error)}`;
-    status.setAttribute('role', 'alert');
+    appStatus.error(`PDFを表示できませんでした：${error instanceof Error ? error.message : String(error)}`);
   }
 });

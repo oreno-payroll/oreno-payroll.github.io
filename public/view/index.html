@@ -1,25 +1,29 @@
 <!doctype html>
 <html lang="ja">
 <head>
+
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+<script src="../theme.js"></script>
   <title>Payroll | PDF原本</title>
   <link rel="icon" type="image/x-icon" href="../favicon.ico">
   <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png">
+  <link rel="stylesheet" href="../styles/style.css">
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; width: 100%; height: 100%; }
-    body { background: #f5f7fb; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", sans-serif; color: #1c2638; }
-    .status { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: 24px; text-align: center; }
+    body { background: var(--color-bg); font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", sans-serif; color: var(--color-text); }
+    .status { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - 54px); min-height: calc(100dvh - 54px); padding: 24px; text-align: center; }
     .status[hidden], .reader[hidden] { display: none; }
-    .reader { display: block; width: 100%; height: 100vh; height: 100dvh; border: 0; background: #eee; }
+    .reader { display: block; width: 100%; height: calc(100vh - 54px); height: calc(100dvh - 54px); border: 0; background: var(--color-bg); }
   </style>
   <script type="module" src="../view.js"></script>
 
-  <link rel="stylesheet" href="../styles/cloud.css"></head>
+  <link rel="stylesheet" href="../styles/cloud.css"><link rel="stylesheet" href="../styles/theme.css"></head>
 <body>
-  <p class="status" id="pdf-status" role="status">保存済みPDF原本を取得しています…</p>
+  <header class="reader-toolbar"><span>PDF原本</span><button type="button" class="theme-toggle" data-theme-toggle aria-label="ダークモードに切り替える" title="ダークモードに切り替える" aria-pressed="false"><svg class="icon theme-icon--moon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.6 8.6 0 1 0 20.2 15.2Z"/></svg><svg class="icon theme-icon--sun" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button><a class="reader-home" href="../index.html" aria-label="ホームへ戻る"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 7-5 5 5 5"/></svg></a></header>
+  <p class="app-status" id="pdf-status" role="status">保存済みPDF原本を取得しています…</p>
   <iframe class="reader" id="pdf-reader" title="給与明細PDF原本" hidden></iframe>
 </body>
 </html>

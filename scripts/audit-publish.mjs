@@ -27,7 +27,7 @@ const required = [
   'scripts/test-audit-fixes.mjs',
 ];
 const allowed = (file) => [
-  '.gitignore', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json',
+  '.gitignore', '.gitleaksignore', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json',
   '.github/workflows/deploy.yml',
 ].includes(file)
   || /^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.tsx?$/.test(file)
@@ -112,4 +112,11 @@ if (problems.length) {
   process.exitCode = 1;
 } else {
   console.log(`[公開前監査] OK: Git管理${tracked.length}ファイル${installCheck ? `・適用前vendor ${untrackedVendor.length}件` : ''}。必要なPDF閲覧ファイルが揃い、禁止ファイル・主要な秘密情報パターンは検出されませんでした。`);
+}
+
+// Additional deep audit, opt-in so legacy Git author findings are not silently suppressed.
+if (process.argv.includes('--privacy')) {
+  const {spawnSync}=await import('node:child_process');
+  const scan=spawnSync(process.execPath,['scripts/audit-private-data.mjs',...(staged?['--staged']:['--working']),'--strict-gitleaks'],{cwd:root,stdio:'inherit'});
+  if(scan.status!==0)process.exitCode=1;
 }

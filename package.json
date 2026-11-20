@@ -8,7 +8,8 @@
     "dev": "npm run check && node scripts/build.mjs --watch",
     "preview": "python3 -m http.server 5173 --directory dist",
     "clean:legacy": "node scripts/cleanup-legacy.mjs",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "audit:privacy": "node scripts/audit-private-data.mjs"
   },
   "keywords": [],
   "author": "",

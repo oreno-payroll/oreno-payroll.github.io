@@ -1,0 +1,4 @@
+# Specific MSAL vendor bundle finding from the already-reviewed historical commit.
+# File content SHA-256: c67b25140e021f60b83f8c0201d6f1ec9d2f4ac63f7b29f59cafbe67588a0a8c
+# Do not ignore the whole vendor directory or the generic-api-key rule.
+22cfe36a2ba9446396c98f016a84a8ca472fe3e5:public/vendor/msal/msal-browser.bundle.js:generic-api-key:1

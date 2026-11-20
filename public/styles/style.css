@@ -219,3 +219,14 @@ h1, h2, h3 { line-height: 1.35; letter-spacing: -.025em; }
   .site-header .header-back{min-height:40px;padding:9px 10px;gap:5px}
   .site-header .header-back span{display:inline}
 }
+
+/* Shared operation status, identical on Home / Upload / View / Edit / Settings / Year-end. */
+.app-status{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));z-index:150;display:flex;align-items:center;gap:11px;box-sizing:border-box;min-width:0;width:max-content;max-width:min(380px,calc(100vw - 28px - env(safe-area-inset-left) - env(safe-area-inset-right)));max-height:calc(100vh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom));max-height:min(240px,calc(100dvh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));padding:14px 17px;border:1px solid var(--color-border);border-radius:15px;background:#fff;color:var(--color-text);box-shadow:0 12px 36px rgba(26,42,78,.18),0 2px 6px rgba(26,42,78,.07);font-size:13px;font-weight:750;line-height:1.5;white-space:normal;overflow-wrap:anywhere;word-break:break-word;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;pointer-events:none}
+.app-status[hidden]{display:none!important}
+.app-status::before{content:'✓';display:grid;place-items:center;flex:none;width:20px;height:20px;border-radius:50%;font-size:12px;background:#e6f6f0;color:var(--color-success)}
+.app-status[data-state="loading"]::before{content:'';width:16px;height:16px;border:2px solid #c4d5f5;border-top-color:var(--color-primary);border-radius:50%;background:transparent;animation:app-status-spin .85s linear infinite}
+.app-status[data-state="error"]{color:var(--color-danger);pointer-events:auto}
+.app-status[data-state="error"]::before{content:'!';color:var(--color-danger);background:#fff0f2;font-weight:850}
+@keyframes app-status-spin{to{transform:rotate(360deg)}}
+@media (max-width:680px){.app-status{right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));max-width:min(380px,calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));padding:12px 14px}}
+@media (prefers-reduced-motion:reduce){.app-status[data-state="loading"]::before{animation:none}}

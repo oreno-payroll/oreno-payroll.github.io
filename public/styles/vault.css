@@ -47,7 +47,7 @@
 }
 
 /* 設定: バックアップ / 認証 / 旧データ移行の3区分。 */
-.settings-page { max-width: 1050px; padding-top: 26px; }
+.settings-page { max-width: none; width: 100%; padding-top: 26px; }
 .settings-page .vault-heading { margin-bottom: 19px; }
 .settings-page .vault-heading h1 { font-size: clamp(24px, 3vw, 29px); font-weight: 800; }
 .settings-group { min-width: 0; }
@@ -77,7 +77,7 @@
 .settings-page .vault-file-input { width: 100%; min-width: 0; min-height: 43px; margin: 0; padding: 7px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 9px; font-size: 12px; }
 .settings-page .vault-file-input::file-selector-button { border: 1px solid var(--color-border); border-radius: 7px; padding: 6px 9px; margin-right: 9px; background: var(--color-bg); color: var(--color-text); font-weight: 650; cursor: pointer; }
 .settings-page .backup-verify { align-self: flex-start; }
-.settings-page .backup-card__footer { display: grid; gap: 11px; border-top: 1px solid var(--color-border); margin-top: auto; padding-top: 14px; }
+.settings-page .backup-card__footer { display: grid; gap: 11px; margin-top: auto; padding-top: 14px; }
 .settings-page .backup-card__footer > .btn { width: 100%; white-space: normal; }
 .settings-page .backup-footnote, .settings-page .settings-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--color-muted); }
 .settings-page .backup-restore-warning { margin: 0; font-size: 12px; font-weight: 700; color: var(--color-danger); line-height: 1.5; }
@@ -157,51 +157,83 @@
 .settings-page #cloud-cleanup-delete { margin-top: 8px; }
 @media (max-width: 480px) { .settings-page .settings-cleanup .btn { width: 100%; } }
 
-/* 年度復旧カードもFinance給与連携カードと同じ余白・行間・操作配置にする。 */
-.settings-page .settings-orphan-recovery {
+/* 詳細設定: 既存の設定カードと同じ「見出し → 説明 → 操作」構成。 */
+.settings-page .settings-details-grid {
   display: grid;
-  justify-items: stretch;
-  align-content: start;
-  gap: 19px;
-  padding: 28px 30px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  overflow: hidden;
+  box-shadow: none;
 }
-.settings-page .settings-orphan-recovery .settings-action-row { width: 100%; }
-.settings-page .settings-orphan-recovery .settings-note {
-  width: 100%;
+.settings-page .settings-details-column {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 13px;
+  min-width: 0;
+  padding: 22px 24px;
+}
+.settings-page .settings-details-column + .settings-details-column {
+  border-left: 1px solid var(--color-border);
+}
+.settings-page .settings-details-column h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 780;
+  line-height: 1.5;
+}
+.settings-page .settings-details-column .settings-note,
+.settings-page .settings-details-column .settings-legacy-caption {
+  margin: 0;
+  flex: none;
+  min-height: 5.4em;
+  color: var(--color-muted);
   font-size: 12px;
   line-height: 1.8;
 }
-.settings-page .settings-orphan-recovery .vault-status { margin: 0; }
-@media (max-width: 480px) {
-  .settings-page .settings-orphan-recovery { padding: 21px 18px; gap: 16px; }
-  .settings-page .settings-orphan-recovery .settings-action-row > .btn { width: 100%; }
-}
-
-/* Finance収入連携: 単独カードを追加せず、既存の設定パネルと同じ余白体系に揃える。 */
-.settings-page .settings-finance-income {
+.settings-page .settings-details-column .settings-action-row,
+.settings-page .settings-details-column .settings-legacy-actions {
   display: grid;
-  justify-items: stretch;
-  align-content: start;
-  gap: 19px;
-  padding: 28px 30px;
-}
-.settings-page .settings-finance-income .settings-action-row { width: 100%; }
-.settings-page .settings-finance-income .settings-note {
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  gap: 8px;
   width: 100%;
-  font-size: 12px;
-  line-height: 1.8;
+  margin: 0;
 }
-.settings-page .settings-finance-income .vault-status { margin: 0; }
-@media (max-width: 480px) {
-  .settings-page .settings-finance-income { padding: 21px 18px; gap: 16px; }
-  .settings-page .settings-finance-income .settings-action-row > .btn { width: 100%; }
+.settings-page .settings-details-column .settings-action-row > .btn,
+.settings-page .settings-details-column .settings-legacy-actions > .btn {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 10px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.45;
 }
-
-@media (max-width: 700px) {
-  .settings-page .backup-legacy .settings-legacy-caption { flex-basis: 100%; }
-  .settings-page .settings-legacy-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+/* Keep the legacy action DOM order stable for existing code/tests; destructive control displays last. */
+.settings-page .settings-details-column #legacy-cleanup-check { order: 1; }
+.settings-page .settings-details-column #migrate-legacy-cloud { order: 2; }
+.settings-page .settings-details-column #legacy-cleanup-delete { order: 3; }
+.settings-page .settings-details-column .settings-inline-panel {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 13px;
 }
-@media (max-width: 480px) {
-  .settings-page .settings-legacy-actions { flex-direction: column; align-items: stretch; }
-  .settings-page .settings-legacy-actions > .btn { width: 100%; }
+.settings-page .settings-details-column .vault-status {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 850px) {
+  .settings-page .settings-details-grid { grid-template-columns: minmax(0, 1fr); }
+  .settings-page .settings-details-column { padding: 20px; }
+  .settings-page .settings-details-column + .settings-details-column {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+  }
+  .settings-page .settings-details-column .settings-note,
+  .settings-page .settings-details-column .settings-legacy-caption { min-height: 0; }
 }

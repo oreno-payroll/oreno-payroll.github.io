@@ -1,6 +1,7 @@
+import { createAppStatus } from './ui/appStatus';
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
 import type {OrphanAnnualYear} from './cloud/vault';
-import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
+import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, verifyLegacyIndexedDbCloudBeforeDelete, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
 import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
@@ -49,8 +50,46 @@ let initialSnapshot: string[] | undefined;
 let busy = false;
 let loadedDb = false;
 let encryptedFile = false;
+const appStatus=createAppStatus();
+type Operation = {label:string;result:string};
+let currentOperation: Operation|null=null;
+let wasBusy=false;
+const operations: Record<string,Operation>={
+ 'export-button':{label:'バックアップを作成',result:'backup-status'},
+ 'verify-button':{label:'バックアップを検証',result:'backup-status'},
+ 'restore-button':{label:'バックアップを復元',result:'backup-status'},
+ 'change-passphrase-button':{label:'パスフレーズを変更',result:'change-passphrase-status'},
+ 'cloud-cleanup-check':{label:'旧暗号データを確認',result:'cloud-cleanup-status'},
+ 'cloud-cleanup-delete':{label:'旧暗号データを整理',result:'cloud-cleanup-status'},
+ 'orphan-year-check':{label:'年度データを検査',result:'orphan-year-status'},
+ 'orphan-year-recover':{label:'年度データを復旧',result:'orphan-year-status'},
+ 'payroll-income-publish':{label:'Finance連携を更新',result:'payroll-income-publish-status'},
+ 'migrate-legacy-cloud':{label:'旧データを移行',result:'migrate-legacy-cloud-status'},
+ 'legacy-cleanup-check':{label:'旧DBを検査',result:'legacy-cleanup-status'},
+ 'legacy-cleanup-delete':{label:'旧DBを削除',result:'legacy-cleanup-status'},
+ 'backup-cloud-load':{label:'OneDriveの明細を取得',result:'backup-status'},
+};
+document.addEventListener('click',event=>{
+ const target=event.target;
+ if(!(target instanceof Element))return;
+ const button=target.closest<HTMLButtonElement>('button[id]');
+ if(button&&!button.disabled&&operations[button.id])currentOperation=operations[button.id];
+},true);
+function reportStatusTransition(){
+ if(busy&&!wasBusy)appStatus.loading(`${currentOperation?.label??'設定を処理'}しています…`);
+ if(!busy&&wasBusy){
+  const operation=currentOperation;
+  const message=operation?document.getElementById(operation.result)?.textContent?.trim()??'':'';
+  if(/失敗|できません|中断|停止|エラー|未完了|問題|不正/.test(message))appStatus.error(message.slice(0,240));
+  else appStatus.success(`${operation?.label??'設定の処理'}が完了しました`);
+  currentOperation=null;
+ }
+ wasBusy=busy;
+}
+
 const sizes = (n: number) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`;
 function updateButtons(): void {
+  reportStatusTransition();
   orphanCheck.disabled=busy;orphanRecover.disabled=busy||!orphanYears?.length;
   exportButton.disabled = busy || !loadedDb;
   cloudLoad.disabled=busy;
@@ -68,6 +107,9 @@ function updateButtons(): void {
 function info(message: string, isError = false): void {
   status.textContent = message;
   status.style.color = isError ? 'var(--color-danger)' : 'var(--color-success)';
+  if(isError)appStatus.error(message);
+  else if(busy)appStatus.loading(message);
+  else if(message)appStatus.success(message);
 }
 function resetPreview(): void {
   preview = undefined;
@@ -224,6 +266,7 @@ cloudLoad.addEventListener('click',()=>{void(async()=>{
   info(error instanceof Error?error.message:String(error),true);
  }finally{cloudLoad.disabled=false;updateButtons();}
 })()});
+appStatus.loading('設定を確認しています…');
 void(async()=>{
  let legacyExists=false;
  try{legacyExists=(await inspectLegacyIndexedDb()).exists;}
@@ -234,9 +277,9 @@ void(async()=>{
   updateButtons();
  }
  const connected=await refreshCloudSettings();
- if(legacyExists)return;
- if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';return;}
- await refreshCount();updateButtons();
+ if(legacyExists){appStatus.clear();return;}
+ if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';appStatus.clear();return;}
+ await refreshCount();updateButtons();appStatus.success('設定を読み込みました');
 })().catch(error=>{
  exportSummary.textContent='保存済みデータを確認できませんでした。';
  info(error instanceof Error?error.message:'OneDriveのデータを取得できませんでした。',true);
@@ -365,13 +408,13 @@ cloudDelete.addEventListener('click',()=>{void(async()=>{
  }catch(error){cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
-// 旧DBの検査は任意。削除ボタンは検査・OneDriveサインイン前でも押せる。
+// 旧DBは任意検査可能。削除時はOneDriveの全件照合に成功した場合のみ実行する。
 localCheck.addEventListener('click',()=>{void(async()=>{
  if(busy)return;busy=true;updateButtons();
  localStatus.textContent='この端末の旧IndexedDBを確認しています…';
  try{
   const result=await inspectLegacyIndexedDb();
-  localStatus.textContent=result.exists?`旧IndexedDB：${result.count}件。OneDriveとの照合なしで、この端末から削除できます。`:'この端末に旧IndexedDBはありません。';
+  localStatus.textContent=result.exists?`旧IndexedDB：${result.count}件。削除前にOneDriveの全明細・PDF原本を照合します。`:'この端末に旧IndexedDBはありません。';
  }catch(error){localStatus.textContent=`旧DBを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
@@ -381,7 +424,8 @@ localDelete.addEventListener('click',()=>{void(async()=>{
   // 誤って空の新規DBを作らず、既存の旧DBだけを列挙する。
   const result=await inspectLegacyIndexedDb();
   if(!result.exists){localStatus.textContent='この端末に旧IndexedDBはありません。';return;}
-  if(!window.confirm(`この端末の旧IndexedDB（${result.count}件）を削除します。\nOneDriveとの照合は行いません。未移行の明細があれば失われ、元に戻せません。\nバックアップを確認したうえで削除しますか？`))return;
+  if(!window.confirm(`この端末の旧IndexedDB（${result.count}件）を削除します。\n削除前にOneDriveへの移行済みデータとPDF原本をすべて照合します。一致しない場合は削除しません。\nバックアップを確認したうえで削除しますか？`))return;
+  await verifyLegacyIndexedDbCloudBeforeDelete(result.count,text=>{localStatus.textContent=text;});
   const deleted=await deleteLegacyIndexedDb(result.count,text=>{localStatus.textContent=text;});
   localStatus.textContent=`この端末の旧IndexedDBを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;
  }catch(error){localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}

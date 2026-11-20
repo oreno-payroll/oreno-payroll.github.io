@@ -1,3 +1,4 @@
+import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
@@ -20,6 +21,7 @@ function required<T extends HTMLElement>(selector: string): T {
   if (!node) throw new Error(`必要な画面要素が見つかりません: ${selector}`);
   return node;
 }
+const appStatus=createAppStatus();
 const yearSelect = required<HTMLSelectElement>('#fiscal-year');
 const fiscalModeButton = required<HTMLButtonElement>('#mode-fiscal');
 const calendarModeButton = required<HTMLButtonElement>('#mode-calendar');
@@ -79,6 +81,7 @@ sideZipButton.addEventListener('click', async () => {
   const side = selectedPeriodRecords().filter(item => item.form.job === 'side');
   if (!side.length) return;
   exportingSideZip = true;
+  appStatus.loading('副業PDFをまとめています…');
   sideZipButton.disabled = true;
   sideZipStatus.textContent = `${side.length}件のPDFをZIPにまとめています…`;
   sideZipStatus.removeAttribute('role');
@@ -87,6 +90,7 @@ sideZipButton.addEventListener('click', async () => {
     const originals: SavedPayrollRecord[] = [];
     for (const [index, item] of side.entries()) {
       sideZipStatus.textContent = `副業PDFを取得中… ${index + 1} / ${side.length}件（${exportMode === 'calendar' ? '暦年' : '年度'} ${exportYear}）`;
+      appStatus.loading(`PDF原本を取得中 ${index+1}/${side.length}件`);
       const full = await getRecord(item.id);
       if (!full || recordSignature(full) !== recordSignature(item)) {
         throw new Error('保存済み明細が変更されました。画面を更新してから再実行してください。');
@@ -103,8 +107,10 @@ sideZipButton.addEventListener('click', async () => {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     sideZipStatus.textContent = `副業PDF ${side.length}件（${exportYear}）のZIPを作成しました。ダウンロード先を確認してください。`;
+    appStatus.success(`副業PDF ${side.length}件のZIPを作成しました`);
   } catch (error) {
     sideZipStatus.textContent = `副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`;
+    appStatus.error(sideZipStatus.textContent);
     sideZipStatus.setAttribute('role', 'alert');
   } finally {
     exportingSideZip = false;
@@ -258,7 +264,11 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     list.append(li);
     return;
   }
-  const ordered = [...records].sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate));
+  // Keep slips in month order without adding redundant month headings.
+  const monthKey = (record: SavedPayrollSummary):string =>
+    periodMode==='calendar' ? record.form.paymentDate.slice(0,7) : record.form.targetMonth;
+  const ordered = [...records].sort((a, b) =>
+    monthKey(b).localeCompare(monthKey(a)) || b.form.paymentDate.localeCompare(a.form.paymentDate));
   for (const record of ordered.slice(0, visibleCounts[job])) {
     const item = document.createElement('li');
     item.className = 'statement-item';
@@ -269,7 +279,7 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     const link = document.createElement('a');
     link.className = 'statement-link';
     link.textContent = record.fileName;
-    link.title = '原本PDFを別タブで開く';
+    link.title = record.fileName;
     // 元タブの認証済み保管庫で原本を取得し、閲覧タブへPDF Blobだけ渡す。
     // 右クリックでURLを開いた場合などは、従来の閲覧ページへフォールバック。
     link.href = `./view/index.html?id=${encodeURIComponent(String(record.id))}`;
@@ -281,12 +291,19 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     }));
     link.addEventListener('click', event => { if (!event.defaultPrevented) handoffPdf(); });
     link.addEventListener('auxclick', event => { if (event.button === 1 && !event.defaultPrevented) handoffPdf(); });
-    const caption = document.createElement('span');
-    caption.className = 'statement-item__meta';
-    const gross = amountOrMissing(record.form.gross);
-    const net = amountOrMissing(record.form.net);
-    caption.textContent = `${record.form.targetMonth}分 / ${record.form.paymentDate} 支給 / ${record.form.kind === 'bonus' ? '賞与' : '給与'} / 総支給 ${gross === null ? '--' : yen(gross)} / 手取り ${net === null ? '--' : yen(net)}`;
-    detail.append(link, caption);
+    // The PDF name already conveys its period/type. Keep only useful figures below it.
+    const amounts = document.createElement('span');
+    amounts.className = 'statement-item__amounts';
+    for (const [label, value] of [
+      ['総支給', record.form.gross],
+      ['手取り', record.form.net],
+    ] as const) {
+      const amount = document.createElement('span');
+      const figure = amountOrMissing(value);
+      amount.textContent = `${label} ${figure === null ? '--' : yen(figure)}`;
+      amounts.append(amount);
+    }
+    detail.append(link, amounts);
     left.append(detail);
     const actions = document.createElement('div');
     actions.className = 'statement-item__actions';
@@ -299,6 +316,7 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     download.addEventListener('click', async () => {
       if (download.disabled) return;
       download.disabled = true;
+      appStatus.loading('PDF原本を取得しています…');
       try {
         const full = await getRecord(record.id);
         if (!full || recordSignature(full) !== recordSignature(record)) {
@@ -312,8 +330,9 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
         anchor.click();
         anchor.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        appStatus.success('PDFのダウンロードを開始しました');
       } catch (error) {
-        window.alert(`PDFのダウンロードに失敗しました。\n${error instanceof Error ? error.message : String(error)}`);
+        appStatus.error(`PDFのダウンロードに失敗しました：${error instanceof Error ? error.message : String(error)}`);
       } finally { download.disabled = false; }
     });
     const edit = document.createElement('a');
@@ -337,9 +356,12 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
       if (!window.confirm(message)) return;
       deletingRecordIds.add(record.id);
       remove.disabled = true;
+      appStatus.loading('明細を削除しています…');
       try {
         await deleteRecord(record.id, recordSignature(record));
+        appStatus.success('明細を削除しました');
       } catch (error) {
+        appStatus.error(error instanceof Error?error.message:String(error));
         if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync')
           window.alert(`明細の削除は完了していますが、Finance連携の収入同期が未完了です。\n${error.message}`);
         else window.alert(`削除処理を完了できませんでした。\n${error instanceof Error ? error.message : String(error)}`);
@@ -422,6 +444,7 @@ let dashboardLoading=false;
 async function refreshDashboard(forceFresh=false): Promise<void> {
   if(dashboardLoading)return;
   dashboardLoading=true;
+  appStatus.loading('明細データを読み込んでいます…');
   const refreshButton=document.querySelector<HTMLButtonElement>('#payroll-refresh-data');
   if(refreshButton)refreshButton.disabled=true;
   const preferred=initialYear??currentPeriodYear();
@@ -434,7 +457,7 @@ async function refreshDashboard(forceFresh=false): Promise<void> {
     saved = await loadRecordSummaries({
       forceFresh,
       priorityYears:[String(preferred),String(preferred-1)],
-      onProgress:message=>{periodLabel.textContent=message;},
+      onProgress:message=>{periodLabel.textContent=message;appStatus.loading(message);},
     });
     yearSelect.disabled = false;
     bonusToggle.disabled = false;
@@ -447,8 +470,10 @@ async function refreshDashboard(forceFresh=false): Promise<void> {
     const cache=await summaryCacheInfo();dashboardValidUntil=cache.deadline;
     const indicator=document.getElementById('payroll-data-freshness');
     if(indicator)indicator.textContent=cache.cached?'短時間の暗号化キャッシュを表示中':'OneDrive確認済み';
+    appStatus.success('明細データを読み込みました');
   } catch (error) {
     console.error('保存済み明細を読み込めませんでした。', error);
+    appStatus.error(`明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);
     periodLabel.textContent = `保存済み明細の読み込みに失敗しました。OneDriveへの接続と暗号化保管庫をご確認ください。${error instanceof Error ? ` (${error.message})` : ''}`;
     periodLabel.setAttribute('role', 'alert');
     periodLabel.style.color = 'var(--color-danger)';

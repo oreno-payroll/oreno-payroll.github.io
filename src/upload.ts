@@ -1,3 +1,4 @@
+import { createAppStatus } from "./ui/appStatus";
 /**
  * 明細アップロード画面。
  * - PDFをブラウザ内だけで読み取り、ページ数・テキスト取得可否を検証
@@ -73,12 +74,16 @@ const progressWrap = $<HTMLDivElement>("progress-wrap");
 const progressFill = $<HTMLDivElement>("progress-fill");
 const progressText = $<HTMLSpanElement>("progress-text");
 const toast = $<HTMLDivElement>("toast");
+const appStatus=createAppStatus(toast);
 const diagnosticButton = $<HTMLButtonElement>("diagnostic-button");
 const diagnosticDialog = $<HTMLDialogElement>("diagnostic-dialog");
 const diagnosticClose = $<HTMLButtonElement>("diagnostic-close");
 const diagnosticShared = $<HTMLTextAreaElement>("diagnostic-shared");
 const diagnosticCopy = $<HTMLButtonElement>("diagnostic-copy");
 const diagnosticRedact = $<HTMLButtonElement>("diagnostic-redact");
+const diagnosticViewOriginal = $<HTMLButtonElement>("diagnostic-view-original");
+const diagnosticCopyOriginal = $<HTMLButtonElement>("diagnostic-copy-original");
+let diagnosticRawText = "";
 const diagnosticState = $<HTMLParagraphElement>("diagnostic-state");
 const analysisIssues = $<HTMLElement>("analysis-issues");
 const analysisIssuesList = $<HTMLUListElement>("analysis-issues-list");
@@ -100,6 +105,7 @@ let nextId = 1;
 let reading = false;
 let saving = false;
 let leavingAfterSave = false;
+let wasParsing=false;
 let saveTick:ReturnType<typeof setInterval>|undefined;
 let saveStartedAt=0;
 let lastSaveUpdateAt=0;
@@ -114,6 +120,7 @@ function updateSaveClock():void {
  if(saving&&waiting>=20)saveGuidance.textContent='通信応答を待っています。保存中は画面を移動せず、追加アップロードもしないでください。';
 }
 function beginSaveFeedback():void {
+ appStatus.loading('明細を保存しています…');
  saveFeedback.hidden=false;saveFeedback.classList.remove('is-failed','is-complete');
  saveStartedAt=Date.now();lastSaveUpdateAt=saveStartedAt;lastSaveMessage='';
  saveStage.textContent='保存の準備中';
@@ -135,6 +142,7 @@ function showSaveProgress(message:string):void {
   message.includes('クラウドへ保存しました')?'明細の保存完了':
   message.includes('接続')?'OneDriveへ接続中':'保存結果を確認中';
  saveStage.textContent=`${match?`${match[1]} / ${match[2]}件 · `:''}${phase}`;
+ appStatus.loading(saveStage.textContent);
  if(pct){
   const n=Math.min(100,Math.max(0,Number(pct[1])));
   saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width=`${n}%`;
@@ -147,13 +155,9 @@ function showSaveProgress(message:string):void {
  saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。完了後、自動的にホームへ戻ります。';
  updateSaveClock();
 }
-let toastTimeout: ReturnType<typeof setTimeout> | undefined;
-
 function notice(message: string): void {
-  if (toastTimeout) clearTimeout(toastTimeout);
-  toast.textContent = message;
-  toast.hidden = false;
-  toastTimeout = setTimeout(() => { toast.hidden = true; }, 4500);
+  if (/失敗|できません|エラー|要確認|確認してください|追加できません/.test(message)) appStatus.error(message);
+  else appStatus.success(message);
 }
 function makeForm(): FormValues {
   return Object.fromEntries(FIELDS.map(key => [key, ""])) as FormValues;
@@ -255,6 +259,9 @@ function renderFileList(): void {
   $("file-count").textContent = `${entries.length}件`;
   const completed = entries.filter(entry => entry.status !== "queued" && entry.status !== "reading").length;
   const active = entries.some(entry => entry.status === "queued" || entry.status === "reading");
+  if(active&&!wasParsing)appStatus.loading('PDFを解析しています…');
+  if(!active&&wasParsing)appStatus.success('PDFの解析が完了しました');
+  wasParsing=active;
   $("file-summary").textContent = !hasFiles ? "取り込み待ち" : active ? `${completed} / ${entries.length} 件の読み取りが完了` : `${entries.length}件の確認が可能です（未保存）`;
   progressWrap.hidden = !active;
   const parsing = entries.find(entry => entry.status === "reading");
@@ -829,6 +836,7 @@ saveButton.addEventListener("click", async () => {
       saveStatus.textContent = `${result.saved}件をOneDriveへ保存・検証しました。${skipped?`重複${skipped}件は保存していません。`:''}`;
       saveGuidance.textContent='保存完了を確認しました。ホームへ戻ります。';
       saveButtonLabel.textContent = '保存完了';
+      appStatus.success(`${result.saved}件の明細を保存しました`);
     } else {
       stopSaveClock();
       saveFeedback.classList.add('is-complete');
@@ -838,6 +846,7 @@ saveButton.addEventListener("click", async () => {
       saveStatus.textContent=`重複${skipped}件を除外しました。新しい保存は行っていません。`;
       saveGuidance.textContent='重複を確認しました。ホームへ戻ります。';
       saveButtonLabel.textContent='重複確認済み';
+      appStatus.success('重複を確認しました');
     }
     // 保存成功・重複のみの両方で帰還。エラーの場合は catch で画面を保持。
     leavingAfterSave = true;
@@ -852,7 +861,7 @@ saveButton.addEventListener("click", async () => {
     saving = false;
     updateSaveState();
     showInlineError(saveStatus, `保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
-    notice('保存に失敗しました。画面下部のエラーをご確認ください。');
+    appStatus.error(`保存できませんでした：${error instanceof Error?error.message:String(error)}`);
   }
 });
 
@@ -860,18 +869,24 @@ saveButton.addEventListener("click", async () => {
 diagnosticButton.addEventListener("click", async () => {
   const entry = selectedEntry();
   if (!entry) return;
+  diagnosticRawText = "";
   diagnosticShared.value = "";
   diagnosticState.textContent = "PDFの文字と座標を解析しています…";
   diagnosticCopy.disabled = true;
   diagnosticRedact.disabled = true;
+  diagnosticViewOriginal.disabled = true;
+  diagnosticCopyOriginal.disabled = true;
   diagnosticButton.disabled = true;
   diagnosticDialog.showModal();
   try {
     const diagnostic = await createCoordinateDiagnostic(entry.file);
-    diagnosticShared.value = diagnostic.raw;
-    diagnosticState.textContent = `${diagnostic.pageCount}ページのPDFから、${diagnostic.itemCount}件の座標付き文字を抽出しました。チャットに貼る前に氏名・会社名・金額などを手動で伏せてください。`;
+    diagnosticRawText = diagnostic.raw;
+    diagnosticShared.value = redactCoordinateDiagnostic(diagnostic.raw);
+    diagnosticState.textContent = `${diagnostic.pageCount}ページのPDFから、${diagnostic.itemCount}件を抽出。共有用の原文はすべてマスク済みです。`;
     diagnosticCopy.disabled = false;
-    diagnosticRedact.disabled = false;
+    diagnosticRedact.disabled = true;
+    diagnosticViewOriginal.disabled = false;
+    diagnosticCopyOriginal.disabled = false;
   } catch {
     diagnosticState.textContent = "座標診断に失敗しました。画像だけのPDFや保護されたPDFは解析できない場合があります。";
   } finally {
@@ -880,24 +895,50 @@ diagnosticButton.addEventListener("click", async () => {
 });
 diagnosticRedact.addEventListener("click", () => {
   if (diagnosticRedact.disabled) return;
-  diagnosticShared.value = redactCoordinateDiagnostic(diagnosticShared.value);
+  diagnosticShared.value = redactCoordinateDiagnostic(diagnosticRawText);
   diagnosticRedact.disabled = true;
   diagnosticState.textContent = "座標と文字番号を残し、すべての文字を伏せました。内容を確認してからコピーしてください。原文は診断を開き直すと再取得できます。";
 });
 
 diagnosticCopy.addEventListener("click", async () => {
-  const text = diagnosticShared.value.trim();
-  if (!text) return;
+  if (!diagnosticRawText) return;
+  // A user can edit/reveal the textbox. The SHARE action never trusts that content.
+  const safe = redactCoordinateDiagnostic(diagnosticRawText);
   try {
-    await navigator.clipboard.writeText(text);
-    diagnosticState.textContent = "テキストをコピーしました。チャットへ貼る前に個人情報や実際の金額を伏せたか確認してください。";
+    await navigator.clipboard.writeText(safe);
+    diagnosticState.textContent = "共有用に全文マスク済みの座標診断だけをコピーしました。";
   } catch {
+    diagnosticShared.value = safe;
     diagnosticShared.focus();
     diagnosticShared.select();
-    diagnosticState.textContent = "自動コピーできませんでした。選択状態にしたので、Command + C でコピーしてください。";
+    diagnosticRedact.disabled = true;
+    diagnosticState.textContent = "自動コピーできませんでした。マスク済みテキストを選択しました。";
+  }
+});
+diagnosticViewOriginal.addEventListener("click", () => {
+  if (!diagnosticRawText || !window.confirm("原文には氏名・勤務先・給与額・口座情報などが含まれます。この端末の画面に表示しますか？")) return;
+  diagnosticShared.value = diagnosticRawText;
+  diagnosticRedact.disabled = false;
+  diagnosticState.textContent = "原文をローカル表示中です。共有用コピーは引き続き自動マスクします。";
+});
+diagnosticCopyOriginal.addEventListener("click", async () => {
+  if (!diagnosticRawText || !window.confirm("個人情報を含むPDF診断の原文をコピーします。原文のコピーには明示的な確認が必要です。貼り付け先に注意してください。続けますか？")) return;
+  try {
+    await navigator.clipboard.writeText(diagnosticRawText);
+    diagnosticState.textContent = "確認済みの原文をコピーしました。共有先を再確認してください。";
+  } catch {
+    diagnosticState.textContent = "原文の自動コピーに失敗しました。安全のため、原文の自動選択は行いません。";
   }
 });
 diagnosticClose.addEventListener("click", () => diagnosticDialog.close());
+diagnosticDialog.addEventListener("close", () => {
+  diagnosticRawText = "";
+  diagnosticShared.value = "";
+  diagnosticCopy.disabled = true;
+  diagnosticViewOriginal.disabled = true;
+  diagnosticCopyOriginal.disabled = true;
+  diagnosticRedact.disabled = true;
+});
 diagnosticDialog.addEventListener("click", event => {
   if (event.target === diagnosticDialog) diagnosticDialog.close();
 });

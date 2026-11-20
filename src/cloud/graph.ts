@@ -228,6 +228,18 @@ export class PayrollGraph {
     }
     throw new Error('OneDriveのフォルダー一覧が大きすぎます。');
   }
+  /** After a verified year-end document replacement, trash only its orphaned encrypted original. */
+  async trashFile(parts:string[],item:CloudFolderItem):Promise<void> {
+    if(item.folder||parts.length<5||parts.at(-1)!=='originals'||parts.at(-3)!=='persons'||
+       !/^[0-9a-f-]{36}\.enc$/i.test(item.name))
+      throw new Error('年末調整の原本暗号ファイル以外は整理できません。');
+    const latest=(await this.listFolder(parts))?.find(x=>x.name===item.name);
+    if(!latest||latest.folder||latest.id!==item.id||latest.etag!==item.etag)
+      throw new Error('整理対象が更新されました。古い原本の削除を中断しました。');
+    await this.request(`/me/drive/items/${encodeURIComponent(item.id)}`,{
+      method:'DELETE',headers:{'If-Match':item.etag},
+    });
+  }
   /** 対象の親パス・名前・ID・ETagが一致した場合のみ、ごみ箱へ移動する。 */
   async trashFolder(parts:string[],item:CloudFolderItem):Promise<void> {
     if(!item.folder)throw new Error('フォルダー以外は一括整理できません。');

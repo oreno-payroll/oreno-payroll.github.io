@@ -3,7 +3,6 @@
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 23px; }
 .eyebrow, .section-kicker { margin: 0 0 5px; color: var(--color-primary); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
 .page-heading h1 { margin: 0; font-size: clamp(22px, 3vw, 27px); font-weight: 800; }
-.page-heading__description { margin: 7px 0 0; color: var(--color-muted); font-size: 13px; }
 
 .total-card { overflow: hidden; margin-bottom: 18px; }
 .total-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 26px 30px 0; }
@@ -50,8 +49,6 @@
 .job-card__footer { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-top: 19px; border-top: 1px solid var(--color-border); }
 .job-card__footer span { font-size: 13px; font-weight: 700; }
 .job-card__footer strong { font-size: 23px; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
-.job-card__supplement { display: flex; justify-content: space-between; gap: 12px; margin-top: 14px; color: var(--color-muted); font-size: 11px; }
-.job-card__supplement strong { color: var(--color-text); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .statements-card { padding: 28px 30px 24px; }
 .statements-card__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
@@ -66,13 +63,16 @@
 .statement-list { display: flex; flex-direction: column; gap: 2px; min-height: 72px; margin: 0; padding: 0; list-style: none; }
 .statement-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #eef1f6; padding: 8px 0; }
 .statement-item:last-child { border-bottom: 0; }
-.statement-item__left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.statement-item__left { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
 .statement-item__icon { width: 32px; height: 34px; border-radius: 8px; display: grid; place-items: center; flex: none; background: #eef3ff; color: var(--color-primary); }
 .statement-item__icon .icon { width: 17px; height: 17px; }
-.statement-item__text { display: flex; flex-direction: column; min-width: 0; align-items: flex-start; }
-.statement-link { appearance: none; border: 0; padding: 0; margin: 0; color: var(--color-text); background: transparent; text-align: left; font-size: 13px; font-weight: 700; line-height: 1.4; text-decoration: none; }
+.statement-item__text { display: flex; flex-direction: column; width: 100%; min-width: 0; align-items: flex-start; }
+.statement-link { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; appearance: none; border: 0; padding: 0; margin: 0; color: var(--color-text); background: transparent; text-align: left; font-size: 13px; font-weight: 700; line-height: 1.4; text-decoration: none; }
 .statement-link:hover { color: var(--color-primary); text-decoration: underline; }
-.statement-item__meta { font-size: 11px; color: var(--color-faint); line-height: 1.6; }
+/* Show financial information without repeating the month, payment date or kind. */
+.statement-item__amounts { display: flex; flex-wrap: wrap; gap: 2px 12px; min-width: 0; margin-top: 3px; color: var(--color-muted); font-size: 11px; font-weight: 600; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.statement-item__amounts > span { white-space: nowrap; }
+
 .statement-item__actions { display: flex; gap: 5px; }
 .empty-state { display: flex; flex-direction: column; gap: 5px; padding: 23px 12px; border: 1px dashed var(--color-border-strong); border-radius: 12px; text-align: center; color: var(--color-muted); font-size: 13px; }
 .empty-state strong { color: var(--color-text); font-weight: 700; }
@@ -119,7 +119,6 @@
 @media (max-width: 640px) {
   .dashboard { padding-top: 25px; }
   .page-heading { margin-bottom: 17px; }
-  .page-heading__description { font-size: 12px; }
   .total-card__header { padding: 22px 20px 0; }
   .total-card__controls { justify-content: space-between; width: 100%; gap: 12px; }
   .total-card__hero { flex-direction: column; gap: 22px; padding: 24px 20px 22px; }
@@ -150,10 +149,23 @@
   .header-actions { gap: 6px; }
   .header-actions .btn { padding: 8px; min-height: 36px; font-size: 11px; gap: 4px; }
   .header-actions .icon { display: none; }
-  .header-actions a[href*="backup"] { width: 36px; min-width: 36px; justify-content: center; }
-  .header-actions a[href*="backup"] span { display: none; }
-  .header-actions a[href*="backup"] .icon { display: block; width: 17px; height: 17px; }
   .statement-item__actions .icon { display: block; }
+}
+.header-actions .settings-link {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+}
+.header-actions .settings-link .icon { display: block; width: 20px; height: 20px; }
+@media (max-width: 640px) {
+  .header-actions .settings-link { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; }
+  .header-actions .settings-link .icon { display: block; width: 18px; height: 18px; }
 }
 @media (max-width: 380px) { .header-actions .btn { font-size: 10px; } }
 
@@ -291,6 +303,15 @@
 }
 .period-switcher__option:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .period-switcher .select-field { flex: none; }
+/* 集計期間と対象年度: ラベル行も操作欄も同じ高さ・開始位置に揃える。 */
+.period-switcher__group,
+.period-switcher .select-field { gap: 6px; }
+.period-switcher__caption,
+.period-switcher .select-field label { display: block; margin: 0; line-height: 14px; }
+.period-switcher__options { box-sizing: border-box; height: 44px; padding: 3px; }
+.period-switcher__option { height: 36px; min-height: 0; padding-top: 0; padding-bottom: 0; }
+.period-switcher .select-field .select { height: 44px; min-height: 44px; }
+
 @media (max-width: 640px) {
   .period-switcher { padding: 14px 20px 0; gap: 10px 12px; }
   .period-switcher__options { width: 100%; }
@@ -320,7 +341,7 @@
 /* ラベルが2行になっても右側の金額を下へ押し込まない。 */
 .details-list > div.has-missing-data,
 .job-card__footer.has-missing-data,
-.job-card__supplement.has-missing-data { align-items: flex-start; }
+
 .forecast-caution--warning { border-left: 3px solid #d3a15a; padding: 9px 12px; background: #fff7ea; border-radius: 4px; color: #7f5a25; }
 
 
@@ -329,7 +350,18 @@
   .statement-item { min-width: 0; }
   .statement-item__main, .statement-item__detail { min-width: 0; }
   .statement-item__actions { flex-shrink: 0; }
-  .statement-item__meta { overflow-wrap: anywhere; }
   .statement-column__heading { flex-wrap: wrap; row-gap: 8px; }
   .statement-column__heading .side-zip-button { margin-left: 0; }
+}
+
+/* Year-end support lives in the home header, not inside salary totals. */
+@media(max-width:520px){
+  .header-actions .year-end-header-link{width:36px;min-width:36px;padding:8px;justify-content:center}
+  .header-actions .year-end-header-link span{display:none}
+  .header-actions .year-end-header-link .icon{display:block;width:17px;height:17px}
+}
+@media(max-width:360px){
+  .header-actions a[href*="upload"]{width:36px;min-width:36px;padding:8px;justify-content:center}
+  .header-actions a[href*="upload"] span{display:none}
+  .header-actions a[href*="upload"] .icon{display:block;width:17px;height:17px}
 }

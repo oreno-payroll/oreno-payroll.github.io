@@ -35,6 +35,7 @@ const conflicts=(old:SavedPayrollSummary,incoming:SavedPayrollRecordInput):('sam
  return result;
 };
 function assertValid(input:SavedPayrollRecordInput,legacy=false):void {
+ if('personId' in input||'employeeId' in input||'yearEndAssist' in input)throw new Error('第三者の年末調整データは本人用Payrollに保存できません。');
  const {errors,warnings}=validatePayrollForm(input.form);
  if(errors.length)throw new Error(errors[0]);
  if(!legacy&&warnings.length&&!input.warningsAcknowledged)throw new Error('金額の検算警告が未確認です。');
@@ -262,6 +263,41 @@ export async function migrateFromLegacyIndexedDb(progress:(message:string)=>void
  return {found:legacy.length,migrated};
 }
 
+/** Read-only pre-deletion check: every old PDF and metadata must already exist in
+ * OneDrive's encrypted vault. Never migrate or delete during this check. */
+export async function verifyLegacyIndexedDbCloudBeforeDelete(expectedCount:number,progress?:(text:string)=>void):Promise<number>{
+ if(!Number.isSafeInteger(expectedCount)||expectedCount<0)throw new Error('旧DBの確認件数が不正です。');
+ const info=await inspectLegacyIndexedDb();
+ if(!info.exists||info.count!==expectedCount)throw new Error('旧DBの件数が変更されました。削除を中断します。');
+ const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+  const req=indexedDB.open('payroll-local-v1');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+ });
+ let local:SavedPayrollRecord[];
+ try{
+  if(!db.objectStoreNames.contains('payroll-records'))throw new Error('旧DBの形式が想定と異なります。');
+  local=await new Promise((resolve,reject)=>{
+   const req=db.transaction('payroll-records','readonly').objectStore('payroll-records').getAll();
+   req.onsuccess=()=>resolve(req.result as SavedPayrollRecord[]);req.onerror=()=>reject(req.error);
+  });
+ }finally{db.close();}
+ if(local.length!==expectedCount)throw new Error('旧DBの件数が検査中に変わりました。削除を中断します。');
+ progress?.('OneDriveの明細とPDF原本を照合しています…');
+ const vault=await cloudVault(),remote=await vault.refresh({forceFresh:true}),snapshot=payrollSnapshot(remote);
+ for(let i=0;i<local.length;i++){
+  const record=local[i];assertValid(record,true);
+  const saved=remote.find(r=>r.id===record.id);
+  if(!saved||recordSignature(saved)!==recordSignature(record))
+   throw new Error('旧DBにOneDriveと一致しない明細があります。削除を中断し、先に移行してください。');
+  const original=await vault.original(saved);
+  const [localHash,remoteHash]=await Promise.all([pdfSha256(record.pdf),pdfSha256(original)]);
+  if(localHash!==remoteHash||(record.fileHash&&record.fileHash!==localHash))
+   throw new Error('旧DBのPDF原本がOneDriveと一致しません。削除を中断します。');
+  progress?.(`PDF原本を照合中 ${i+1}/${local.length}件`);
+ }
+ if(JSON.stringify(payrollSnapshot(await vault.refresh({forceFresh:true})))!==JSON.stringify(snapshot))
+  throw new Error('照合中にOneDriveのデータが更新されました。削除を中断します。');
+ return local.length;
+}
 /** 削除前に既知の旧DBだけを照合する。現行のMSAL/セッション領域は調べず、触れない。 */
 export async function inspectLegacyIndexedDb():Promise<{exists:boolean;count:number}> {
  if(!('indexedDB' in window)||typeof indexedDB.databases!=='function')throw new Error('このブラウザでは旧DBの安全な列挙に対応していません。');

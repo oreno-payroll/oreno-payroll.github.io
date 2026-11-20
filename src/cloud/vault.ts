@@ -193,6 +193,45 @@ export class PayrollVault {
  sessionKey():{key:CryptoKey;salt:string} {
   return {key:this.unlocked(),salt:this.salt};
  }
+ async yearEndAccess():Promise<{path:string[];key:CryptoKey;salt:string;graph:PayrollGraph}> {
+  const {index}=await this.readIndex();
+  if(index.rotation)throw new Error('暗号鍵の変更中は年末調整の操作を中断してください。');
+  return {path:this.pathFor(index,'year-end-assist'),key:this.unlocked(),salt:this.salt,graph:this.graph};
+ }
+ /** Strict inventory: unknown files abort rotation rather than silently losing data. */
+ private async listYearEndFiles(index:Index):Promise<Array<{kind:'assist-index'|'assist-profile'|'assist-year'|'assist-original';path:string[];name:string;etag:string;size:number;relative:string[]}>> {
+  const base=this.pathFor(index,'year-end-assist');
+  const root=await this.graph.listFolder(base);if(!root)return [];
+  const id=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const result:Array<{kind:'assist-index'|'assist-profile'|'assist-year'|'assist-original';path:string[];name:string;etag:string;size:number;relative:string[]}>=[];
+  const visit=async(parts:string[],relative:string[]):Promise<void>=>{
+   if(relative.length>3)throw new Error('年末調整フォルダーの階層が不正です。');
+   const children=await this.graph.listFolder(parts);if(!children)throw new Error('年末調整フォルダーが読み取れません。');
+   for(const child of children){
+    if(child.folder){
+     const next=[...relative,child.name];
+     const okay=(relative.length===0&&child.name==='persons')||
+      (relative.length===1&&relative[0]==='persons'&&id.test(child.name))||
+      (relative.length===2&&relative[0]==='persons'&&id.test(relative[1])&&['years','originals'].includes(child.name));
+     if(!okay)throw new Error('年末調整保存先に未知のフォルダーがあります。鍵変更を中止します。');
+     await visit([...parts,child.name],next);
+    }else{
+     const key=relative.join('/');let kind:typeof result[number]['kind'];
+     if(!key&&child.name==='index.enc')kind='assist-index';
+     else if(/^persons\/[0-9a-f-]{36}$/i.test(key)&&child.name==='profile.enc')kind='assist-profile';
+     else if(/^persons\/[0-9a-f-]{36}\/years$/i.test(key)&&id.test(child.name.slice(0,-4))&&child.name.endsWith('.enc'))kind='assist-year';
+     else if(/^persons\/[0-9a-f-]{36}\/originals$/i.test(key)&&id.test(child.name.slice(0,-4))&&child.name.endsWith('.enc'))kind='assist-original';
+     else throw new Error('年末調整保存先に未知の暗号ファイルがあります。鍵変更を中止します。');
+     if(child.size<1||!child.etag)throw new Error('年末調整の暗号ファイルが不正です。');
+     result.push({kind,path:parts,name:child.name,etag:child.etag,size:child.size,relative});
+     if(result.length>5000)throw new Error('年末調整ファイルが上限を超えました。');
+    }
+   }
+  };
+  await visit(base,[]);
+  if(result.length>0&&!result.some(x=>x.kind==='assist-index'))throw new Error('年末調整索引が未登録です。復旧が必要です。');
+  return result.sort((a,b)=>[...a.relative,a.name].join('/').localeCompare([...b.relative,b.name].join('/')));
+ }
  private async readIndex():Promise<{index:Index;file:RemoteFile}> {
   let file:RemoteFile|null;
   try {file=await this.graph.read(['payroll'],'index.enc',MAX_INDEX);}
@@ -542,6 +581,7 @@ export class PayrollVault {
   const orphans=await this.inspectOrphanYears();
   if(orphans.length)throw new Error(`索引未登録の年度ファイル（${orphans.map(v=>v.year).join('、')}年度）が存在します（空の年度ファイルを含みます）。パスフレーズを変更する前に、設定画面の「年度データの復旧」で確認・復旧してください。`);
   const originalInventory=await this.listOriginalFiles(originalIndex);
+  const yearEndInventory=await this.listYearEndFiles(originalIndex);
   const gen=crypto.randomUUID(),newSalt=createSalt(),newKey=await deriveKey(newPassphrase,newSalt);
   const lockedIndex:Index={...originalIndex,rotation:{id:gen,startedAt:Date.now()}};
   const lockedText=await encryptJson('index',lockedIndex,oldKey,oldSalt);
@@ -573,6 +613,7 @@ export class PayrollVault {
    const retainedIds=new Set(originalInventory.map(file=>`${file.month}/${file.uuid}`));
    for(const key of activeOriginals.keys())if(!retainedIds.has(key))throw new Error('現行明細が参照するPDF原本が一覧にありません。鍵変更を中断します。');
    total+=originalInventory.length;
+   total+=yearEndInventory.length;
    const income:Array<{year:string;clear:Uint8Array}>=[];
    for(const year of originalIndex.incomeYears) {
     const path=this.pathFor(originalIndex,'income');
@@ -582,8 +623,8 @@ export class PayrollVault {
     sources.push({path,name:`${year}.enc`,etag:old.etag,size:old.size});
    }
    let done=0;
-   const staged=async(kind:'year'|'income'|'original',path:string[],name:string,clear:Uint8Array,limit:number):Promise<void>=>{
-    const text=await encryptBytes(kind,clear,newKey,kind==='original'?undefined:newSalt);
+   const staged=async(kind:'year'|'income'|'original'|'assist-index'|'assist-profile'|'assist-year'|'assist-original',path:string[],name:string,clear:Uint8Array,limit:number):Promise<void>=>{
+    const text=await encryptBytes(kind,clear,newKey,(kind==='original'||kind==='assist-original')?undefined:newSalt);
     await this.graph.write(path,name,text,null,limit);
     const verified=await this.graph.read(path,name,limit);
     if(!verified)throw new Error('新しい暗号ファイルの読み戻しに失敗しました。');
@@ -619,6 +660,16 @@ export class PayrollVault {
     const [yyyy,mm]=month.split('-');
     await staged('original',['payroll','versions',gen,'originals',yyyy,mm],name,clear,MAX_ORIGINAL);
    }
+   // Third-party documents are never inserted into the personal annual/Finance payloads.
+   for(const asset of yearEndInventory){
+    const limit=asset.kind==='assist-original'?MAX_ORIGINAL:asset.kind==='assist-year'?MAX_YEAR:MAX_INDEX;
+    const prior=await this.graph.read(asset.path,asset.name,limit);
+    if(!prior||prior.etag!==asset.etag||prior.size!==asset.size)throw new Error('年末調整データが鍵変更中に更新されました。');
+    const clear=await decryptBytes(asset.kind,prior.text,oldKey);
+    sources.push({path:asset.path,name:asset.name,etag:prior.etag,size:prior.size});
+    await staged(asset.kind,['payroll','versions',gen,'year-end-assist',...asset.relative],asset.name,clear,limit);
+   }
+   if(!same(await this.listYearEndFiles(originalIndex),yearEndInventory))throw new Error('鍵変更中に第三者の給与データが変更されました。旧索引を保持して中断します。');
    // A new original created between listing and cutover must not be silently abandoned.
    if(!same(await this.listOriginalFiles(originalIndex),originalInventory))throw new Error('鍵変更中にPDF原本が増減しました。旧索引を保持して中断します。');
    if((await this.inspectOrphanYears()).length)throw new Error('鍵変更中に索引未登録の年度が追加されました。旧索引を保持して中断します。');
@@ -717,7 +768,7 @@ export class PayrollVault {
   const targets:Array<{parent:string[];item:CloudFolderItem}>=[];
   const old=(await this.graph.listFolder(['payroll']))??[];
   // Finance v1.1.1 が固定パス payroll/income/YYYY.enc を参照する可能性があるため、旧incomeは自動削除しない。
-  for(const name of ['statements','originals']) {
+  for(const name of ['statements','originals','year-end-assist']) {
    const matching=old.filter(x=>x.name===name);
    if(matching.length>1||matching.some(x=>!x.folder))throw new Error('旧保存領域に想定外の項目があります。');
    if(matching[0])targets.push({parent:['payroll'],item:matching[0]});
@@ -734,7 +785,7 @@ export class PayrollVault {
   if(recover.length>1||recover.some(x=>!x.folder))throw new Error('復旧用フォルダーの形式が不正です。');
   if(recover[0])targets.push({parent:['payroll','versions',gen],item:recover[0]});
   let files=0,bytes=0;
-  const scan=async(parts:string[],context:'root'|'generation'|'statements'|'income'|'originals'|'year'|'month'|'recovery',depth:number):Promise<void>=>{
+  const scan=async(parts:string[],context:'root'|'generation'|'statements'|'income'|'originals'|'year'|'month'|'recovery'|'assist-root'|'assist-persons'|'assist-person'|'assist-years'|'assist-originals',depth:number):Promise<void>=>{
    if(depth>6)throw new Error('旧暗号データの階層が想定より深いです。');
    const children=await this.graph.listFolder(parts);
    if(!children)throw new Error('整理対象が読み取れません。');
@@ -743,15 +794,22 @@ export class PayrollVault {
     const next=(kind:typeof context)=>scan([...parts,n],kind,depth+1);
     if(item.folder){
      if(context==='root'||context==='generation'){
-      if(n==='statements'||n==='income'||n==='originals'||n==='recovery')await next(n);
+      if(n==='statements'||n==='income'||n==='originals'||n==='recovery'||n==='year-end-assist')await next(n==='year-end-assist'?'assist-root':n);
       else throw new Error('旧暗号領域に未知のフォルダーがあります。削除しません。');
      }else if(context==='originals'&&/^(19|20|21)\d{2}$/.test(n))await next('year');
      else if(context==='year'&&/^(0[1-9]|1[0-2])$/.test(n))await next('month');
+     else if(context==='assist-root'&&n==='persons')await next('assist-persons');
+     else if(context==='assist-persons'&&/^[0-9a-f-]{36}$/i.test(n))await next('assist-person');
+     else if(context==='assist-person'&&n==='years')await next('assist-years');
+     else if(context==='assist-person'&&n==='originals')await next('assist-originals');
      else throw new Error('旧暗号領域のフォルダー構造が想定外です。');
     } else {
      const okay=(context==='statements'||context==='income')?/^(19|20|21)\d{2}\.enc$/.test(n):
        context==='month'?/^[0-9a-f-]{36}\.enc$/i.test(n):
-       context==='recovery'?n==='previous-index.enc':false;
+       context==='recovery'?n==='previous-index.enc':
+       context==='assist-root'?n==='index.enc':
+       context==='assist-person'?n==='profile.enc':
+       (context==='assist-years'||context==='assist-originals')?/^[0-9a-f-]{36}\.enc$/i.test(n):false;
      if(!okay)throw new Error('旧暗号領域に想定外のファイルがあります。削除しません。');
      files++;bytes+=item.size;
      if(files>5000)throw new Error('整理対象のファイルが多すぎます。');
@@ -769,7 +827,7 @@ export class PayrollVault {
     await verifyOldStatements(oldIndex);
     await verifyOldOriginals(oldIndex);
    }
-   const context=target.item.name==='recovery'?'recovery':target.item.name==='originals'?'originals':
+   const context=target.item.name==='year-end-assist'?'assist-root':target.item.name==='recovery'?'recovery':target.item.name==='originals'?'originals':
      target.item.name==='statements'?'statements':target.item.name==='income'?'income':'generation';
    await scan([...target.parent,target.item.name],context,0);
   }
@@ -797,6 +855,13 @@ export class PayrollVault {
    const clear=await decryptBytes('income',file.text,this.unlocked());
    const data=JSON.parse(new TextDecoder().decode(clear)) as {format?:string;year?:string};
    if(data.format!=='payroll-income-v1'||data.year!==year)throw new Error('収入連携データの形式が不正です。整理を中断しました。');
+  }
+  // Verify the active encrypted third-party archive before trashing any older generation.
+  for(const asset of await this.listYearEndFiles(initial.index)){
+   const limit=asset.kind==='assist-original'?MAX_ORIGINAL:asset.kind==='assist-year'?MAX_YEAR:MAX_INDEX;
+   const file=await this.graph.read(asset.path,asset.name,limit);
+   if(!file||file.etag!==asset.etag)throw new Error('現行の年末調整データを検証できません。旧世代の整理を中止します。');
+   await decryptBytes(asset.kind,file.text,this.unlocked());
   }
   const current=await this.inspectOldEncryptedData();
   const signature=(plan:typeof current)=>JSON.stringify(plan.targets.map(t=>[t.parent.join('/'),t.item.name,t.item.id,t.item.etag]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));

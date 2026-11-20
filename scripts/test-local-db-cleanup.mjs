@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {stripTypeScriptTypes} from 'node:module';
 const root=new URL('../',import.meta.url);
 const storeCode=readFileSync(new URL('src/storage/payrollStore.ts',root),'utf8');
 const first=storeCode.indexOf('export async function inspectLegacyIndexedDb(');
@@ -12,12 +12,8 @@ const third=storeCode.indexOf('export async function deleteLegacyIndexedDb(',sec
 assert.ok(first>=0&&second>first&&third>second,'expected cleanup functions must exist');
 // Extract only the two local IndexedDB functions, avoiding any cloud/auth import.
 const source=storeCode.slice(first,second)+'\n'+storeCode.slice(third);
-const dir=mkdtempSync(join(tmpdir(),'payroll-local-db-test-'));
-const file=join(dir,'local-only.ts');
-writeFileSync(file,source);
-let inspectLegacyIndexedDb,deleteLegacyIndexedDb;
-try {({inspectLegacyIndexedDb,deleteLegacyIndexedDb}=await import(pathToFileURL(file).href));}
-finally {rmSync(dir,{recursive:true,force:true});}
+const url='data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source,{mode:'strip'})).toString('base64');
+const {inspectLegacyIndexedDb,deleteLegacyIndexedDb}=await import(url);
 function fakeDatabase(initialCount=3,correctSchema=true){
  let exists=true,count=initialCount,deleted=0;
  const actions=[];
@@ -50,7 +46,7 @@ globalThis.window={addEventListener(){}};
  assert.equal(db.deleted,1);
  assert.deepEqual(await inspectLegacyIndexedDb(),{exists:false,count:0});
  assert.ok(messages.some(x=>x.includes('IndexedDB')));
- console.log('PASS: local cleanup deletes only payroll-local-v1 without cloud login');
+ console.log('PASS: low-level cleanup targets only payroll-local-v1; UI requires cloud verification first');
 }
 {
  const db=fakeDatabase(6); db.setCount(7);
@@ -81,12 +77,14 @@ assert.ok(view.indexOf('id="legacy-cleanup-delete"')<view.indexOf('id="migrate-l
 assert.doesNotMatch(ui,/oldLocalCount/);
 assert.match(view,/id="backup-cloud-load"[^>]*hidden/);
 assert.match(ui,/if\(legacyExists\)/);
-assert.match(ui,/if\(legacyExists\)return;/);
+assert.match(ui,/if\(legacyExists\)\{appStatus\.clear\(\);return;\}/);
 assert.match(ui,/cloudLoad\.addEventListener/);
 const handler=ui.slice(ui.indexOf("localDelete.addEventListener('click'"));
 assert.match(handler,/deleteLegacyIndexedDb\(result.count/);
+assert.match(handler,/await verifyLegacyIndexedDbCloudBeforeDelete\(result.count/, 'UI must verify cloud metadata and originals before deleting');
+assert.ok(handler.indexOf('verifyLegacyIndexedDbCloudBeforeDelete')<handler.indexOf('deleteLegacyIndexedDb(result.count'));
 assert.doesNotMatch(handler,/cloudVault\(|loadRecords\(|vault\./);
 assert.match(handler,/window\.confirm/);
 const fn=store.slice(store.indexOf('export async function deleteLegacyIndexedDb('));
 assert.doesNotMatch(fn,/cloudVault\(|vault\.|original\(/);
-console.log('PASS: cleanup button is first, not gated by inspection or OneDrive, with explicit confirmation');
+console.log('PASS: safe cleanup UI confirms, compares OneDrive and PDFs, then deletes local DB only');

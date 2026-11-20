@@ -75,10 +75,10 @@ console.log('PASS: 認証画面・同一オリジンの鍵継承・保存進捗�
 
 // UX regressions: connected account must not advertise a no-op button; upload must tell users when to navigate.
 const html=source('public/upload/index.html'),css=source('public/styles/cloud.css');
-assert.match(auth,/payroll-cloud-account is-checking/);
-assert.match(auth,/ui\.login\.hidden=state==='connected'/);
+assert.match(auth,/ui\.loginForm\.hidden=state==='connected'/);
+assert.match(auth,/ui\.unlockForm\.hidden=state!=='connected'/);
 assert.match(auth,/ui\.button\.disabled=state!=='connected'/);
-assert.match(css,/payroll-cloud-account\.is-connected/);
+assert.match(css,/payroll-cloud-error\[hidden\]/);
 assert.match(html,/id="save-feedback"/);
 assert.match(html,/id="save-progress-track"/);
 assert.match(html,/ブラウザで暗号化|端末内で暗号化/);

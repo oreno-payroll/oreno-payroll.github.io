@@ -1,0 +1,744 @@
+import { createAppStatus } from './ui/appStatus';
+/** UI entry for isolated year-end support. No imports from the personal payrollStore. */
+import {YearEndRepository} from './yearEnd/repository';
+import {parseAssistedPdf} from './yearEnd/pdf';
+import {calculateYear,monthOf,parseYen,yearMonth,validYear,validDate,forecastPreview,bonusEstimatePreview,documentAmountWarnings,inconsistentDetectedNames,normalizeDetectedName,
+ type PersonId,type PersonProfile,type YearData,type DocumentRecord,type DraftDocument,type EstimateMethod} from './yearEnd/model';
+const repo=new YearEndRepository();
+const $=<T extends HTMLElement>(id:string):T=>{const e=document.getElementById(id);if(!e)throw new Error('画面構成が不正です。');return e as T;};
+const status=$<HTMLParagraphElement>('yea-status');
+const directory=$<HTMLElement>('yea-directory');
+const personList=$<HTMLElement>('yea-person-list');
+const yearSelect=$<HTMLSelectElement>('yea-calendar-year');
+const yearContent=$<HTMLElement>('yea-content');
+const uiPdf=$<HTMLInputElement>('yea-pdfs');
+const drafts=$<HTMLUListElement>('yea-drafts');
+const commit=$<HTMLButtonElement>('yea-commit');
+const forecastError=$<HTMLElement>('yea-forecast-error');
+const forecastState=$<HTMLElement>('yea-forecast-state');
+const bonusMonthInput=$<HTMLInputElement>('yea-bonus-month');
+const bonusValueInput=$<HTMLInputElement>('yea-bonus-value');
+const bonusError=$<HTMLElement>('yea-bonus-error');
+const estimateMonths=$<HTMLElement>('yea-estimate-months');
+const methodChoices=$<HTMLElement>('yea-method');
+const selectedMethod=():EstimateMethod=>(methodChoices.querySelector<HTMLInputElement>('input[type=radio]:checked')?.value??'latest') as EstimateMethod;
+const currentName=$<HTMLElement>('yea-current-name');
+const backDirectory=$<HTMLButtonElement>('yea-back-directory');
+const backHome=$<HTMLAnchorElement>('yea-back-home');
+const currentYear=new Date().getFullYear();
+let people:Array<PersonProfile & {state:'active'|'deleting'}>=[];
+let selected:PersonId|null=null;
+let activeYear=currentYear;
+let data:YearData|null=null;
+let otherYearNames:string[]=[];
+let forecastDirty=false;
+let bonusDirty=false;
+/** Only remembers a saved bonus month explicitly cleared in the editor. */
+let bonusClearedMonth='';
+let bonusLastMonth='';
+let busy=false;
+/** OneDriveへの明細保存操作だけを表す。PDF解析や読み込みには使わない。 */
+let savingDocuments=false;
+type QueueItem={id:number;file:File;draft:DraftDocument|null;personId:PersonId;year:number;hash:string;status:'reading'|'ready'|'duplicate'|'error';error:string;fieldErrors:Set<string>};
+let fileQueue:QueueItem[]=[];
+let activeDraft:number|null=null;
+let activeSavedId:string|null=null;
+type SavedEdit={draft:DraftDocument;fieldErrors:Set<string>};
+const savedEdits=new Map<string,SavedEdit>();
+let draftSerial=0;
+let uploadContext='';
+const uploadAccordion=$<HTMLDetailsElement>('yea-upload-accordion');
+const forecastAccordion=$<HTMLDetailsElement>('yea-forecast-accordion');
+let peopleLoaded=false;
+const reviewForm=$<HTMLFormElement>('yea-review-form');
+const reviewValidation=$<HTMLParagraphElement>('yea-review-validation');
+const saveAll=$<HTMLButtonElement>('yea-save-all');
+const reviewFields=['kind','paymentDate','targetMonth','taxable','gross','transportation','nonTaxable','healthInsurance','pension','employmentInsurance','incomeTax','residentTax'] as const;
+type ReviewField=typeof reviewFields[number];
+const pdfObjectUrls:string[]=[];
+const displayDate=(value:string):string=>value.replace(/-/g,'/');
+const formatBytes=(bytes:number):string=>bytes<1024*1024?`${Math.max(1,Math.round(bytes/1024))} KB`:`${(bytes/1024/1024).toFixed(1)} MB`;
+function uploadIcon(name:'file'|'close'):SVGSVGElement{
+ const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+ svg.classList.add('icon');svg.setAttribute('aria-hidden','true');
+ const use=document.createElementNS('http://www.w3.org/2000/svg','use');
+ use.setAttribute('href',`#icon-${name}`);svg.append(use);return svg;
+}
+let memoKey='';
+let memoDirty=false;
+const memoInput=$<HTMLTextAreaElement>('yea-year-memo');
+const memoButton=$<HTMLButtonElement>('yea-save-memo');
+const memoState=$<HTMLElement>('yea-memo-state');
+const yen=(amount:number)=>`${Math.round(amount).toLocaleString('ja-JP')}円`;
+const appStatus=createAppStatus(status);
+function say(message:string,error=false){if(error)appStatus.error(message);else if(message)appStatus.success(message);else appStatus.clear();}
+function showBusy(message:string){appStatus.loading(`${message}…`);}
+function el<K extends keyof HTMLElementTagNameMap>(tag:K,klass='',label=''):HTMLElementTagNameMap[K]{const node=document.createElement(tag);if(klass)node.className=klass;if(label)node.textContent=label;return node;}
+function setLocalError(node:HTMLElement,message=''){node.hidden=!message;node.textContent=message;}
+function proposedForecastChanged():boolean{
+ if(!data)return false;
+ if(data.noPaymentMonths.length)return true;
+ const months=Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'));
+ const proposal=months.filter(x=>x.value.trim()).map(x=>({month:x.dataset.override!,amount:parseYen(x.value)}));
+ if(proposal.length!==data.estimates.length)return true;
+ const method=selectedMethod();
+ return proposal.some(e=>!data!.estimates.some(old=>old.month===e.month&&old.amount===e.amount&&old.method===method));
+}
+function updateForecastSaveState(){
+ commit.disabled=busy||!selected||!data||!(forecastDirty||bonusDirty||proposedForecastChanged());
+ forecastState.textContent=forecastDirty||bonusDirty?'未保存の変更があります。':'';
+ for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
+  input.disabled=busy||!data;
+ }
+ bonusMonthInput.disabled=busy||!data;
+ bonusValueInput.disabled=busy||!data;
+}
+function markForecastDirty(){forecastDirty=true;setLocalError(forecastError);updateForecastSaveState();}
+function updateBonusSaveState(){updateForecastSaveState();}
+function markBonusDirty(){bonusDirty=true;setLocalError(bonusError);updateBonusSaveState();}
+function resetBonusForm(){bonusDirty=false;bonusClearedMonth='';bonusLastMonth='';bonusMonthInput.value='';bonusValueInput.value='';setLocalError(bonusError);updateBonusSaveState();}
+type BonusInputSnapshot={month:string;amount:string;clearedMonth:string;lastMonth:string};
+function captureBonusInput():BonusInputSnapshot{
+ return {month:bonusMonthInput.value,amount:bonusValueInput.value,clearedMonth:bonusClearedMonth,lastMonth:bonusLastMonth};
+}
+function restoreBonusInput(snapshot:BonusInputSnapshot){
+ bonusMonthInput.value=snapshot.month;bonusValueInput.value=snapshot.amount;
+ bonusClearedMonth=snapshot.clearedMonth;bonusLastMonth=snapshot.lastMonth;
+ bonusDirty=true;updateBonusSaveState();
+}
+type BonusForecastChange={month:string;amount:number}|{month:string;remove:true};
+function requestedBonusChange():BonusForecastChange|undefined{
+ const month=bonusMonthInput.value,raw=bonusValueInput.value.trim();
+ if(!month){
+  if(raw)throw new Error('賞与の支給予定月を選択してください。');
+  return bonusClearedMonth?{month:bonusClearedMonth,remove:true}:undefined;
+ }
+ if(!raw){
+  if(data?.bonusEstimates.some(e=>e.month===month))return {month,remove:true};
+  throw new Error('賞与の見込み額を入力してください。');
+ }
+ const amount=parseYen(raw);
+ if(amount===null)throw new Error('賞与の見込み額は0円以上の整数で入力してください。');
+ return {month,amount};
+}
+function resetForecastForm(){
+ forecastDirty=false;setLocalError(forecastError);
+ const first=methodChoices.querySelector<HTMLInputElement>('input[type=radio]');if(first)first.checked=true;
+ updateForecastSaveState();
+}
+type ForecastInputSnapshot={method:EstimateMethod;months:Record<string,{value:string;edited:boolean}>};
+function captureForecastInput():ForecastInputSnapshot{
+ const months:ForecastInputSnapshot['months']={};
+ for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
+  months[input.dataset.override!]={value:input.value,edited:input.dataset.userEdited==='true'};
+ }
+ return {method:selectedMethod(),months};
+}
+function restoreForecastInput(snapshot:ForecastInputSnapshot){
+ const radio=methodChoices.querySelector<HTMLInputElement>(`input[value="${snapshot.method}"]`);if(radio)radio.checked=true;
+ for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
+  const saved=snapshot.months[input.dataset.override!];if(!saved)continue;
+  input.value=saved.value;input.dataset.userEdited=String(saved.edited);
+ }
+ forecastDirty=true;updateForecastSaveState();
+}
+function clearDrafts(){fileQueue=[];activeDraft=null;activeSavedId=null;savedEdits.clear();drafts.replaceChildren();uiPdf.value='';updateDrafts();}
+function pendingEdits(){return Boolean(fileQueue.length)||[...savedEdits].some(([id,edit])=>{const original=data?.documents.find(r=>r.id===id);return Boolean(original&&isChanged(original,edit));});}
+async function action(description:string,fn:()=>Promise<void>,_showSuccess=true){
+ if(busy)return;
+ busy=true;showBusy(description);updateForecastSaveState();updateBonusSaveState();
+ let failed=false;
+ try{await fn();}
+ catch(err){failed=true;say(`失敗：${err instanceof Error?err.message:'通信または処理エラー'}`,true);}
+ finally{
+  busy=false;if(!failed&&appStatus.element.dataset.state!=='error'){if(_showSuccess)appStatus.success(`${description.replace(/を保存中$/,'の保存').replace(/を削除中$/,'の削除')}が完了しました`);else appStatus.clear();}
+  if(failed&&!selected)directory.hidden=false;
+  updateDrafts(true);updateForecastSaveState();updateBonusSaveState();
+ }
+}
+function checkMemoExit():boolean{return !memoDirty||window.confirm('年度メモに未保存の変更があります。破棄して切り替えますか？');}
+function checkDetailExit():boolean{
+ return checkMemoExit()&&(!pendingEdits()||window.confirm('未保存の明細変更があります。破棄して切り替えますか？'))&&
+  (!(forecastDirty||bonusDirty)||window.confirm('見込み額に未保存の変更があります。破棄して切り替えますか？'));
+}
+const displayPerson=(p:PersonProfile):string=>p.alias?`${p.displayName}（${p.alias}）`:p.displayName;
+function clearMemo(){memoKey='';memoDirty=false;memoInput.value='';memoButton.disabled=true;memoState.textContent='';}
+function resetSelection(){clearMemo();selected=null;data=null;otherYearNames=[];yearContent.hidden=true;yearContent.dataset.empty="false";yearContent.dataset.loading='false';directory.hidden=false;backDirectory.hidden=true;backHome.hidden=false;clearDrafts();resetForecastForm();resetBonusForm();const dialog=$<HTMLDialogElement>('yea-manage-dialog');if(dialog.open)dialog.close();}
+function renderPeople(){
+ const initial=selected;
+ personList.replaceChildren();
+ const active=people.filter(p=>p.state==='active');
+ const empty=$<HTMLElement>('yea-person-empty');empty.hidden=active.length>0;empty.textContent='従業員を登録すると、ここに表示されます。';
+ for(const p of active){
+  const button=el('button','yea-person-option');button.type='button';
+  button.append(el('span','',displayPerson(p)),el('span','yea-person-chevron','›'));
+  button.addEventListener('click',()=>{if(busy)return;void action('従業員の選択',()=>selectPerson(p.id),false);});
+  personList.append(button);
+ }
+ const pending=$<HTMLElement>('yea-pending-deletes');pending.replaceChildren();
+ for(const p of people.filter(x=>x.state==='deleting')){
+  const button=el('button','btn yea-danger',`${displayPerson(p)}：削除を再試行`);button.type='button';
+  button.addEventListener('click',()=>{if(!window.confirm('削除未完了の従業員データを再検査して削除を続けますか？'))return;void action('削除の再試行',async()=>{await repo.deletePerson(p.id);await loadPeople();});});
+  pending.append(button);
+ }
+ pending.hidden=!pending.childElementCount;
+ if(initial&&!active.some(p=>p.id===initial))resetSelection();
+}
+function person(){const p=people.find(x=>x.id===selected&&x.state==='active');if(!p)throw new Error('従業員を選択してください。');return p;}
+function renderYearOptions(){
+ const p=person();const min=Math.max(1990,Math.min(currentYear-5,...Object.keys(p.yearFiles).map(Number)));const max=Math.min(2120,Math.max(currentYear+2,...Object.keys(p.yearFiles).map(Number)));
+ yearSelect.replaceChildren();for(let y=max;y>=min;y--){const opt=el('option','',`${y}年`);opt.value=String(y);yearSelect.append(opt);}
+ if(activeYear<min||activeYear>max)activeYear=currentYear;yearSelect.value=String(activeYear);
+}
+async function selectPerson(id:string){
+ data=null;otherYearNames=[];clearDrafts();resetForecastForm();resetBonusForm();clearMemo();
+ if(!id){resetSelection();return;}
+ const p=people.find(x=>x.id===id&&x.state==='active');if(!p){say('削除中・未登録の従業員は編集できません。',true);resetSelection();return;}
+ selected=p.id;activeYear=currentYear;uploadContext='';
+ currentName.textContent=displayPerson(p);renderYearOptions();directory.hidden=true;yearContent.hidden=false;backDirectory.hidden=false;backHome.hidden=true;
+ await loadYear();
+}
+async function loadPeople(){
+ const empty=$<HTMLElement>('yea-person-empty');
+ if(!peopleLoaded&&!personList.childElementCount){empty.hidden=false;empty.textContent='読み込みが終わると従業員が表示されます。';}
+ const next=await repo.people();people=next;peopleLoaded=true;renderPeople();
+}
+function showYearPlaceholders(){
+ yearContent.hidden=false;yearContent.dataset.loading='true';
+ for(const id of ['yea-salary','yea-bonus','yea-forecast','yea-total'])$(id).textContent='—';
+ $('yea-workspace-count').textContent='読み込み中';
+ $('yea-file-count').textContent='…';
+ const fileEmpty=$('yea-files-empty');
+ const fileTitle=fileEmpty.querySelector('strong'),fileHelp=fileEmpty.querySelector('p');
+ if(fileTitle)fileTitle.textContent='明細を読み込み中';
+ if(fileHelp)fileHelp.textContent='読み込みが終わると明細が表示されます。';
+ $('yea-files-empty').hidden=false;drafts.hidden=true;
+ $('yea-review-empty').hidden=false;$('yea-review-content').hidden=true;
+ $('yea-bonus-result').hidden=true;
+ estimateMonths.replaceChildren();
+ for(let m=1;m<=12;m++){
+  const card=el('div','yea-month');card.dataset.state='loading';
+  card.append(el('strong','',`${m}月`),el('span','yea-month__amount','—'));estimateMonths.append(card);
+ }
+ memoInput.value='';memoInput.disabled=true;memoButton.disabled=true;
+ bonusMonthInput.value='';bonusValueInput.value='';
+ updateForecastSaveState();
+}
+async function loadYear(){
+ if(!selected)return;
+ const editSnapshot=forecastDirty&&data?captureForecastInput():null;
+ const bonusSnapshot=bonusDirty?captureBonusInput():null;
+ uploadAccordion.open=false;data=null;otherYearNames=[];uiPdf.disabled=true;
+ showYearPlaceholders();
+ try{
+  const id=selected,year=activeYear;
+  data=await repo.year(id,year);
+  renderYear();
+  // Compare detected PDF names across years without blocking the document list.
+  void repo.otherYearDetectedNames(id,year).then(names=>{
+   if(selected===id&&activeYear===year){otherYearNames=names;updateDrafts(true);}
+  }).catch(()=>{if(selected===id&&activeYear===year)say('他年度のPDF氏名照合は完了していません。',true);});
+  if(editSnapshot)restoreForecastInput(editSnapshot);
+  if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
+ }finally{
+  yearContent.dataset.loading='false';memoInput.disabled=false;uiPdf.disabled=!data;
+ }
+}
+function renderYear(){
+ if(!selected||!data)return;
+ const fileEmpty=$('yea-files-empty');
+ const fileTitle=fileEmpty.querySelector('strong'),fileHelp=fileEmpty.querySelector('p');
+ if(fileTitle)fileTitle.textContent='明細はまだありません';
+ if(fileHelp)fileHelp.textContent='PDFを追加してください。';
+ yearContent.dataset.empty=data.documents.length===0?'true':'false';
+ const contextKey=`${selected}/${activeYear}`;
+ if(uploadContext!==contextKey){
+  uploadContext=contextKey;uploadAccordion.open=data.documents.length===0;
+  const savedMethod=data.estimates[0]?.method;
+  const radio=savedMethod?methodChoices.querySelector<HTMLInputElement>(`input[value="${savedMethod}"]`):null;
+  if(radio)radio.checked=true;
+ }
+ if(data.documents.length===0)uploadAccordion.open=true;
+ const totals=calculateYear(data);
+ const nextMemoKey=`${selected}/${activeYear}`;
+ if(memoKey!==nextMemoKey){memoKey=nextMemoKey;memoDirty=false;memoInput.value=data.memo??'';}
+ else if(!memoDirty){memoInput.value=data.memo??'';}
+ memoButton.disabled=!memoDirty;
+ memoState.textContent=memoDirty?'未保存の変更があります。':'';
+ $('yea-salary').textContent=yen(totals.salary);$('yea-bonus').textContent=yen(totals.bonus);
+ $('yea-forecast').textContent=yen(totals.forecast);$('yea-total').textContent=yen(totals.total);
+ const bonusRows=data.bonusEstimates.map(x=>`${displayDate(x.month)}: ${yen(x.amount)}`).join(' / ');
+ const bonusHeadline=$<HTMLElement>('yea-bonus-result');
+ bonusHeadline.hidden=!bonusRows;bonusHeadline.textContent=bonusRows?`保存済みの賞与見込み：${bonusRows}`:'';
+ forecastDirty=false;renderEstimateMonths();updateForecastSaveState();
+ updateBonusSaveState();updateDrafts();
+}
+/** Radio switches recalculate all unconfirmed months locally, never through OneDrive. */
+function syncForecastAmounts(methodChanged=false){
+ if(!data)return;
+ const method=selectedMethod();
+ const fields=Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'));
+ const months=fields.map(x=>x.dataset.override!);
+ let calculated=new Map<string,number>();
+ if(method!=='manual'&&months.length){
+  try{
+   const preview=forecastPreview({...data,noPaymentMonths:[]},method,months,{});
+   calculated=new Map(preview.estimated.map(e=>[e.month,e.amount]));
+  }catch{
+   if(methodChanged)setLocalError(forecastError,'確定給与がないため推定できません。手動入力してください。');
+  }
+ }
+ for(const input of fields){
+  const month=input.dataset.override!;
+  if(methodChanged)input.dataset.userEdited='false';
+  else if(input.dataset.userEdited==='true')continue;
+  const existing=data.estimates.find(e=>e.month===month);
+  const oldZero=data.noPaymentMonths.includes(month);
+  if(method==='manual')input.value=methodChanged?'':(oldZero?'0':existing?String(existing.amount):'');
+  else if(calculated.has(month))input.value=!methodChanged&&oldZero?'0':!methodChanged&&existing?.method===method?String(existing.amount):String(calculated.get(month)!);
+  else input.value='';
+  input.placeholder=method==='manual'?'金額を入力':'推定できません';
+ }
+ updateForecastSaveState();
+}
+function renderEstimateMonths(){
+ if(!data)return;
+ estimateMonths.replaceChildren();
+ for(let m=1;m<=12;m++){
+  const month=yearMonth(activeYear,m);
+  const salary=data.documents.find(d=>d.kind==='salary'&&monthOf(d.paymentDate)===month);
+  const oldNoPay=data.noPaymentMonths.includes(month);
+  const existing=data.estimates.find(e=>e.month===month);
+  const card=el('div','yea-month');
+  card.append(el('strong','yea-month__head',`${m}月`));
+  if(salary){
+   card.dataset.state='actual';
+   const amount=el('b','yea-month__amount',yen(salary.taxable));
+   card.append(amount);
+  }else{
+   card.dataset.state='draft';
+   const input=el('input') as HTMLInputElement;
+   input.type='number';input.min='0';input.step='1';input.max='999999999';input.dataset.override=month;
+   input.value=oldNoPay?'0':existing?String(existing.amount):'';
+   input.dataset.userEdited='false';
+   input.setAttribute('aria-label',`${m}月の給与見込み額`);
+   input.addEventListener('input',()=>{input.dataset.userEdited='true';markForecastDirty();});
+   card.append(input);
+  }
+  estimateMonths.append(card);
+ }
+ syncForecastAmounts();
+}
+function forecastSelection():{months:string[];overrides:Record<string,number>}{
+ const months:string[]=[],overrides:Record<string,number>={};
+ for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
+  if(!input.value.trim())continue;
+  const amount=parseYen(input.value);
+  if(amount===null)throw new Error('見込み額は0円以上の整数で入力してください。');
+  const month=input.dataset.override!;months.push(month);overrides[month]=amount;
+ }
+ return {months,overrides};
+}
+function saveForecast(){
+ if(!selected||!data||busy||commit.disabled)return;
+ try{
+  const {months,overrides}=forecastSelection(),method=selectedMethod();
+  const bonusChange=bonusDirty?requestedBonusChange():undefined;
+  const clean={...data,noPaymentMonths:[]};
+  const snapshot=months.length?forecastPreview(clean,method,months,overrides):null;
+  if(bonusChange&&'amount' in bonusChange)bonusEstimatePreview(clean,bonusChange.month,bonusChange.amount);
+  const id=selected,year=activeYear;
+  setLocalError(forecastError);setLocalError(bonusError);
+  const oldEstimates=data.estimates,oldNoPay=data.noPaymentMonths,oldBonus=data.bonusEstimates;
+  const previousInput=captureForecastInput();
+  void action('給与・賞与の見込みを保存中',async()=>{
+   await repo.replaceIncomeForecasts(id,year,method,months,overrides,oldEstimates,oldNoPay,snapshot?.references??[],oldBonus,
+    bonusChange);
+   forecastDirty=false;bonusDirty=false;
+   const refreshed=await repo.year(id,year);
+   data=refreshed;renderYear();
+   // Retain the explicit editor method and zero amounts after the save.
+   if(previousInput.method!==selectedMethod()){
+    const radio=methodChoices.querySelector<HTMLInputElement>(`input[value="${previousInput.method}"]`);if(radio)radio.checked=true;
+    renderEstimateMonths();
+   }
+   bonusMonthInput.value='';bonusValueInput.value='';bonusClearedMonth='';bonusLastMonth='';updateBonusSaveState();
+  });
+ }catch(err){setLocalError(forecastError,err instanceof Error?err.message:'見込み額の入力内容を確認してください。');}
+}
+function openBlobPdf(blob:Blob){
+ const url=URL.createObjectURL(blob);pdfObjectUrls.push(url);
+ const tab=window.open(url,'_blank');if(tab)tab.opener=null;
+ else say('PDFを開けません。ブラウザのポップアップ許可を確認してください。',true);
+}
+async function openStoredPdf(id:string){
+ if(!selected)return;
+ // Reserve a tab synchronously, before the OneDrive download and decryption.
+ const tab=window.open('about:blank','_blank');
+ if(!tab){say('PDFを開けません。ブラウザのポップアップ許可を確認してください。',true);return;}
+ tab.opener=null;
+ try{
+  const blob=await repo.original(selected,activeYear,id);
+  const url=URL.createObjectURL(blob);pdfObjectUrls.push(url);tab.location.replace(url);
+ }catch(error){tab.close();say(`PDF原本を開けません：${error instanceof Error?error.message:'通信エラー'}`,true);}
+}
+const selectedQueueItem=():QueueItem|undefined=>fileQueue.find(x=>x.id===activeDraft);
+const recordDraft=(r:DocumentRecord):DraftDocument=>({
+ kind:r.kind,paymentDate:r.paymentDate,targetMonth:r.targetMonth,taxable:r.taxable,gross:r.gross,transportation:r.transportation,
+ nonTaxable:r.nonTaxable,healthInsurance:r.healthInsurance,pension:r.pension,employmentInsurance:r.employmentInsurance,
+ incomeTax:r.incomeTax,residentTax:r.residentTax,detectedName:r.detectedName??null,warnings:[]
+});
+const selectedRecord=()=>data?.documents.find(r=>r.id===activeSavedId);
+const effectiveSavedDraft=(r:DocumentRecord)=>savedEdits.get(r.id)?.draft??recordDraft(r);
+function isChanged(r:DocumentRecord,e:SavedEdit):boolean{
+ return reviewFields.some(k=>r[k]!==e.draft[k]);
+}
+function validateSavedEdit(record:DocumentRecord,edit:SavedEdit):string|null{
+ const d=edit.draft;
+ if(edit.fieldErrors.size)return '金額は円単位の整数で入力してください。';
+ if(!validDate(d.paymentDate)||Number(d.paymentDate.slice(0,4))!==activeYear)return '支給日が対象年と一致しません。';
+ if(!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(d.targetMonth))return '対象年月が正しくありません。';
+ if(d.taxable===null)return '課税支給合計を入力してください。';
+ if(d.kind==='salary'&&data?.documents.some(other=>other.id!==record.id&&effectiveSavedDraft(other).kind==='salary'&&effectiveSavedDraft(other).paymentDate.slice(0,7)===d.paymentDate.slice(0,7)))
+  return '同じ支給月の給与がほかにあります。';
+ if(d.kind==='salary'&&fileQueue.some(q=>q.status==='ready'&&q.draft?.kind==='salary'&&q.draft.paymentDate.slice(0,7)===d.paymentDate.slice(0,7)))
+  return '新規PDFと同じ支給月です。';
+ return null;
+}
+/** Display names may be pseudonyms. Only compare names extracted from PDFs. */
+function namesInWorkspace():Array<string|null|undefined>{
+ return [...otherYearNames,...(data?.documents.map(d=>d.detectedName)??[]),
+  ...fileQueue.filter(q=>q.status==='ready').map(q=>q.draft?.detectedName)];
+}
+function possibleNameMismatch(item:QueueItem):boolean{
+ const observed=normalizeDetectedName(item.draft?.detectedName);
+ if(!observed)return false;
+ return namesInWorkspace().some(name=>{const other=normalizeDetectedName(name);return Boolean(other&&other!==observed);});
+}
+function updateNameWarning(){
+ const notice=$<HTMLElement>('yea-name-warning');
+ const mismatch=inconsistentDetectedNames(namesInWorkspace());
+ notice.hidden=!mismatch;
+ notice.textContent=mismatch?'登録されたPDF間で読み取り氏名が一致していません。原本を確認してください。':'';
+}
+function validateQueueItem(item:QueueItem):string|null{
+ const d=item.draft;
+ if(item.status!=='ready'||!d)return 'PDFを正常に解析できていません。';
+ if(item.fieldErrors.size)return '金額は円単位の整数で入力してください。';
+ if(!['salary','bonus'].includes(d.kind))return '給与・賞与の区分を確認してください。';
+ if(!validDate(d.paymentDate)||Number(d.paymentDate.slice(0,4))!==item.year)return '支給日が対象年と一致しません。';
+ if(!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(d.targetMonth))return '対象年月を入力してください。';
+ if(d.taxable===null)return '課税支給合計を原本から確認してください。';
+ if(data?.documents.some(record=>record.fileHash===item.hash))return 'このPDFは保存済みです。';
+ const duplicates=fileQueue.filter(x=>x!==item&&x.status==='ready'&&x.hash===item.hash);
+ if(duplicates.some(x=>x.id<item.id))return '同一PDFが取り込み一覧にあります。';
+ const month=d.paymentDate.slice(0,7);
+ if(d.kind==='salary'){
+  if(data?.documents.some(r=>{const e=effectiveSavedDraft(r);return e.kind==='salary'&&e.paymentDate.slice(0,7)===month;}))return 'この支給月の給与は登録済みです。';
+  if(fileQueue.some(x=>x!==item&&x.status==='ready'&&x.draft?.kind==='salary'&&x.draft.paymentDate.slice(0,7)===month))return '同じ支給月の給与が複数選択されています。';
+ }
+ return null;
+}
+function updateSaveState(){
+ const ready=fileQueue.filter(item=>item.status==='ready'&&item.draft);
+ const updates=data?.documents.filter(r=>{const e=savedEdits.get(r.id);return Boolean(e&&isChanged(r,e));})??[];
+ const pending=fileQueue.some(item=>item.status==='reading');
+ const errors=fileQueue.some(item=>item.status==='error'||item.status==='duplicate');
+ const blocked=ready.some(item=>validateQueueItem(item)!==null)||updates.some(r=>validateSavedEdit(r,savedEdits.get(r.id)!)!==null);
+ saveAll.disabled=busy||!selected||!data||pending||errors||blocked||(ready.length===0&&updates.length===0);
+ saveAll.textContent=savingDocuments?'保存中…':'すべて保存';
+ $('yea-upload-progress').textContent=savingDocuments?'保存中…':
+  !ready.length&&!updates.length&&!errors&&!pending?'':pending?'PDFを解析中…':
+  errors?'読み取れないPDFを一覧から削除してください。':blocked?'入力内容に問題があります。':
+  `新規${ready.length}件・変更${updates.length}件`;
+}
+function renderSelectedReview(){
+ const queue=selectedQueueItem(),record=selectedRecord(),saved=record? savedEdits.get(record.id):undefined;
+ const d=queue?.draft??(record?(saved?.draft??recordDraft(record)):null);
+ const visible=Boolean(queue||record);
+ $('yea-review-empty').hidden=visible;$('yea-review-content').hidden=!visible;
+ if(!visible)return;
+ $('yea-selected-name').textContent=record?.fileName??queue?.file.name??'';
+ $('yea-selected-meta').textContent=record?(saved&&isChanged(record,saved)?'変更あり':'保存済み'):
+  queue?.status==='ready'?'新規・保存待ち':queue?.status==='reading'?'解析中':'読み取りエラー';
+ const warningAmounts=d?documentAmountWarnings(d):[];
+ const message=record?warningAmounts.join('\n'):queue?.status==='ready'&&queue?.draft?
+  [possibleNameMismatch(queue)?'他のPDFと読み取り氏名が一致しません。':'',...warningAmounts,...queue.draft.warnings].filter(Boolean).join('\n'):
+  queue?.status==='error'?queue.error:queue?.status==='duplicate'?'同じPDFが一覧にあります。':'';
+ const notice=$<HTMLElement>('yea-review-notice');notice.hidden=!message;notice.textContent=message;
+ notice.classList.toggle('read-result--warning',Boolean(message));notice.classList.toggle('read-result--error',queue?.status==='error');
+ $<HTMLButtonElement>('yea-discard-edit').hidden=!record||!saved||!isChanged(record,saved);
+ $<HTMLButtonElement>('yea-open-draft-pdf').disabled=queue?.status==='reading';
+ reviewForm.hidden=!d||(queue?.status!=='ready'&&!record);
+ if(!d||reviewForm.hidden)return;
+ for(const field of reviewFields){
+  if(field==='kind'){
+   const radio=reviewForm.querySelector<HTMLInputElement>(`input[data-field="kind"][value="${d.kind}"]`);
+   if(radio)radio.checked=true;
+   continue;
+  }
+  const input=reviewForm.querySelector<HTMLInputElement|HTMLSelectElement>(`[data-field="${field}"]`);
+  if(input)input.value=String(d[field]??'');
+ }
+ const error=record&&saved?validateSavedEdit(record,saved):queue?validateQueueItem(queue):null;
+ reviewValidation.hidden=!error;reviewValidation.textContent=error??'';
+ reviewValidation.classList.toggle('is-error',Boolean(error));
+}
+function updateDrafts(preserveReview=false){
+ if(activeSavedId&&!data?.documents.some(r=>r.id===activeSavedId))activeSavedId=null;
+ if(activeDraft!==null&&!fileQueue.some(x=>x.id===activeDraft))activeDraft=null;
+ if(activeSavedId===null&&activeDraft===null){activeSavedId=data?.documents[0]?.id??null;if(!activeSavedId)activeDraft=fileQueue[0]?.id??null;}
+ drafts.replaceChildren();
+ const savedRecords=[...(data?.documents??[])];
+ const orderedItems:Array<{month:string;date:string;node:HTMLLIElement}>=[];
+ $('yea-file-count').textContent=`${savedRecords.length+fileQueue.length}件`;
+ $('yea-files-empty').hidden=savedRecords.length+fileQueue.length>0;
+ drafts.hidden=savedRecords.length+fileQueue.length===0;
+ $('yea-clear-all').hidden=fileQueue.length===0;
+ $<HTMLButtonElement>('yea-clear-all').disabled=busy;
+ $('yea-parse-state').textContent=savedRecords.length+fileQueue.length?`保存済み${savedRecords.length}件 · 新規${fileQueue.length}件`:'取り込み待ち';
+ updateNameWarning();
+ for(const r of savedRecords){
+  const chosen=r.id===activeSavedId;
+  const li=el('li','file-list__item is-saved');li.classList.toggle('is-selected',chosen);
+  const choose=el('button','file-list__select');choose.type='button';
+  choose.setAttribute('aria-label',`${r.fileName} の内容を確認`);
+  choose.setAttribute('aria-pressed',String(chosen));
+  const icon=el('span','file-list__icon');icon.append(uploadIcon('file'));
+  const info=el('span','file-list__text');
+  const fileName=el('span','file-name',r.fileName);fileName.title=r.fileName;
+  const edited=savedEdits.get(r.id),d=edited?.draft??r;
+  const detail=el('span','file-caption',formatBytes(r.pdfSize));
+  const failed=edited&&validateSavedEdit(r,edited),changed=edited&&isChanged(r,edited);
+  const state=el('span',`file-status file-status--${failed?'error':changed?'warning':'confirmed'}`,failed?'要修正':changed?'変更あり':'保存済み');
+  info.append(fileName,detail,state);choose.append(icon,info);
+  if(chosen){const current=el('span','file-list__current','表示中');choose.append(current);}
+  choose.addEventListener('click',()=>{activeSavedId=r.id;activeDraft=null;updateDrafts();});
+  const remove=el('button','file-list__remove');remove.type='button';remove.disabled=busy;
+  remove.title='保存済み明細を削除';remove.setAttribute('aria-label',`${r.fileName} の保存済み明細を削除`);
+  remove.append(uploadIcon('close'));
+  remove.addEventListener('click',()=>{if(busy||!selected||!data)return;
+   const discardsEdit=Boolean(savedEdits.get(r.id)&&isChanged(r,savedEdits.get(r.id)!));
+   if(!window.confirm(`${r.fileName} を保存済み一覧から削除しますか？\n\n課税支給額の集計から除外し、暗号化PDF原本をOneDriveのごみ箱へ移動します。${discardsEdit?'\nこの明細の未保存編集も破棄します。':''}\nこの操作は画面上で取り消せません。`))return;
+   const id=selected,year=activeYear;
+   void action('保存済み明細の削除',async()=>{
+    const result=await repo.deleteDocument(id,year,r.id);
+    savedEdits.delete(r.id);
+    await loadYear();
+    if(result.cleanupPending)say('明細を一覧から削除しましたが、PDF原本のごみ箱への移動は未完了です。',true);
+   });
+  });
+  li.append(choose,remove);orderedItems.push({month:r.targetMonth,date:r.paymentDate,node:li});
+ }
+ for(const item of fileQueue){
+  const chosen=item.id===activeDraft;
+  const li=el('li','file-list__item');li.classList.toggle('is-selected',chosen);
+  const choose=el('button','file-list__select');choose.type='button';
+  choose.setAttribute('aria-label',`${item.file.name} の内容を確認`);
+  choose.setAttribute('aria-pressed',String(chosen));
+  const icon=el('span','file-list__icon');icon.append(uploadIcon('file'));
+  const info=el('span','file-list__text');
+  const name=el('span','file-name',item.file.name);name.title=item.file.name;
+  const detail=el('span','file-caption',formatBytes(item.file.size));
+  const failed=item.status==='error'||item.status==='duplicate';
+  const valid=item.status==='ready'&&!validateQueueItem(item);
+  const label=item.status==='reading'?'解析中':failed?'読取不可':valid?'保存待ち':'要修正';
+  const status=el('span',`file-status file-status--${failed?'error':item.status==='reading'?'pending':valid?'ready':'warning'}`,label);
+  info.append(name,detail,status);choose.append(icon,info);
+  if(chosen){const current=el('span','file-list__current','表示中');choose.append(current);}
+  choose.addEventListener('click',()=>{activeDraft=item.id;activeSavedId=null;updateDrafts();});
+  const remove=el('button','file-list__remove');remove.type='button';
+  remove.title='一覧から削除';remove.setAttribute('aria-label',`${item.file.name} を一覧から削除`);
+  remove.disabled=busy;remove.append(uploadIcon('close'));
+  remove.addEventListener('click',()=>{if(busy)return;fileQueue=fileQueue.filter(x=>x!==item);updateDrafts();});
+  li.append(choose,remove);orderedItems.push({month:item.draft?.targetMonth??'',date:item.draft?.paymentDate??'',node:li});
+ }
+ // List rows match the standard PDF importer. Sorting is chronological, not grouping:
+ // January comes first, December last; unparsed PDFs without a month go to the end.
+ orderedItems.sort((a,b)=>{
+  if(!a.month)return b.month?1:a.date.localeCompare(b.date);
+  if(!b.month)return -1;
+  return a.month.localeCompare(b.month)||a.date.localeCompare(b.date);
+ });
+ for(const item of orderedItems)drafts.append(item.node);
+ const count=$<HTMLElement>('yea-workspace-count');
+ const changes=data?.documents.filter(r=>{const edit=savedEdits.get(r.id);return Boolean(edit&&isChanged(r,edit));}).length??0;
+ const pendingCount=fileQueue.length+changes;
+ count.textContent=pendingCount?`未保存 ${pendingCount}件`:`${savedRecords.length}件`;
+ if(!preserveReview)renderSelectedReview();updateSaveState();
+}
+async function saveAllDocuments(){
+ if(busy||saveAll.disabled||!selected||!data)return;
+ const id=selected,year=activeYear;
+ const updates=data.documents.filter(r=>{const e=savedEdits.get(r.id);return Boolean(e&&isChanged(r,e));});
+ const additions=fileQueue.filter(x=>x.status==='ready'&&x.draft);
+ if(!updates.length&&!additions.length)return;
+ for(const record of updates){const edit=savedEdits.get(record.id)!;
+  if(validateSavedEdit(record,edit)){activeSavedId=record.id;activeDraft=null;updateDrafts();say('変更する明細の入力内容を確認してください。',true);return;}
+ }
+ for(const item of additions){if(item.personId!==id||item.year!==year||validateQueueItem(item)){
+  activeSavedId=null;activeDraft=item.id;updateDrafts();say('新規明細の入力内容を確認してください。',true);return;}}
+ // Normal saves have no extra dialog. Only inconsistencies require explicit consent.
+ const amountWarnings=[...updates.map(r=>savedEdits.get(r.id)!.draft),...additions.map(i=>i.draft!)].flatMap(documentAmountWarnings);
+ const acknowledged=amountWarnings.length>0;
+ if(acknowledged&&!window.confirm(`支給額の検算に不一致があります。\n${[...new Set(amountWarnings)].join('\n')}\nPDF原本を確認し、この金額で保存しますか？`))return;
+ busy=true;savingDocuments=true;uploadAccordion.open=false;showBusy('明細を保存中');updateSaveState();
+ try{
+  const result=await repo.saveDocumentsBatch(id,year,
+   updates.map(record=>({documentId:record.id,expectedRevision:record.revision,draft:savedEdits.get(record.id)!.draft})),
+   additions.map(item=>({file:item.file,draft:item.draft!})),acknowledged);
+  if(selected!==id||activeYear!==year)throw new Error('保存中に従業員または年が変更されました。');
+  const forecastSnapshot=forecastDirty?captureForecastInput():null;
+  const bonusSnapshot=bonusDirty?captureBonusInput():null;
+  data=result.data;
+  const profile=people.find(p=>p.id===id);
+  if(profile)profile.yearFiles=result.yearFiles;
+  savedEdits.clear();fileQueue=[];activeDraft=null;activeSavedId=null;
+  uiPdf.value='';
+  renderYear();
+  if(forecastSnapshot)restoreForecastInput(forecastSnapshot);
+  if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
+  if(result.data.documents.length)uploadAccordion.open=false;
+  appStatus.success('明細を保存しました');
+ }catch(error){
+  uploadAccordion.open=true;
+  say(`保存できませんでした：${error instanceof Error?error.message:'通信エラー'}`,true);
+ }finally{
+  busy=false;savingDocuments=false;updateDrafts();updateForecastSaveState();updateBonusSaveState();
+ }
+}
+async function refreshPeopleKeepSelection(){
+ const id=selected;people=await repo.people();renderPeople();if(id&&people.some(p=>p.id===id&&p.state==='active')){selected=id;currentName.textContent=displayPerson(person());renderYearOptions();await loadYear();}
+}
+function bind(){
+ $<HTMLButtonElement>('yea-back-directory').addEventListener('click',()=>{if(busy||!checkDetailExit())return;resetSelection();say('従業員を選択してください。');});
+ $<HTMLButtonElement>('yea-open-manage').addEventListener('click',()=>{if(!selected||busy)return;$<HTMLInputElement>('yea-rename-name').value=displayPerson(person());$<HTMLDialogElement>('yea-manage-dialog').showModal();});
+ $<HTMLButtonElement>('yea-close-manage').addEventListener('click',()=>{$<HTMLDialogElement>('yea-manage-dialog').close();});
+ yearSelect.addEventListener('change',()=>{if(busy||!checkDetailExit()){yearSelect.value=String(activeYear);return;}if(!selected)return;const y=Number(yearSelect.value);if(!validYear(y))return;activeYear=y;clearMemo();data=null;clearDrafts();resetForecastForm();resetBonusForm();void action('暦年データの読み込み',loadYear,false);});
+ $<HTMLFormElement>('yea-person-create').addEventListener('submit',e=>{e.preventDefault();const name=$<HTMLInputElement>('yea-new-name').value;void action('従業員の登録',async()=>{const id=await repo.createPerson(name,'');await loadPeople();$<HTMLInputElement>('yea-new-name').value='';await selectPerson(id);});});
+ $<HTMLFormElement>('yea-rename').addEventListener('submit',e=>{e.preventDefault();if(!selected)return;const id=selected,name=$<HTMLInputElement>('yea-rename-name').value;void action('従業員名の変更',async()=>{await repo.renamePerson(id,name,'');await refreshPeopleKeepSelection();$<HTMLDialogElement>('yea-manage-dialog').close();});});
+ $<HTMLButtonElement>('yea-delete-person').addEventListener('click',()=>{
+  if(!selected||busy||!checkDetailExit())return;
+  const p=person(),id=p.id;
+  if(!window.confirm(`${displayPerson(p)} の従業員データ（PDF原本・年度データ・見込みを含む）を削除しますか？\nOneDriveのごみ箱やバージョン履歴には残る場合があります。`))return;
+  const input=window.prompt('削除する従業員の表示名を入力してください。');
+  if(input!==displayPerson(p))return;
+  // Close before the potentially long OneDrive deletion sequence begins.
+  const dialog=$<HTMLDialogElement>('yea-manage-dialog');if(dialog.open)dialog.close();
+  void action('従業員を削除中',async()=>{
+   await repo.deletePerson(id);
+   resetSelection();await loadPeople();
+  });
+ });
+ memoInput.addEventListener('input',()=>{memoDirty=memoInput.value!==(data?.memo??'');memoButton.disabled=!memoDirty;memoState.textContent=memoDirty?'未保存の変更があります。':'';});
+ memoButton.addEventListener('click',()=>{if(!selected||!data||!memoDirty||busy)return;const id=selected,year=activeYear,text=memoInput.value;
+  void action('年度メモの暗号化保存',async()=>{
+   const draft=forecastDirty?captureForecastInput():null;
+   const bonusDraft=bonusDirty?{month:bonusMonthInput.value,amount:bonusValueInput.value}:null;
+   await repo.saveYearMemo(id,year,text);data=await repo.year(id,year);memoDirty=false;renderYear();
+   if(draft)restoreForecastInput(draft);
+   if(bonusDraft){bonusMonthInput.value=bonusDraft.month;bonusValueInput.value=bonusDraft.amount;bonusDirty=true;updateBonusSaveState();}
+  });
+ });
+ window.addEventListener('beforeunload',event=>{if(memoDirty||pendingEdits()||forecastDirty||bonusDirty){event.preventDefault();event.returnValue='';}});
+ methodChoices.addEventListener('change',event=>{
+  if(!(event.target instanceof HTMLInputElement)||event.target.type!=='radio')return;
+  syncForecastAmounts(true);
+  markForecastDirty();
+ });
+ commit.addEventListener('click',saveForecast);
+ const queuePdfFiles=(files:File[])=>{
+  if(busy||!selected||!data){say('従業員を選択してください。',true);return;}
+  if(!files.length)return;
+  if(files.length+fileQueue.length>30){say('一度に選択できるPDFは最大30件です。',true);return;}
+  const id=selected,year=activeYear;
+  const items:QueueItem[]=files.map(file=>({id:++draftSerial,file,draft:null,personId:id,year,hash:'',status:'reading',error:'',fieldErrors:new Set<string>()}));
+  fileQueue.push(...items);activeDraft=items[0]?.id??null;activeSavedId=null;
+  uploadAccordion.open=false;updateDrafts();
+  void action('PDFをブラウザ内で解析',async()=>{
+   for(const item of items){
+    if(!fileQueue.includes(item))continue;
+    try{
+     const bytes=await item.file.arrayBuffer();
+     item.hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join('');
+     if(data?.documents.some(r=>r.fileHash===item.hash)||fileQueue.some(x=>x!==item&&x.id<item.id&&x.hash===item.hash)){
+      item.status='duplicate';continue;
+     }
+     item.draft=await parseAssistedPdf(item.file);item.status='ready';
+    }catch(error){item.status='error';item.error=error instanceof Error?error.message:'PDFの解析に失敗しました。';}
+    finally{updateDrafts();}
+   }
+   if(selected!==id||activeYear!==year){clearDrafts();throw new Error('解析中に従業員や年が変更されました。');}
+  },false).finally(()=>{if(selected===id&&activeYear===year)uploadAccordion.open=true;});
+ };
+ uiPdf.addEventListener('change',()=>{const files=Array.from(uiPdf.files??[]);uiPdf.value='';queuePdfFiles(files);});
+ const drop=$<HTMLElement>('yea-pdf-dropzone');
+ drop.addEventListener('click',()=>{if(!busy&&!uiPdf.disabled)uiPdf.click();});
+ drop.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&!busy&&!uiPdf.disabled){event.preventDefault();uiPdf.click();}});
+ drop.addEventListener('dragenter',event=>{event.preventDefault();drop.classList.add('is-dragging');});
+ drop.addEventListener('dragover',event=>{event.preventDefault();if(event.dataTransfer)event.dataTransfer.dropEffect='copy';drop.classList.add('is-dragging');});
+ drop.addEventListener('dragleave',event=>{if(!drop.contains(event.relatedTarget as Node|null))drop.classList.remove('is-dragging');});
+ drop.addEventListener('drop',event=>{event.preventDefault();drop.classList.remove('is-dragging');queuePdfFiles(Array.from(event.dataTransfer?.files??[]));});
+ $<HTMLButtonElement>('yea-mobile-file-picker').addEventListener('click',()=>{if(!busy&&!uiPdf.disabled)uiPdf.click();});
+ $<HTMLButtonElement>('yea-open-draft-pdf').addEventListener('click',()=>{
+  const item=selectedQueueItem(),record=selectedRecord();
+  if(item)openBlobPdf(item.file);
+  else if(record)void openStoredPdf(record.id);
+ });
+ $<HTMLButtonElement>('yea-discard-edit').addEventListener('click',()=>{const r=selectedRecord();if(!r||busy)return;savedEdits.delete(r.id);updateDrafts();});
+ $<HTMLButtonElement>('yea-clear-all').addEventListener('click',()=>{if(busy||!fileQueue.length)return;if(window.confirm('取り込み待ちのファイルをすべて削除しますか？'))clearDrafts();});
+ reviewForm.addEventListener('input',event=>{
+  const node=event.target;
+  if(!(node instanceof HTMLInputElement||node instanceof HTMLSelectElement)||!node.dataset.field)return;
+  const item=selectedQueueItem(),record=selectedRecord();
+  if(!record&&(!item?.draft||item.status!=='ready'))return;
+  const key=node.dataset.field as ReviewField;if(!reviewFields.includes(key))return;
+  let edit:SavedEdit|undefined;
+  if(record){
+   edit=savedEdits.get(record.id);
+   if(!edit){edit={draft:recordDraft(record),fieldErrors:new Set()};savedEdits.set(record.id,edit);}
+  }
+  const draft=edit?.draft??item!.draft!,errors=edit?.fieldErrors??item!.fieldErrors;
+  if(key==='kind'||key==='paymentDate'||key==='targetMonth'){
+   (draft as unknown as Record<string,string>)[key]=node.value;
+   if(key==='kind'&&node.value==='bonus'&&draft.taxable===null&&draft.gross!==null&&
+     (draft.nonTaxable===null||draft.nonTaxable===0)&&(draft.transportation===null||draft.transportation===0)){
+    draft.taxable=draft.gross;
+    const taxable=reviewForm.querySelector<HTMLInputElement>('input[data-field="taxable"]');
+    if(taxable)taxable.value=String(draft.taxable);
+   }
+  }else{
+   const amount=node.value.trim()?parseYen(node.value):null;
+   (draft as unknown as Record<string,number|null>)[key]=amount;
+   if(node.value.trim()&&amount===null)errors.add(key);else errors.delete(key);
+  }
+  const error=record?validateSavedEdit(record,edit!):validateQueueItem(item!);
+  reviewValidation.hidden=!error;reviewValidation.textContent=error??'';reviewValidation.classList.toggle('is-error',Boolean(error));
+  // Re-render warning details without wiping typed form fields.
+  const warnings=[...(item&&possibleNameMismatch(item)?['他のPDFと読み取り氏名が一致しません。']:[]),
+   ...documentAmountWarnings(draft),...(item?.draft?.warnings??[])];
+  const notice=$<HTMLElement>('yea-review-notice');
+  notice.hidden=!warnings.length;notice.textContent=[...new Set(warnings)].join('\n');notice.classList.toggle('read-result--warning',Boolean(warnings.length));
+  if(record&&edit){
+   const changed=isChanged(record,edit);
+   $<HTMLButtonElement>('yea-discard-edit').hidden=!changed;
+   $('yea-selected-meta').textContent=changed?'変更あり':'保存済み';
+  }
+  updateDrafts(true);
+ });
+ saveAll.addEventListener('click',()=>{void saveAllDocuments();});
+ bonusMonthInput.addEventListener('input',()=>{
+  const month=bonusMonthInput.value;
+  // Clearing the month field after selecting a saved entry removes that entry on Save.
+  bonusClearedMonth=!month&&bonusLastMonth&&data?.bonusEstimates.some(e=>e.month===bonusLastMonth)?bonusLastMonth:'';
+  bonusLastMonth=month;
+  const saved=data?.bonusEstimates.find(e=>e.month===month);
+  bonusValueInput.value=saved?String(saved.amount):'';
+  markBonusDirty();
+ });
+ bonusValueInput.addEventListener('input',markBonusDirty);
+ window.addEventListener('pagehide',()=>{for(const url of pdfObjectUrls)URL.revokeObjectURL(url);});
+}
+bind();
+
+void action('保管庫の読み込み',async()=>{await loadPeople();},false);

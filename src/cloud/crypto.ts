@@ -8,6 +8,10 @@ const DOMAINS = {
   original: 'Payroll OneDrive PDF original v1',
   income: 'Payroll OneDrive income v1',
   snapshot: 'Payroll tab navigation snapshot v1',
+  'assist-index': 'Payroll year-end third-party index v1',
+  'assist-profile': 'Payroll year-end third-party person v1',
+  'assist-year': 'Payroll year-end third-party calendar-year v1',
+  'assist-original': 'Payroll year-end third-party original PDF v1',
 } as const;
 export type EnvelopeKind = keyof typeof DOMAINS;
 interface EncryptedEnvelope {

@@ -16,6 +16,8 @@ const ctx={
  navigator:{serviceWorker:{async getRegistration(){return {active:{scriptURL:'https://payroll.example/view/pdf-sw.js'},async unregister(){unregistered=true;}};}}},
  URL:class extends URL{static createObjectURL(blob){assert.equal(blob,pdf);return 'blob:cloud-payroll-pdf';}static revokeObjectURL(){}},
  URLSearchParams,Blob,console,setTimeout:()=>1,clearTimeout:()=>{},
+ createTabLockCoordinator:()=>({epoch:()=>'',check:()=>true}),
+ receiveYearEndPdf:async()=>{throw new Error('not expected in personal viewer test');},
  getRecord:async(id)=>{assert.equal(id,7);return {id:7,fileName:'給与明細.pdf',pdf};},
 };
 vm.runInNewContext(runnable,ctx,{filename:'view.ts'});

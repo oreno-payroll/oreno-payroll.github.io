@@ -2,11 +2,24 @@ import { createAppStatus } from './ui/appStatus';
 /** PDF原本はクリック時だけ取得する。Chrome内蔵PDFビューアには名前付きURLで渡す。 */
 import { getRecord } from './storage/payrollStore';
 import { receivePdfHandoff } from './pdf/handoff';
+import {receiveYearEndPdf} from './pdf/yearEndHandoff';
+import {createTabLockCoordinator} from './cloud/tabLock';
 
 const status = document.getElementById('pdf-status');
 const appStatus=createAppStatus(status);
 const reader = document.getElementById('pdf-reader') as HTMLIFrameElement | null;
 let fallbackUrl: string | undefined;
+let locked=false;
+const locks=createTabLockCoordinator(()=>{
+ locked=true;
+ if(reader){reader.hidden=true;reader.removeAttribute('src');}
+ if(fallbackUrl){URL.revokeObjectURL(fallbackUrl);fallbackUrl=undefined;}
+ appStatus.error('保管庫がロックされました。このPDFは閉じてください。');
+});
+function assertUnlocked(start:string){
+ if(locked||!locks.check()||locks.epoch()!==start)throw new Error('保管庫がロックされました。PDFを開き直してください。');
+}
+
 
 window.addEventListener('pagehide', () => {
   if (fallbackUrl) URL.revokeObjectURL(fallbackUrl);
@@ -22,7 +35,23 @@ async function removeLegacyWorker(): Promise<void> {
 
 async function start(): Promise<void> {
   if (!status || !reader) throw new Error('PDF表示画面の構成に問題があります。');
-  const raw = new URLSearchParams(location.search).get('id') ?? '';
+  const startEpoch=locks.epoch();
+  const params=new URLSearchParams(location.search);
+  const yearEndId=params.get('yearend');
+  if(yearEndId!==null){
+   const ticket=new URLSearchParams((location.hash??'').slice(1)).get('handoff')??'';
+   if(!ticket)throw new Error('年末調整画面からPDFを開いてください。');
+   const payload=await receiveYearEndPdf(yearEndId,ticket);
+   assertUnlocked(startEpoch);
+   const clean=new URL(location.href);clean.hash='';window.history.replaceState(window.history.state,'',clean.href);
+   document.title=payload.fileName;reader.title=payload.fileName;
+   await removeLegacyWorker();assertUnlocked(startEpoch);
+   fallbackUrl=URL.createObjectURL(payload.pdf);
+   reader.src=fallbackUrl;reader.hidden=false;
+   appStatus.success('PDF原本を表示しました');
+   return;
+  }
+  const raw = params.get('id') ?? '';
   const id = Number(raw);
   if (!/^\d+$/.test(raw) || !Number.isSafeInteger(id) || id < 1) {
     throw new Error('PDF原本のIDが不正です。');
@@ -44,9 +73,11 @@ async function start(): Promise<void> {
   if (!record) throw new Error('このPDF原本は削除済みか、保存されていません。');
 
   // 外側のタブ名は常に保存済みファイル名を使用。
+  assertUnlocked(startEpoch);
   document.title = record.fileName;
   reader.title = record.fileName;
   await removeLegacyWorker();
+  assertUnlocked(startEpoch);
   fallbackUrl = URL.createObjectURL(record.pdf);
   reader.src = fallbackUrl;
   reader.hidden = false;

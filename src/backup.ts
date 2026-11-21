@@ -7,6 +7,8 @@ import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encry
 import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
 import {clearNavigationSnapshot} from './cloud/snapshot';
 import type {CloudFolderItem} from './cloud/graph';
+import {YearEndRepository} from './yearEnd/repository';
+import {createYearEndBackup,readYearEndBackup,type YearEndBackupData} from './yearEnd/backup';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -68,6 +70,9 @@ const operations: Record<string,Operation>={
  'legacy-cleanup-check':{label:'旧DBを検査',result:'legacy-cleanup-status'},
  'legacy-cleanup-delete':{label:'旧DBを削除',result:'legacy-cleanup-status'},
  'backup-cloud-load':{label:'OneDriveの明細を取得',result:'backup-status'},
+ 'ye-backup-export':{label:'従業員バックアップを保存',result:'ye-backup-status'},
+ 'ye-restore-verify':{label:'従業員バックアップを検証',result:'ye-backup-status'},
+ 'ye-restore-commit':{label:'従業員データを復元',result:'ye-backup-status'},
 };
 document.addEventListener('click',event=>{
  const target=event.target;
@@ -88,10 +93,26 @@ function reportStatusTransition(){
 }
 
 const sizes = (n: number) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MiB` : `${Math.max(0, Math.round(n / 1024))} KiB`;
+const yearEndRepo=new YearEndRepository();
+const yearEndExport=$<HTMLButtonElement>('ye-backup-export');
+const yearEndPassword=$<HTMLInputElement>('ye-backup-password');
+const yearEndConfirm=$<HTMLInputElement>('ye-backup-confirm');
+const yearEndFile=$<HTMLInputElement>('ye-restore-file');
+const yearEndRestorePassword=$<HTMLInputElement>('ye-restore-password');
+const yearEndVerify=$<HTMLButtonElement>('ye-restore-verify');
+const yearEndCommit=$<HTMLButtonElement>('ye-restore-commit');
+const yearEndAck=$<HTMLInputElement>('ye-restore-ack');
+const yearEndPreviewLabel=$<HTMLElement>('ye-restore-preview');
+const yearEndStatus=$<HTMLElement>('ye-backup-status');
+let yearEndPreview:YearEndBackupData|undefined;
+
 function updateButtons(): void {
   reportStatusTransition();
   orphanCheck.disabled=busy;orphanRecover.disabled=busy||!orphanYears?.length;
   exportButton.disabled = busy || !loadedDb;
+  yearEndExport.disabled=busy;yearEndVerify.disabled=busy||!yearEndFile.files?.length||!yearEndRestorePassword.value;
+  yearEndCommit.disabled=busy||!yearEndPreview||!yearEndAck.checked;yearEndAck.disabled=busy||!yearEndPreview;
+  for(const item of [yearEndPassword,yearEndConfirm,yearEndFile,yearEndRestorePassword])item.disabled=busy;
   cloudLoad.disabled=busy;
   changeButton.disabled=busy;
   $<HTMLButtonElement>('payroll-income-publish').disabled=busy;
@@ -429,5 +450,71 @@ localDelete.addEventListener('click',()=>{void(async()=>{
   const deleted=await deleteLegacyIndexedDb(result.count,text=>{localStatus.textContent=text;});
   localStatus.textContent=`この端末の旧IndexedDBを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;
  }catch(error){localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ finally{busy=false;updateButtons();}
+})()});
+
+// Year-end records belong to a separate, encrypted OneDrive namespace. Never mix
+// their restore action with personal payroll's destructive replaceAllRecords().
+function invalidateYearEndPreview(message='暗号化バックアップを選択してください。'){
+ yearEndPreview=undefined;yearEndAck.checked=false;yearEndPreviewLabel.textContent=message;
+ updateButtons();
+}
+yearEndFile.addEventListener('change',()=>invalidateYearEndPreview());
+yearEndRestorePassword.addEventListener('input',()=>invalidateYearEndPreview('パスワードを入力し、ファイルを検証してください。'));
+yearEndAck.addEventListener('change',updateButtons);
+function reportYearEnd(message:string){yearEndStatus.textContent=message;}
+function yearEndError(error:unknown){
+ const message=error instanceof Error?error.message:'操作に失敗しました。';
+ reportYearEnd(`処理を完了できませんでした：${message}`);
+}
+yearEndExport.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ if(yearEndPassword.value!==yearEndConfirm.value){reportYearEnd('バックアップ用パスワードが一致しません。');return;}
+ if([...yearEndPassword.value].length<12){reportYearEnd('パスワードは12文字以上にしてください。');return;}
+ busy=true;updateButtons();reportYearEnd('OneDriveの従業員情報・原本PDFを検証しています…');
+ try{
+  const data=await yearEndRepo.exportBackupSnapshot(reportYearEnd);
+  reportYearEnd('年末調整バックアップZIPを構築・暗号化しています…');
+  const zip=await createYearEndBackup(data);
+  const encrypted=await encryptBackup(zip,yearEndPassword.value);
+  const stamp=new Date().toISOString().replace(/[:.]/g,'').replace('T','-').slice(0,15);
+  const url=URL.createObjectURL(encrypted);
+  const anchor=document.createElement('a');anchor.href=url;anchor.download=`payroll-year-end-${stamp}.payroll`;
+  document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30_000);
+  yearEndPassword.value='';yearEndConfirm.value='';
+  reportYearEnd(`従業員 ${data.persons.length}名、原本 ${data.persons.reduce((n,p)=>n+p.originals.length,0)}件の暗号化バックアップを生成しました（${sizes(encrypted.size)}）。ファイルが保存されたことを確認してください。`);
+ }catch(error){yearEndError(error);}
+ finally{busy=false;updateButtons();}
+})()});
+yearEndVerify.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ const file=yearEndFile.files?.[0];if(!file)return;
+ invalidateYearEndPreview('バックアップ内容を検証しています…');
+ busy=true;updateButtons();reportYearEnd('年末調整のバックアップを復号・検証しています…');
+ try{
+  if(!await isEncryptedBackup(file))throw new Error('暗号化された.payrollファイルだけを受け付けます。');
+  const decoded=await decryptBackup(file,yearEndRestorePassword.value);
+  const data=await readYearEndBackup(decoded);
+  yearEndPreview=data;yearEndRestorePassword.value='';
+  const pdfs=data.persons.reduce((n,p)=>n+p.originals.length,0);
+  const years=data.persons.reduce((n,p)=>n+p.years.length,0);
+  yearEndPreviewLabel.textContent=`検証済み：従業員 ${data.persons.length}名、年度 ${years}件、原本PDF ${pdfs}件。作成日時 ${new Date(data.exportedAt).toLocaleString('ja-JP')}。既存従業員は上書きせず、未登録・削除済みの従業員だけを復元します。`;
+  reportYearEnd('バックアップの完全性検査が完了しました。');
+ }catch(error){yearEndError(error);invalidateYearEndPreview('バックアップの検証に失敗しました。OneDriveのデータは変更していません。');}
+ finally{busy=false;updateButtons();}
+})()});
+yearEndCommit.addEventListener('click',()=>{void(async()=>{
+ if(busy||!yearEndPreview||!yearEndAck.checked)return;
+ const data=yearEndPreview;
+ if(!window.confirm(`年末調整の従業員 ${data.persons.length}名を復元します。\n既存の従業員はスキップします。索引不整合・孤立ファイルがあれば中止します。\nOneDriveへの書き込みを開始しますか？`))return;
+ busy=true;updateButtons();reportYearEnd('従業員データの復元を開始しています…');
+ try{
+  const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd);
+  invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
+  yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名を復元しました（既存の ${result.skipped}名は変更なし）。`);
+ }catch(error){
+  invalidateYearEndPreview('復元を停止しました。OneDriveの保存状況を確認してから、再検証してください。');
+  yearEndError(error);
+ }
  finally{busy=false;updateButtons();}
 })()});

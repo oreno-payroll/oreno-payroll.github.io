@@ -13,13 +13,13 @@ const settingsCss=source('public/styles/vault.css');
 // The no-new-records result is a successful duplicate skip, not an error.
 assert.match(upload,/if \(result\.saved\) \{/);
 assert.match(upload,/saveStage\.textContent='新しく保存する明細はありません'/);
-assert.match(upload,/saveGuidance\.textContent='重複を確認しました。ホームへ戻ります。'/);
-assert.match(upload,/leavingAfterSave = true;\s*window\.setTimeout\(\(\) => window\.location\.assign\('\.\.\/index\.html'\), 1500\);\s*\} catch \(error\)/);
+assert.match(upload,/重複として除外したファイルを下で確認してください/);
+assert.match(upload,/if\(!skipped\) window\.setTimeout\(\(\) => window\.location\.assign\('\.\.\/index\.html'\), 1500\)/);
 assert.match(upload,/catch \(error\) \{[\s\S]*?showInlineError\(saveStatus, `保存に失敗しました/);
-const noOpBranch=upload.match(/\} else \{\s*stopSaveClock\(\);([\s\S]*?)\n    \}\n    \/\/ 保存成功・重複のみの両方で帰還/);
+const noOpBranch=upload.match(/\} else \{\s*stopSaveClock\(\);([\s\S]*?)\n    \}\n    \/\/ 重複がなければ従来どおり自動帰還/);
 assert.ok(noOpBranch,'duplicate-only success branch not found');
 assert.doesNotMatch(noOpBranch[1],/saving\s*=\s*false|updateSaveState\(\)/,'no button flicker before navigation');
-console.log('PASS: saved or duplicate-only upload returns home; save failures remain on screen');
+console.log('PASS: ordinary saves return home; duplicate results remain visible; save failures remain on screen');
 
 const block=home.match(/<footer class="site-footer">([\s\S]*?)<\/footer>/);
 assert.ok(block,'home footer missing');

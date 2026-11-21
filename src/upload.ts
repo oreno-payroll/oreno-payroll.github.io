@@ -15,6 +15,7 @@ import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
 import { duplicateOwners, pdfFailureMessage, shortFileName } from "./pdf/uploadWorkflow";
 import { showInlineError, clearInlineError } from "./ui/feedback";
+import {describeUploadDuplicates} from "./ui/duplicateResult";
 
 GlobalWorkerOptions.workerSrc = new URL("./pdf.worker.min.mjs", import.meta.url).href;
 
@@ -97,6 +98,9 @@ const saveElapsed = $<HTMLElement>("save-elapsed");
 const saveProgress = $<HTMLElement>("save-progress-track");
 const saveProgressFill = $<HTMLElement>("save-progress-fill");
 const saveGuidance = $<HTMLElement>("save-guidance");
+const saveDuplicates = $<HTMLElement>("save-duplicates");
+const saveDuplicateList = $<HTMLUListElement>("save-duplicate-list");
+const saveDuplicateTitle = $<HTMLElement>("save-duplicate-title");
 const reviewPanel = document.querySelector<HTMLElement>(".review-panel");
 
 let entries: Entry[] = [];
@@ -122,9 +126,10 @@ function updateSaveClock():void {
 function beginSaveFeedback():void {
  appStatus.loading('明細を保存しています…');
  saveFeedback.hidden=false;saveFeedback.classList.remove('is-failed','is-complete');
+ saveDuplicates.hidden=true;saveDuplicateList.replaceChildren();
  saveStartedAt=Date.now();lastSaveUpdateAt=saveStartedAt;lastSaveMessage='';
  saveStage.textContent='保存の準備中';
- saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。完了後、自動的にホームへ戻ります。';
+ saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。重複除外があった場合は結果を表示し、通常の保存完了時はホームへ戻ります。';
  saveProgress.classList.add('is-indeterminate');saveProgressFill.style.width='28%';
  saveProgress.removeAttribute('aria-valuenow');
  stopSaveClock();updateSaveClock();saveTick=setInterval(updateSaveClock,1000);
@@ -152,7 +157,7 @@ function showSaveProgress(message:string):void {
   saveProgress.removeAttribute('aria-valuenow');
  }
  saveStatus.textContent=message;
- saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。完了後、自動的にホームへ戻ります。';
+ saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。重複除外があった場合は結果を表示し、通常の保存完了時はホームへ戻ります。';
  updateSaveClock();
 }
 function notice(message: string): void {
@@ -825,8 +830,22 @@ saveButton.addEventListener("click", async () => {
       showSaveProgress(message);
       saveButtonLabel.textContent = '保存中…';
     });
-    const batchDuplicateCount = entries.length - uploadable.length;
-    const skipped=result.skipped.length+batchDuplicateCount;
+    const duplicateOwnersAtSave=duplicated();
+    const skippedDetails=describeUploadDuplicates(result.skipped,[...duplicateOwnersAtSave].map(([duplicateId,firstId])=>({
+      fileName:entries.find(entry=>entry.id===duplicateId)?.file.name??'名前不明',
+      firstFileName:entries.find(entry=>entry.id===firstId)?.file.name??'名前不明',
+    })));
+    const skipped=skippedDetails.length;
+    if(skipped){
+      saveDuplicateTitle.textContent=`保存対象外となったPDF：${skipped}件`;
+      saveDuplicateList.replaceChildren(...skippedDetails.map(item=>{
+        const row=document.createElement('li');
+        const name=document.createElement('strong');name.textContent=item.fileName;
+        const reason=document.createElement('span');reason.textContent=item.reason;
+        row.append(name,reason);return row;
+      }));
+      saveDuplicates.hidden=false;
+    }
     if (result.saved) {
       stopSaveClock();
       saveFeedback.classList.add('is-complete');saveFeedback.classList.remove('is-failed');
@@ -834,7 +853,7 @@ saveButton.addEventListener("click", async () => {
       saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='100%';
       saveProgress.setAttribute('aria-valuenow','100');
       saveStatus.textContent = `${result.saved}件をOneDriveへ保存・検証しました。${skipped?`重複${skipped}件は保存していません。`:''}`;
-      saveGuidance.textContent='保存完了を確認しました。ホームへ戻ります。';
+      saveGuidance.textContent=skipped?'重複として除外したファイルを下で確認してください。':'保存完了を確認しました。ホームへ戻ります。';
       saveButtonLabel.textContent = '保存完了';
       appStatus.success(`${result.saved}件の明細を保存しました`);
     } else {
@@ -844,13 +863,13 @@ saveButton.addEventListener("click", async () => {
       saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='100%';
       saveProgress.setAttribute('aria-valuenow','100');
       saveStatus.textContent=`重複${skipped}件を除外しました。新しい保存は行っていません。`;
-      saveGuidance.textContent='重複を確認しました。ホームへ戻ります。';
+      saveGuidance.textContent=skipped?'重複として除外したファイルを下で確認してください。':'新しい保存対象はありません。ホームへ戻ります。';
       saveButtonLabel.textContent='重複確認済み';
       appStatus.success('重複を確認しました');
     }
-    // 保存成功・重複のみの両方で帰還。エラーの場合は catch で画面を保持。
+    // 重複がなければ従来どおり自動帰還。重複があればファイル名と理由を画面に残す。
     leavingAfterSave = true;
-    window.setTimeout(() => window.location.assign('../index.html'), 1500);
+    if(!skipped) window.setTimeout(() => window.location.assign('../index.html'), 1500);
   } catch (error) {
     leavingAfterSave = false;
     stopSaveClock();saveFeedback.classList.add('is-failed');
@@ -946,7 +965,7 @@ diagnosticDialog.addEventListener("click", event => {
 // beforeunloadの文言はブラウザ標準（任意の文面は表示されない）。
 // 保存中のアプリ内移動は抑止。ページを閉じる操作にもbeforeunloadで警告する。
 document.addEventListener('click',event=>{
- if(!saving)return;
+ if(!saving || (leavingAfterSave && saveFeedback.classList.contains('is-complete')))return;
  const target=event.target;
  if(!(target instanceof Element))return;
  const link=target.closest<HTMLAnchorElement>('a[href]');

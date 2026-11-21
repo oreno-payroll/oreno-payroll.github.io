@@ -79,6 +79,8 @@
 .settings-page .backup-verify { align-self: flex-start; }
 .settings-page .backup-card__footer { display: grid; gap: 11px; margin-top: auto; padding-top: 14px; }
 .settings-page .backup-card__footer > .btn { width: 100%; white-space: normal; }
+/* 従業員バックアップの保存操作は、入力欄の直後に自然な間隔で配置する。 */
+.settings-page .ye-backup-export { width: 100%; white-space: normal; }
 .settings-page .backup-footnote, .settings-page .settings-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--color-muted); }
 .settings-page .backup-restore-warning { margin: 0; font-size: 12px; font-weight: 700; color: var(--color-danger); line-height: 1.5; }
 .settings-page .vault-check { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 12px; font-weight: 500; line-height: 1.5; cursor: pointer; }

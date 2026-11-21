@@ -2,6 +2,7 @@ import { createAppStatus } from './ui/appStatus';
 /** UI entry for isolated year-end support. No imports from the personal payrollStore. */
 import {YearEndRepository} from './yearEnd/repository';
 import {parseAssistedPdf} from './yearEnd/pdf';
+import {openYearEndPdf} from './pdf/yearEndHandoff';
 import {calculateYear,monthOf,parseYen,yearMonth,validYear,validDate,forecastPreview,bonusEstimatePreview,documentAmountWarnings,inconsistentDetectedNames,normalizeDetectedName,
  type PersonId,type PersonProfile,type YearData,type DocumentRecord,type DraftDocument,type EstimateMethod} from './yearEnd/model';
 const repo=new YearEndRepository();
@@ -55,7 +56,7 @@ const reviewValidation=$<HTMLParagraphElement>('yea-review-validation');
 const saveAll=$<HTMLButtonElement>('yea-save-all');
 const reviewFields=['kind','paymentDate','targetMonth','taxable','gross','transportation','nonTaxable','healthInsurance','pension','employmentInsurance','incomeTax','residentTax'] as const;
 type ReviewField=typeof reviewFields[number];
-const pdfObjectUrls:string[]=[];
+
 const displayDate=(value:string):string=>value.replace(/-/g,'/');
 const formatBytes=(bytes:number):string=>bytes<1024*1024?`${Math.max(1,Math.round(bytes/1024))} KB`:`${(bytes/1024/1024).toFixed(1)} MB`;
 function uploadIcon(name:'file'|'close'):SVGSVGElement{
@@ -367,20 +368,18 @@ function saveForecast(){
  }catch(err){setLocalError(forecastError,err instanceof Error?err.message:'見込み額の入力内容を確認してください。');}
 }
 function openBlobPdf(blob:Blob){
- const url=URL.createObjectURL(blob);pdfObjectUrls.push(url);
- const tab=window.open(url,'_blank');if(tab)tab.opener=null;
- else say('PDFを開けません。ブラウザのポップアップ許可を確認してください。',true);
-}
-async function openStoredPdf(id:string){
- if(!selected)return;
- // Reserve a tab synchronously, before the OneDrive download and decryption.
- const tab=window.open('about:blank','_blank');
- if(!tab){say('PDFを開けません。ブラウザのポップアップ許可を確認してください。',true);return;}
- tab.opener=null;
  try{
-  const blob=await repo.original(selected,activeYear,id);
-  const url=URL.createObjectURL(blob);pdfObjectUrls.push(url);tab.location.replace(url);
- }catch(error){tab.close();say(`PDF原本を開けません：${error instanceof Error?error.message:'通信エラー'}`,true);}
+  const id=crypto.randomUUID();
+  openYearEndPdf(id,async()=>({pdf:blob,fileName:blob instanceof File?blob.name:'確認用原本.pdf'}));
+ }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。',true);}
+}
+function openStoredPdf(id:string){
+ if(!selected)return;
+ const person=selected,year=activeYear;
+ const record=data?.documents.find(row=>row.id===id);
+ try{
+  openYearEndPdf(id,async()=>({pdf:await repo.original(person,year,id),fileName:record?.fileName??'給与明細原本.pdf'}));
+ }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。',true);}
 }
 const selectedQueueItem=():QueueItem|undefined=>fileQueue.find(x=>x.id===activeDraft);
 const recordDraft=(r:DocumentRecord):DraftDocument=>({
@@ -737,7 +736,7 @@ function bind(){
   markBonusDirty();
  });
  bonusValueInput.addEventListener('input',markBonusDirty);
- window.addEventListener('pagehide',()=>{for(const url of pdfObjectUrls)URL.revokeObjectURL(url);});
+
 }
 bind();
 

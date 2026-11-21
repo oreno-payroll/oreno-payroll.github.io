@@ -338,11 +338,12 @@
   white-space: normal;
   letter-spacing: normal;
 }
-/* ラベルが2行になっても右側の金額を下へ押し込まない。 */
+/* 欠損項目がある集計行は通常の金額表示のまま、ラベル下の注記だけを増やす。 */
 .details-list > div.has-missing-data,
-.job-card__footer.has-missing-data,
+.job-card__footer.has-missing-data { align-items: flex-start; }
 
-.forecast-caution--warning { border-left: 3px solid #d3a15a; padding: 9px 12px; background: #fff7ea; border-radius: 4px; color: #7f5a25; }
+/* 注意喚起は推計異常の説明だけに適用する。 */
+.forecast-caution--warning { border-left: 3px solid var(--state-warning-border); padding: 9px 12px; background: var(--state-warning-bg); border-radius: 4px; color: var(--state-warning-text); }
 
 
 /* 小画面での横はみ出し対策。明細名と操作ボタンを無理に横並びさせない。 */

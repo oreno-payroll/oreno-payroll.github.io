@@ -2,6 +2,7 @@
 import {cloudVault} from '../cloud/auth';
 import {encryptJson,decryptJson,encryptBytes,decryptBytes} from '../cloud/crypto';
 import {isCollision,type RemoteFile} from '../cloud/graph';
+import type {YearEndBackupData} from './backup';
 import {
  asPersonId,asDocumentId,randomPersonId,randomDocumentId,isUuid,validYear,validDate,monthOf,checkedMoney,documentAmountWarnings,
  emptyIndex,emptyYear,validateIndex,validateProfile,validateYear,forecastPreview,bonusEstimatePreview,validYearMemo,type PersonId,type PersonIndex,
@@ -477,6 +478,132 @@ export class YearEndRepository {
  async recordConfirmation(id:PersonId,year:number):Promise<void>{
   const a=await this.access(),context=await this.yearContext(a,id,year,true);
   await this.saveYear(a,id,year,context.file,{...context.data,confirmedAt:new Date().toISOString()},context.yearFile);
+ }
+ /** Read-only complete snapshot of the separate year-end namespace. All plaintext stays in RAM. */
+ async exportBackupSnapshot(progress:(message:string)=>void=()=>{}):Promise<YearEndBackupData>{
+  const a=await this.access(),initial=await this.readIndex(a);
+  if(initial.value.persons.some(p=>p.state==='deleting'))throw new Error('従業員の削除処理が未完了です。バックアップを中止しました。');
+  const active=initial.value.persons.filter(p=>p.state==='active');
+  const persons:YearEndBackupData['persons']=[];
+  const inspected:Array<{path:string[];name:string;etag:string}>=[];
+  const observe=(path:string[],name:string,file:RemoteFile)=>inspected.push({path,name,etag:file.etag});
+  if(initial.file)observe(a.path,'index.enc',initial.file);
+  for(const row of active){
+   const root=this.personPath(a,row.id),profile=await this.profile(a,row.id);
+   if(!profile.file)throw new Error('従業員情報が見つかりません。');
+   observe(root,'profile.enc',profile.file);
+   const years:YearData[]=[],originals:YearEndBackupData['persons'][number]['originals']=[];
+   const used=new Set<string>();
+   for(const [rawYear,fileId] of Object.entries(profile.value.yearFiles)){
+    const year=Number(rawYear);
+    const path=[...root,'years'],file=await this.readJson<YearData>(a,'year',path,fileId+'.enc',MAX_YEAR);
+    if(!file?.file)throw new Error('年度ファイルが欠落しています。バックアップを中止しました。');
+    years.push(validateYear(file.value,row.id,year));observe(path,fileId+'.enc',file.file);
+    for(const record of file.value.documents){
+     if(used.has(record.id))throw new Error('従業員内で明細IDが重複しています。');
+     used.add(record.id);
+     const path=[...root,'originals'],original=await a.graph.read(path,record.id+'.enc',MAX_PDF);
+     if(!original)throw new Error('原本PDFが欠落しています。バックアップを中止しました。');
+     const bytes=await decryptBytes(kinds.original,original.text,a.key);
+     if(bytes.byteLength!==record.pdfSize||await hash(bytes.buffer as ArrayBuffer)!==record.fileHash)
+      throw new Error('PDF原本の完全性が一致しません。バックアップを中止しました。');
+     originals.push({id:record.id,bytes});
+     progress(`従業員 ${persons.length+1}/${active.length}、原本 ${originals.length}件を検証しました`);
+    }
+   }
+   persons.push({profile:profile.value,years,originals});
+  }
+  // Reject a newly created, deleted or modified index, including an initially absent index.
+  const latestIndex=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
+  if((latestIndex?.file?.etag??null)!==(initial.file?.etag??null))
+   throw new Error('バックアップ作成中に従業員索引が更新されました。最初からやり直してください。');
+  // Reject an inconsistent multi-file snapshot if any profile/year/index changed while downloading.
+  for(const file of inspected){
+   const current=await a.graph.metadata(file.path,file.name);
+   if(!current||current.etag!==file.etag)throw new Error('バックアップ作成中に別タブでデータが更新されました。最初からやり直してください。');
+  }
+  const live=await this.access();
+  if(live.path.join('/')!==a.path.join('/'))throw new Error('バックアップ中に暗号化保管庫が切り替わりました。');
+  return {exportedAt:new Date().toISOString(),persons};
+ }
+ /** Non-destructive restore: bring back missing or deleted people, keep active people untouched. */
+ async restoreBackupSnapshot(data:YearEndBackupData,progress:(message:string)=>void=()=>{}):Promise<{restored:number;skipped:number}>{
+  const a=await this.access(),current=await this.readIndex(a);
+  const indexed=new Map(current.value.persons.map(p=>[p.id,p]));
+  if(current.value.persons.some(p=>p.state==='deleting'))
+   throw new Error('削除途中の従業員がいます。先に状態を確認してください。');
+  // Refuse orphaned or unexpected directory entries. An old aborted restore must
+  // be inspected, not overwritten by a new attempt.
+  const folders=await a.graph.listFolder([...a.path,'persons'])??[];
+  for(const folder of folders){
+   if(!folder.folder||!isUuid(folder.name)||indexed.get(folder.name as PersonId)?.state!=='active')
+    throw new Error('索引未登録または削除済みの従業員フォルダーがあります。誤上書きを防ぐため復元を中断しました。');
+  }
+  const directory=new Set(folders.map(f=>f.name));
+  const ids=new Set<string>(),selected:YearEndBackupData['persons']=[];
+  let skipped=0;
+  // Complete metadata and PDF verification BEFORE any cloud write.
+  for(const person of data.persons){
+   const id=asPersonId(person.profile.id);
+   if(ids.has(id))throw new Error('バックアップ内で従業員IDが重複しています。');ids.add(id);
+   validateProfile(person.profile,id);
+   if(person.years.length!==Object.keys(person.profile.yearFiles).length)
+    throw new Error('従業員の年度索引と年度データが一致しません。');
+   const docs=new Map<string,DocumentRecord>();
+   for(const year of person.years){
+    if(!person.profile.yearFiles[String(year.calendarYear)])throw new Error('年度の参照先が一致しません。');
+    validateYear(year,id,year.calendarYear);
+    for(const record of year.documents){
+     if(docs.has(record.id))throw new Error('従業員内で明細IDが重複しています。');
+     docs.set(record.id,record);
+    }
+   }
+   if(person.originals.length!==docs.size)throw new Error('PDF原本の件数が一致しません。');
+   const seen=new Set<string>();
+   for(const original of person.originals){
+    const doc=docs.get(asDocumentId(original.id));
+    if(!doc||seen.has(original.id)||doc.pdfSize!==original.bytes.length||
+       await hash(original.bytes.slice().buffer as ArrayBuffer)!==doc.fileHash)
+     throw new Error('PDF原本のSHA-256照合に失敗しました。');
+    seen.add(original.id);
+   }
+   const prior=indexed.get(id);
+   if(prior?.state==='active'){skipped++;continue;}
+   if(directory.has(id))throw new Error('復元予定の従業員フォルダーが既に存在します。');
+   selected.push(person);
+  }
+  if(!selected.length)return {restored:0,skipped};
+  if(current.value.persons.length+selected.filter(p=>!indexed.has(p.profile.id)).length>2000)
+   throw new Error('従業員数の上限を超えています。');
+  let count=0;
+  const entries:PersonIndex['persons']=[];
+  for(const person of selected){
+   const id=asPersonId(person.profile.id),root=this.personPath(a,id),pdfPath=[...root,'originals'];
+   for(const original of person.originals){
+    await a.graph.write(pdfPath,original.id+'.enc',await encryptBytes(kinds.original,original.bytes,a.key),null,MAX_PDF);
+    const stored=await a.graph.read(pdfPath,original.id+'.enc',MAX_PDF);
+    if(!stored)throw new Error('原本PDFの保存照合に失敗しました。');
+    const verified=await decryptBytes(kinds.original,stored.text,a.key);
+    const record=person.years.flatMap(y=>y.documents).find(d=>d.id===original.id)!;
+    if(verified.byteLength!==record.pdfSize||await hash(verified.buffer as ArrayBuffer)!==record.fileHash)
+     throw new Error('原本PDFの読み戻し照合に失敗しました。');
+    progress(`PDF原本を復元しました：${++count}件`);
+   }
+   for(const year of person.years){
+    const fileId=person.profile.yearFiles[String(year.calendarYear)];
+    await this.writeJson(a,'year',[...root,'years'],fileId+'.enc',year,null,MAX_YEAR);
+   }
+   await this.writeJson(a,'profile',root,'profile.enc',person.profile,null,MAX_PROFILE);
+   entries.push({id,state:'active',createdAt:person.profile.createdAt,updatedAt:person.profile.updatedAt});
+  }
+  // The entire set becomes visible only when ETag-protected index update succeeds.
+  const latest=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
+  if((latest?.file?.etag??null)!==(current.file?.etag??null))
+   throw new Error('復元中に従業員索引が変更されました。復元を中断しました。');
+  const revived=new Map(entries.map(p=>[p.id,p]));
+  const merged=[...current.value.persons.map(p=>revived.get(p.id)??p),...entries.filter(p=>!indexed.has(p.id))];
+  await this.writeJson(a,'index',a.path,'index.enc',{...emptyIndex(),persons:merged},current.file,MAX_INDEX);
+  return {restored:entries.length,skipped};
  }
  async original(id:PersonId,year:number,documentId:string):Promise<Blob>{
   asDocumentId(documentId);

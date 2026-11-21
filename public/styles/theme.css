@@ -48,6 +48,14 @@ html[data-theme="dark"] {
   --color-success:#70d9b7;
   --color-warning:#f5c57d;
   --color-danger:#ff9ba8;
+  --state-selected-bg:#263b5b;
+  --state-selected-border:#52719e;
+  --state-warning-bg:#423622;
+  --state-warning-border:#7d6540;
+  --state-warning-text:#f5c57d;
+  --state-error-bg:#422b38;
+  --state-error-border:#925365;
+  --state-success-bg:#1b4037;
   --shadow-card:0 5px 24px rgba(0,0,0,.16);
   --shadow-focus:0 0 0 3px rgba(148,183,255,.25);
 }
@@ -103,9 +111,7 @@ html[data-theme="dark"] .forecast-delta { background:#344865; color:var(--color-
 html[data-theme="dark"] .statement-item { border-bottom-color:var(--color-border); }
 html[data-theme="dark"] .statement-item__icon { background:var(--color-primary-soft); }
 html[data-theme="dark"] .statement-item__actions .btn--delete:is(:hover,:focus-visible) { background:#452b39; border-color:#86505e; }
-html[data-theme="dark"] .details-list > div.has-missing-data,
-html[data-theme="dark"] .job-card__footer.has-missing-data,
-html[data-theme="dark"] .forecast-status.has-missing-data { background:#3d3327; color:var(--color-warning); }
+html[data-theme="dark"] .forecast-caution--warning { background:var(--state-warning-bg); color:var(--state-warning-text); border-left-color:var(--state-warning-border); }
 
 /* PDF import and edit: file rows, drop zone, form states and modal. */
 html[data-theme="dark"] .notice--privacy strong { color:#c0d3ff; }
@@ -121,7 +127,7 @@ html[data-theme="dark"] .file-list-empty__icon,
 html[data-theme="dark"] .review-empty__icon { background:#27364a; color:#9cafca; }
 html[data-theme="dark"] .file-list__item:hover,
 html[data-theme="dark"] .file-list__item.is-selected,
-html[data-theme="dark"] .file-list__item.is-selected:hover { background:#263b5b; border-color:#52719e; }
+html[data-theme="dark"] .file-list__item.is-selected:hover { background:var(--state-selected-bg); border-color:var(--state-selected-border); }
 html[data-theme="dark"] .file-status--confirmed { color:#9dbdff; }
 html[data-theme="dark"] .file-panel__foot,
 html[data-theme="dark"] .selected-file,
@@ -129,15 +135,15 @@ html[data-theme="dark"] .save-bar { background:#1c2c40; border-color:var(--color
 html[data-theme="dark"] .progress-track,
 html[data-theme="dark"] .save-feedback__track { background:#33455b; }
 html[data-theme="dark"] .read-result { background:#243853; color:#bcd3fa; }
-html[data-theme="dark"] .read-result--warning { background:#423622; color:var(--color-warning); }
-html[data-theme="dark"] .read-result--error { background:#422b38; color:var(--color-danger); }
-html[data-theme="dark"] .validation-message { background:#1b4037; color:var(--color-success); }
-html[data-theme="dark"] .validation-message.is-error { background:#452b39; color:var(--color-danger); }
+html[data-theme="dark"] .read-result--warning { background:var(--state-warning-bg); color:var(--state-warning-text); }
+html[data-theme="dark"] .read-result--error { background:var(--state-error-bg); color:var(--color-danger); }
+html[data-theme="dark"] .validation-message { background:var(--state-success-bg); color:var(--color-success); }
+html[data-theme="dark"] .validation-message.is-error { background:var(--state-error-bg); color:var(--color-danger); }
 html[data-theme="dark"] .segmented-choice span { background:#202e42; color:var(--color-muted); border-color:var(--color-border-strong); }
 html[data-theme="dark"] .segmented-choice label:hover span { background:#2a3e5e; border-color:#6485bd; }
 html[data-theme="dark"] .segmented-choice input:checked + span { background:var(--color-primary-soft); color:var(--color-primary); border-color:var(--color-primary); }
 html[data-theme="dark"] .analysis-issues,
-html[data-theme="dark"] .diagnostic-dialog__warning { background:#403423; border-color:#7d6540; color:var(--color-warning); }
+html[data-theme="dark"] .diagnostic-dialog__warning { background:var(--state-warning-bg); border-color:var(--state-warning-border); color:var(--state-warning-text); }
 html[data-theme="dark"] .analysis-issues__head,
 html[data-theme="dark"] .analysis-issues__head span,
 html[data-theme="dark"] .analysis-issues__item--warning,
@@ -186,7 +192,7 @@ html[data-theme="dark"] .yea-month[data-state="draft"] { background:#253b59; bor
 html[data-theme="dark"] .yea-month[data-state="actual"] input,
 html[data-theme="dark"] .yea-month[data-state="loading"] input,
 html[data-theme="dark"] .yea-month input[type="number"]:disabled { background:#263143; color:#95a6bd; }
-html[data-theme="dark"] .yea-danger { background:#462b38; color:var(--color-danger); border-color:#875264; }
+html[data-theme="dark"] .yea-danger { background:var(--state-error-bg); color:var(--color-danger); border-color:var(--state-error-border); }
 html[data-theme="dark"] .yea-month[data-state="draft"] input[type="number"] { background:#152439; }
 
 /* Native calendar/number controls follow the current explicitly selected theme. */

@@ -7,6 +7,9 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = [
   ['scripts/test-ci-security-gates.mjs', true],
   ['scripts/test-cross-tab-lock.mjs', true],
+  ['scripts/test-year-end-backup.mjs', true],
+  ['scripts/test-year-end-pdf-lock.mjs', true],
+  ['scripts/test-v22-ux-safety.mjs', true],
   ['scripts/test-theme.mjs', true],
   ['scripts/test-publish-audit.mjs', true],
   ['scripts/test-security-hardening.mjs', true],

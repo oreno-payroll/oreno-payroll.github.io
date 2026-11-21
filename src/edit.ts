@@ -75,8 +75,11 @@ function updateUI(): void {
   const values = getValues();
   const { errors, warnings } = validatePayrollForm(values);
   confirmDiff.parentElement!.hidden = warnings.length === 0;
-  status.textContent = errors[0] ?? (warnings.length ? warnings.join(' / ') : '入力内容を保存できます。PDF原本は変更しません。');
-  saveButton.disabled = saving || errors.length > 0 || Boolean(warnings.length && !confirmDiff.checked);
+  const changed = hasUnsavedChanges();
+  status.textContent = errors[0] ?? (warnings.length ? warnings.join(' / ') : changed
+    ? '変更内容を保存できます。PDF原本は変更しません。'
+    : '変更はありません。項目を編集すると保存できます。');
+  saveButton.disabled = saving || !changed || errors.length > 0 || Boolean(warnings.length && !confirmDiff.checked);
   deleteButton.disabled = saving;
 }
 function showState(): void {
@@ -106,7 +109,7 @@ form.addEventListener('change', event => {
 form.addEventListener('submit', event => event.preventDefault());
 confirmDiff.addEventListener('change', () => { clearInlineError(errorView); updateUI(); });
 saveButton.addEventListener('click', async () => {
-  if (!record || saving) return;
+  if (!record || saving || !hasUnsavedChanges()) return;
   const formValues = applicablePayrollForm(getValues());
   const checked = validatePayrollForm(formValues);
   if (checked.errors.length) { showError(checked.errors[0]); return; }
@@ -125,8 +128,8 @@ saveButton.addEventListener('click', async () => {
     };
     const conflicts = await inspectReplacementConflicts([updated], updated.id);
     if (conflicts.length) {
-      const lines = conflicts.map(c => `・${c.fileName}（${c.period.replaceAll('|', ' / ')}）`).join('\n');
-      if (!window.confirm(`編集後の明細が保存済みデータと重複します。\n${lines}\n\n「OK」で上記${conflicts.length}件を明細一覧・収入情報から除外し、編集中の明細を残します。\n暗号化PDF原本はOneDriveに保持されます。よろしいですか？`)) {
+      const lines = conflicts.map(c => `・ID ${c.id} / ${c.fileName}（${c.period.replaceAll('|', ' / ')}）`).join('\n');
+      if (!window.confirm(`編集後の明細が保存済みデータと重複します。\n\n【残す明細】\nID ${updated.id} / ${updated.fileName}\n\n【一覧・収入情報から除外する明細：${conflicts.length}件】\n${lines}\n\n「OK」で除外を実行します。\n除外する明細の暗号化PDF原本はOneDriveに保持されますが、一覧からは参照できなくなります。よろしいですか？`)) {
         saving = false; updateUI(); return;
       }
     }

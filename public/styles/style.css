@@ -18,6 +18,14 @@
   --color-success: #087d64;
   --color-warning: #a66c16;
   --color-danger: #b92f43;
+  --state-selected-bg: #f1f5ff;
+  --state-selected-border: #c7d7fa;
+  --state-warning-bg: #fff7ea;
+  --state-warning-border: #d3a15a;
+  --state-warning-text: #7f5a25;
+  --state-error-bg: #fff0f2;
+  --state-error-border: #efbdc6;
+  --state-success-bg: #e9f5f1;
   --shadow-card: 0 4px 24px rgba(25, 41, 72, .035);
   --shadow-focus: 0 0 0 3px rgba(49, 91, 212, .18);
   --radius-sm: 9px;

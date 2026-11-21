@@ -20,7 +20,7 @@
     <div class="vault-stack backup-grid">
       <section class="card vault-section" aria-labelledby="backup-export-title">
         <div class="vault-section__head">
-          <h3 id="backup-export-title">作成</h3>
+          <h3 id="backup-export-title">本人の給与明細をバックアップ</h3>
           <p id="export-summary" class="vault-info" aria-live="polite">データを確認中…</p>
           <button type="button" id="backup-cloud-load" class="btn btn--secondary" hidden>OneDriveの明細を読み込む</button>
         </div>
@@ -31,13 +31,13 @@
           <span class="password-field"><input id="export-confirm" type="password" autocomplete="new-password" maxlength="512" placeholder="もう一度入力"><button type="button" class="password-visibility" data-toggle-password="export-confirm" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
         </div>
         <div class="backup-card__footer">
-          <p class="backup-footnote">復元にはこのパスワードが必要です。</p>
+          <p class="backup-footnote">本人の給与・賞与明細と原本PDFが対象です。年末調整の従業員データは下の専用バックアップで保存してください。復元にはこのパスワードが必要です。</p>
           <button type="button" id="export-button" class="btn btn--primary" disabled><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>バックアップを保存</button>
         </div>
       </section>
 
       <section class="card vault-section" aria-labelledby="backup-restore-title">
-        <div class="vault-section__head"><h3 id="backup-restore-title">復元</h3></div>
+        <div class="vault-section__head"><h3 id="backup-restore-title">本人の給与明細を復元</h3></div>
         <div class="backup-file-control">
           <label class="vault-file-label" for="restore-file">バックアップファイル</label>
           <input type="file" id="restore-file" accept=".payroll,.zip,application/zip,application/octet-stream" class="vault-file-input">
@@ -56,6 +56,34 @@
       </section>
     </div>
     <p id="backup-status" class="vault-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="settings-group" aria-labelledby="settings-yearend-backup-title">
+    <div class="settings-group__head"><h2 id="settings-yearend-backup-title">年末調整のバックアップ</h2></div>
+    <div class="vault-stack backup-grid">
+      <section class="card vault-section" aria-labelledby="ye-backup-export-heading">
+        <div class="vault-section__head">
+          <h3 id="ye-backup-export-heading">従業員データを保存</h3>
+          <p class="vault-info">従業員情報・各年の明細・PDF原本・見込み額・年度メモを専用ファイルにまとめます。本人用のバックアップとは別です。</p>
+        </div>
+        <div class="backup-secret-fields">
+          <label for="ye-backup-password">バックアップのパスワード（12文字以上）</label>
+          <span class="password-field"><input id="ye-backup-password" type="password" maxlength="512" autocomplete="new-password"><button type="button" class="password-visibility" data-toggle-password="ye-backup-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
+          <label for="ye-backup-confirm">パスワードの確認</label>
+          <span class="password-field"><input id="ye-backup-confirm" type="password" maxlength="512" autocomplete="new-password"><button type="button" class="password-visibility" data-toggle-password="ye-backup-confirm" aria-label="パスワードを表示" aria-pressed="false">表示</button></span>
+        </div>
+        <button type="button" class="btn btn--primary ye-backup-export" id="ye-backup-export"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>従業員バックアップを保存</button>
+      </section>
+      <section class="card vault-section" aria-labelledby="ye-backup-restore-heading">
+        <div class="vault-section__head"><h3 id="ye-backup-restore-heading">従業員データを復元</h3></div>
+        <div class="backup-file-control"><label for="ye-restore-file" class="vault-file-label">年末調整の暗号化バックアップ</label><input id="ye-restore-file" class="vault-file-input" type="file" accept=".payroll,application/octet-stream"></div>
+        <div class="backup-secret-fields"><label for="ye-restore-password">復元パスワード</label><span class="password-field"><input id="ye-restore-password" type="password" maxlength="512" autocomplete="off"><button type="button" class="password-visibility" data-toggle-password="ye-restore-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span></div>
+        <button type="button" class="btn btn--secondary backup-verify" id="ye-restore-verify">ファイルを検証</button>
+        <p class="vault-info" id="ye-restore-preview" aria-live="polite">暗号化バックアップを選択してください。</p>
+        <div class="backup-card__footer backup-restore-actions"><p class="backup-restore-warning">既存従業員は変更せず、未登録または削除済みの従業員だけを追加復元します。索引不整合・孤立ファイルがある場合は中止します。本人の明細には触れません。</p><label class="vault-check"><input id="ye-restore-ack" type="checkbox" disabled>重複は上書きせずスキップすることを確認しました</label><button type="button" id="ye-restore-commit" class="btn btn--danger-outline" disabled>従業員データを復元</button></div>
+      </section>
+    </div>
+    <p id="ye-backup-status" class="vault-status" role="status" aria-live="polite"></p>
   </section>
 
   <section class="settings-group settings-auth" aria-labelledby="settings-auth-title">

@@ -133,7 +133,7 @@ function newNumericId(used:Set<number>):number {
  }
  throw new Error('新しい明細IDを生成できません。');
 }
-export interface SkippedPayroll {fileName:string;reason:'saved-pdf'|'saved-period'|'batch-pdf'|'batch-period'}
+export interface SkippedPayroll {fileName:string;originalFileName?:string;reason:'saved-pdf'|'saved-period'|'batch-pdf'|'batch-period'}
 export interface SaveSkipResult {saved:number;skipped:SkippedPayroll[]}
 /** 新規明細を年度単位のバッチで確定。PDFは最大2件並列、年度JSONと収入はまとめて更新。 */
 export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordInput[],onProgress?:(status:string)=>void):Promise<SaveSkipResult> {
@@ -153,7 +153,7 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
   else if(savedPeriods.has(period))reason='saved-period';
   else if(batchHashes.has(record.fileHash))reason='batch-pdf';
   else if(batchPeriods.has(period))reason='batch-period';
-  if(reason){skipped.push({fileName:record.fileName,reason});continue;}
+  if(reason){skipped.push({fileName:record.fileName,originalFileName:record.originalFileName,reason});continue;}
   accepted.push(record);batchHashes.add(record.fileHash);batchPeriods.add(period);
  }
  checkLimits(existing,accepted);

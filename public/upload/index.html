@@ -49,7 +49,6 @@
     </header>
 
     <main class="upload-page">
-      <nav class="breadcrumb" aria-label="現在位置"><a href="../index.html">ホーム</a><span aria-hidden="true">/</span><span aria-current="page">明細アップロード</span></nav>
       <div class="upload-heading">
         <div>
           <p class="eyebrow">IMPORT DOCUMENTS</p>
@@ -195,6 +194,11 @@
             <div class="save-feedback__top"><span id="save-stage">準備中</span><span id="save-elapsed">経過 0:00</span></div>
             <div id="save-progress-track" class="save-feedback__track is-indeterminate" role="progressbar" aria-label="PDF送信の進捗" aria-valuemin="0" aria-valuemax="100"><div id="save-progress-fill" class="save-feedback__fill"></div></div>
             <p id="save-guidance" class="save-feedback__guidance">保存中はページを移動しないでください。</p>
+          </div>
+          <div id="save-duplicates" class="save-duplicates" hidden aria-label="保存から除外したファイル">
+            <strong id="save-duplicate-title" class="save-duplicates__title"></strong>
+            <ul id="save-duplicate-list" class="save-duplicates__list"></ul>
+            <a class="save-duplicates__home" href="../index.html">確認してホームへ戻る</a>
           </div>
         </div>
         <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>

@@ -19,6 +19,13 @@ const clean=(v:string)=>v.trim();
 const base64Name=(value:string)=>value.replace(/[\\/\u0000-\u001f]/g,'').slice(0,250)||'原本.pdf';
 const hash=async(bytes:ArrayBuffer):Promise<string>=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
 
+/** Read-only report for an incomplete employee restore. No cloud mutation is performed. */
+export interface YearEndRestoreOrphan {
+ id:string; label:string; state:'unindexed'|'deleted'|'deleting'|'unexpected';
+ profile:boolean; yearFiles:number; originals:number; inBackup:boolean; unexpectedFiles:number;
+}
+export interface YearEndRestoreInspection {items:YearEndRestoreOrphan[]; canAttemptResume:boolean}
+
 export class YearEndRepository {
  private async access():Promise<Access> {const vault=await cloudVault();return vault.yearEndAccess();}
  private personPath(a:Access,id:PersonId):string[]{return [...a.path,'persons',id];}
@@ -526,23 +533,112 @@ export class YearEndRepository {
   if(live.path.join('/')!==a.path.join('/'))throw new Error('バックアップ中に暗号化保管庫が切り替わりました。');
   return {exportedAt:new Date().toISOString(),persons};
  }
+ /** Inspect orphan folders without writing or deleting files. The backup is optional and stays in memory. */
+ async inspectRestoreOrphans(backup?:YearEndBackupData):Promise<YearEndRestoreInspection>{
+  const a=await this.access();
+  const indexFile=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
+  const index=indexFile?validateIndex(indexFile.value):emptyIndex();
+  const indexed=new Map(index.persons.map(p=>[p.id,p.state]));
+  const expected=new Map((backup?.persons??[]).map(p=>[p.profile.id,p.profile]));
+  const folders=await a.graph.listFolder([...a.path,'persons'])??[];
+  const items:YearEndRestoreOrphan[]=[];
+  for(const folder of folders){
+   const state=indexed.get(folder.name as PersonId);
+   if(folder.folder&&state==='active')continue;
+   const valid=folder.folder&&isUuid(folder.name);
+   const root=[...a.path,'persons',folder.name];
+   const content=valid?await a.graph.listFolder(root)??[]:[];
+   const years=valid?await a.graph.listFolder([...root,'years'])??[]:[];
+   const originals=valid?await a.graph.listFolder([...root,'originals'])??[]:[];
+   const unexpectedFiles=!valid?1:
+    content.filter(x=>!((x.name==='profile.enc'&&!x.folder)||
+      ((x.name==='years'||x.name==='originals')&&x.folder))).length+
+    years.filter(x=>x.folder||!/^[-a-f0-9]{36}\.enc$/i.test(x.name)).length+
+    originals.filter(x=>x.folder||!/^[-a-f0-9]{36}\.enc$/i.test(x.name)).length;
+   const known=expected.get(folder.name as PersonId);
+   items.push({id:folder.name,label:known?.displayName??`ID ${folder.name.slice(0,8)}`,
+    state:!valid?'unexpected':state==='deleted'?'deleted':state==='deleting'?'deleting':'unindexed',
+    profile:content.some(x=>x.name==='profile.enc'&&!x.folder),
+    yearFiles:years.length,originals:originals.length,inBackup:Boolean(known),unexpectedFiles});
+  }
+  return {items,canAttemptResume:items.length>0&&Boolean(backup)&&
+   items.every(item=>item.inBackup&&item.state!=='deleting'&&item.state!=='unexpected'&&!item.unexpectedFiles)};
+ }
+ /** Compare an interrupted restore with exactly the same backup, before allowing any further writes.
+  * A different document, an extra file, or invalid ciphertext always blocks resume. */
+ private async verifiedRestoreFiles(a:Access,person:YearEndBackupData['persons'][number]):Promise<Map<string,RemoteFile>>{
+  const id=asPersonId(person.profile.id),root=this.personPath(a,id);
+  const tracked=new Map<string,RemoteFile>();
+  const checkNames=(items:Awaited<ReturnType<Access['graph']['listFolder']>>,
+   expected:Set<string>,kind:'root'|'file')=>{
+   for(const file of items??[]){
+    if(!expected.has(file.name)||(kind==='file'&&file.folder)||
+     (kind==='root'&&((file.name==='profile.enc')===file.folder)))
+     throw new Error('復元途中のフォルダーにバックアップと異なる項目があります。自動削除せず停止しました。');
+   }
+  };
+  checkNames(await a.graph.listFolder(root),new Set(['profile.enc','originals','years']),'root');
+  // The two expected subfolders must never contain unreferenced encrypted files.
+  checkNames(await a.graph.listFolder([...root,'years']),
+   new Set(Object.values(person.profile.yearFiles).map(v=>v+'.enc')),'file');
+  checkNames(await a.graph.listFolder([...root,'originals']),
+   new Set(person.originals.map(o=>o.id+'.enc')),'file');
+  const profile=await this.readJson<PersonProfile>(a,'profile',root,'profile.enc',MAX_PROFILE);
+  if(profile){
+   validateProfile(profile.value,id);
+   if(JSON.stringify(profile.value)!==JSON.stringify(person.profile))
+    throw new Error('復元途中の従業員情報がバックアップと一致しません。上書きせず停止しました。');
+   tracked.set('profile.enc',profile.file!);
+  }
+  for(const year of person.years){
+   const name=person.profile.yearFiles[String(year.calendarYear)]+'.enc';
+   const file=await this.readJson<YearData>(a,'year',[...root,'years'],name,MAX_YEAR);
+   if(!file)continue;
+   validateYear(file.value,id,year.calendarYear);
+   if(JSON.stringify(file.value)!==JSON.stringify(year))
+    throw new Error('復元途中の年度データがバックアップと一致しません。上書きせず停止しました。');
+   tracked.set('years/'+name,file.file!);
+  }
+  const documents=new Map(person.years.flatMap(y=>y.documents.map(d=>[d.id,d] as const)));
+  for(const original of person.originals){
+   const name=original.id+'.enc';
+   const file=await a.graph.read([...root,'originals'],name,MAX_PDF);
+   if(!file)continue;
+   const actual=await decryptBytes(kinds.original,file.text,a.key);
+   const expected=documents.get(original.id)!;
+   if(actual.length!==expected.pdfSize||await hash(actual.slice().buffer as ArrayBuffer)!==expected.fileHash)
+    throw new Error('復元途中のPDF原本がバックアップと一致しません。上書きせず停止しました。');
+   tracked.set('originals/'+name,file);
+  }
+  return tracked;
+ }
  /** Non-destructive restore: bring back missing or deleted people, keep active people untouched. */
- async restoreBackupSnapshot(data:YearEndBackupData,progress:(message:string)=>void=()=>{}):Promise<{restored:number;skipped:number}>{
-  const a=await this.access(),current=await this.readIndex(a);
+ async restoreBackupSnapshot(data:YearEndBackupData,progress:(message:string)=>void=()=>{},
+  options:{resumeVerifiedOrphans?:boolean}={}):Promise<{restored:number;skipped:number}>{
+  const a=await this.access();
+  // Do not use readIndex() here: an interrupted first restore can have files but no index yet.
+  const storedIndex=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
+  const current:Read<PersonIndex>=storedIndex?{...storedIndex,value:validateIndex(storedIndex.value)}:
+   {value:emptyIndex(),file:null};
   const indexed=new Map(current.value.persons.map(p=>[p.id,p]));
   if(current.value.persons.some(p=>p.state==='deleting'))
    throw new Error('削除途中の従業員がいます。先に状態を確認してください。');
-  // Refuse orphaned or unexpected directory entries. An old aborted restore must
-  // be inspected, not overwritten by a new attempt.
   const folders=await a.graph.listFolder([...a.path,'persons'])??[];
+  const expectedIds=new Set(data.persons.map(p=>asPersonId(p.profile.id)));
+  const unfinished=new Set<string>();
   for(const folder of folders){
-   if(!folder.folder||!isUuid(folder.name)||indexed.get(folder.name as PersonId)?.state!=='active')
-    throw new Error('索引未登録または削除済みの従業員フォルダーがあります。誤上書きを防ぐため復元を中断しました。');
+   if(!folder.folder||!isUuid(folder.name))
+    throw new Error('従業員フォルダーに不正な項目があります。誤上書きを防ぐため復元を中断しました。');
+   const state=indexed.get(folder.name as PersonId)?.state;
+   if(state==='active')continue;
+   if(!options.resumeVerifiedOrphans||!expectedIds.has(folder.name as PersonId))
+    throw new Error('索引未登録または削除済みの従業員フォルダーがあります。復元を中断しました。復元状態を確認してください。');
+   unfinished.add(folder.name);
   }
-  const directory=new Set(folders.map(f=>f.name));
   const ids=new Set<string>(),selected:YearEndBackupData['persons']=[];
+  const resumed=new Map<string,Map<string,RemoteFile>>();
   let skipped=0;
-  // Complete metadata and PDF verification BEFORE any cloud write.
+  // Validate every backup record and every existing orphan BEFORE any new cloud write.
   for(const person of data.persons){
    const id=asPersonId(person.profile.id);
    if(ids.has(id))throw new Error('バックアップ内で従業員IDが重複しています。');ids.add(id);
@@ -569,7 +665,7 @@ export class YearEndRepository {
    }
    const prior=indexed.get(id);
    if(prior?.state==='active'){skipped++;continue;}
-   if(directory.has(id))throw new Error('復元予定の従業員フォルダーが既に存在します。');
+   if(unfinished.has(id))resumed.set(id,await this.verifiedRestoreFiles(a,person));
    selected.push(person);
   }
   if(!selected.length)return {restored:0,skipped};
@@ -577,26 +673,55 @@ export class YearEndRepository {
    throw new Error('従業員数の上限を超えています。');
   let count=0;
   const entries:PersonIndex['persons']=[];
+  // Files are always create-only. An exact, cryptographically verified preexisting file is reused.
   for(const person of selected){
    const id=asPersonId(person.profile.id),root=this.personPath(a,id),pdfPath=[...root,'originals'];
+   const tracked=resumed.get(id)??new Map<string,RemoteFile>();
    for(const original of person.originals){
-    await a.graph.write(pdfPath,original.id+'.enc',await encryptBytes(kinds.original,original.bytes,a.key),null,MAX_PDF);
-    const stored=await a.graph.read(pdfPath,original.id+'.enc',MAX_PDF);
-    if(!stored)throw new Error('原本PDFの保存照合に失敗しました。');
-    const verified=await decryptBytes(kinds.original,stored.text,a.key);
-    const record=person.years.flatMap(y=>y.documents).find(d=>d.id===original.id)!;
-    if(verified.byteLength!==record.pdfSize||await hash(verified.buffer as ArrayBuffer)!==record.fileHash)
-     throw new Error('原本PDFの読み戻し照合に失敗しました。');
-    progress(`PDF原本を復元しました：${++count}件`);
+    const name=original.id+'.enc';
+    if(!tracked.has('originals/'+name)){
+     await a.graph.write(pdfPath,name,await encryptBytes(kinds.original,original.bytes,a.key),null,MAX_PDF);
+     const stored=await a.graph.read(pdfPath,name,MAX_PDF);
+     if(!stored)throw new Error('原本PDFの保存照合に失敗しました。');
+     const verified=await decryptBytes(kinds.original,stored.text,a.key);
+     const record=person.years.flatMap(y=>y.documents).find(d=>d.id===original.id)!;
+     if(verified.byteLength!==record.pdfSize||await hash(verified.buffer as ArrayBuffer)!==record.fileHash)
+      throw new Error('原本PDFの読み戻し照合に失敗しました。');
+     tracked.set('originals/'+name,stored);
+    }
+    progress(`PDF原本を復元・照合しました：${++count}件`);
    }
    for(const year of person.years){
     const fileId=person.profile.yearFiles[String(year.calendarYear)];
-    await this.writeJson(a,'year',[...root,'years'],fileId+'.enc',year,null,MAX_YEAR);
+    if(!tracked.has('years/'+fileId+'.enc')){
+     const saved=await this.writeJson(a,'year',[...root,'years'],fileId+'.enc',year,null,MAX_YEAR);
+     tracked.set('years/'+fileId+'.enc',saved);
+    }
    }
-   await this.writeJson(a,'profile',root,'profile.enc',person.profile,null,MAX_PROFILE);
+   if(!tracked.has('profile.enc')){
+    const saved=await this.writeJson(a,'profile',root,'profile.enc',person.profile,null,MAX_PROFILE);
+    tracked.set('profile.enc',saved);
+   }
    entries.push({id,state:'active',createdAt:person.profile.createdAt,updatedAt:person.profile.updatedAt});
+   resumed.set(id,tracked);
   }
-  // The entire set becomes visible only when ETag-protected index update succeeds.
+  // Recheck every file, including resumed files, and refuse unexpected additions before index commit.
+  for(const person of selected){
+   const root=this.personPath(a,asPersonId(person.profile.id)),files=resumed.get(person.profile.id)!;
+   const expectedRoot=new Set(['profile.enc','years','originals']);
+   const expectedYears=new Set(Object.values(person.profile.yearFiles).map(v=>v+'.enc'));
+   const expectedPdfs=new Set(person.originals.map(o=>o.id+'.enc'));
+   for(const [path,names] of [[root,expectedRoot],[[...root,'years'],expectedYears],[[...root,'originals'],expectedPdfs]] as Array<[string[],Set<string>]>){
+    for(const entry of await a.graph.listFolder(path)??[])
+     if(!names.has(entry.name))throw new Error('復元中に予期しないファイルが追加されました。索引の更新を中断しました。');
+   }
+   for(const [key,file] of files){
+    const parts=key.split('/'),name=parts.pop()!;
+    const remote=await a.graph.metadata([...root,...parts],name);
+    if(!remote||remote.etag!==file.etag)
+     throw new Error('復元中に別タブでデータが更新されました。索引の更新を中断しました。');
+   }
+  }
   const latest=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
   if((latest?.file?.etag??null)!==(current.file?.etag??null))
    throw new Error('復元中に従業員索引が変更されました。復元を中断しました。');

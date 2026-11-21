@@ -239,3 +239,5 @@
   .settings-page .settings-details-column .settings-note,
   .settings-page .settings-details-column .settings-legacy-caption { min-height: 0; }
 }
+
+.ye-restore-diagnosis { white-space: pre-line; overflow-wrap: anywhere; }

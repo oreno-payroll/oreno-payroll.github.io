@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = [
+  ['scripts/test-ci-security-gates.mjs', true],
+  ['scripts/test-cross-tab-lock.mjs', true],
   ['scripts/test-theme.mjs', true],
   ['scripts/test-publish-audit.mjs', true],
   ['scripts/test-security-hardening.mjs', true],

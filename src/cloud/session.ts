@@ -23,7 +23,7 @@ function getPort():MessagePort|null {
   return port;
  }catch{return null;}
 }
-async function send(action:'get'|'set'|'clear',scope:string,key?:CryptoKey,salt?:string):Promise<unknown> {
+async function send(action:'get'|'set'|'clear'|'clear-all',scope:string,key?:CryptoKey,salt?:string):Promise<unknown> {
  const connection=getPort();if(!connection)return null;
  const id=++serial;
  return new Promise(resolve=>{
@@ -43,6 +43,8 @@ export async function restoredKey(scope:string):Promise<SessionResult|null> {
  return result;
 }
 export async function clearKey(scope:string):Promise<void> {await send('clear',scope);}
+/** Explicit global lock must wipe even keys for dormant/previous accounts. */
+export async function clearAllKeys():Promise<void> {await send('clear-all','global');}
 
 
 /** Opt-in tab cache. This is recoverable AES key material, NOT an encrypted password.

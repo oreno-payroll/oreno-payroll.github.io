@@ -2,8 +2,9 @@
  * Client IDはlocalStorage、パスフレーズは非保存。明示許可時だけタブ内一時鍵を保持。 */
 import {PayrollGraph} from './graph';
 import {EmptyPayrollIndexError,InterruptedRotationError,PayrollVault} from './vault';
-import {rememberKey,restoredKey,clearKey,rememberTabUnlock,restoredTabUnlock,clearTabUnlock} from './session';
+import {rememberKey,restoredKey,clearKey,clearAllKeys,rememberTabUnlock,restoredTabUnlock,clearTabUnlock} from './session';
 import {clearNavigationSnapshot,invalidateNavigationSnapshot,invalidateAuthSession,authEpoch} from './snapshot';
+import {createTabLockCoordinator} from './tabLock';
 const CLIENT_KEY='finance-onedrive-public-client-id-v1';
 // A BFCache page must never keep using a vault from a previously selected account.
 const pageAuthEpoch=authEpoch();
@@ -30,6 +31,24 @@ let vault:PayrollVault|undefined;
 let unlocking:Promise<PayrollVault>|undefined;
 let tokenCache:{scope:string;value:string;validUntil:number}|undefined;
 let tokenPending:{scope:string;promise:Promise<string>}|undefined;
+let remoteLockInProgress=false;
+const tabLocks=createTabLockCoordinator(()=>{
+ if(remoteLockInProgress)return;
+ remoteLockInProgress=true;
+ // Mask previously decrypted salary information immediately, even before a pending
+ // SharedWorker round-trip or the page reload finishes.
+ if(typeof document!=='undefined')document.documentElement.style.visibility='hidden';
+ clearTabUnlock();invalidateAuthSession();
+ vault?.lock();vault=undefined;unlocking=undefined;
+ tokenCache=undefined;tokenPending=undefined;
+ void clearAllKeys().then(
+  ()=>{if(typeof window!=='undefined')window.location.reload();},
+  ()=>{if(typeof window!=='undefined')window.location.reload();}
+ );
+});
+function requireCurrentLockEpoch(start:string):void {
+ if(!tabLocks.check()||tabLocks.epoch()!==start)throw new Error('別のタブで保管庫がロックされました。再度開いてください。');
+}
 // One stable OAuth callback for all screens; do not register every page in Entra.
 const redirectUri=()=>new URL('./',import.meta.url).href;
 const sessionScope=(id:string,user:Account)=>`${id}:${user.homeAccountId}`;
@@ -136,7 +155,7 @@ async function beginUnlock():Promise<PayrollVault> {
    ui.login.textContent='Microsoft接続を確認中…';
    try{
     const id=ui.id.value.trim();if(!validId(id))throw new Error('Client IDの形式が不正です。');
-    if(clientId()!==id){clearTabUnlock();invalidateAuthSession();localStorage.setItem(CLIENT_KEY,id);msal=undefined;tokenCache=undefined;tokenPending=undefined;}
+    if(clientId()!==id){await clearAllKeys();tabLocks.broadcast(true);clearTabUnlock();invalidateAuthSession();localStorage.setItem(CLIENT_KEY,id);msal=undefined;tokenCache=undefined;tokenPending=undefined;}
     const app=await getMsal();
     const user=account(app);
     if(user){showAccount(ui,'connected');ui.password.focus();return;}
@@ -151,12 +170,17 @@ async function beginUnlock():Promise<PayrollVault> {
    try {
     if(ui.id.value.trim()!==clientId())throw new Error('接続設定を保存し、Microsoftアカウントへ接続してください。');
     const app=await getMsal();if(!account(app))throw new Error('Microsoftアカウントへの接続が必要です。');
+    const startEpoch=tabLocks.epoch();
+    requireCurrentLockEpoch(startEpoch);
     const pass=ui.password.value;if([...pass].length<12)throw new Error('パスフレーズは12文字以上にしてください。');
     const candidate=new PayrollVault(new PayrollGraph(token,undefined,invalidateNavigationSnapshot));
     const connected=account(app)!;
     const scope=sessionScope(clientId(),connected);
     candidate.setNavigationScope(scope);
-    const retain=ui.remember.checked ? (raw:Uint8Array,salt:string)=>{rememberTabUnlock(scope,raw,salt);} : undefined;
+    const retain=ui.remember.checked ? (raw:Uint8Array,salt:string)=>{
+     requireCurrentLockEpoch(startEpoch);
+     rememberTabUnlock(scope,raw,salt);
+    } : undefined;
     if(!ui.remember.checked)clearTabUnlock();
     let unlocked=false;
     let recoveryApproved=false;
@@ -183,8 +207,11 @@ async function beginUnlock():Promise<PayrollVault> {
      unlocked=await candidate.unlock(pass,true,retain);
     }
     if(!unlocked)throw new Error('保管庫を解除できませんでした。');
+    requireCurrentLockEpoch(startEpoch);
     const session=candidate.sessionKey();
     await rememberKey(scope,session.key,session.salt);
+    requireCurrentLockEpoch(startEpoch);
+    if(!tabLocks.acceptUnlock(startEpoch))throw new Error('保管庫のロック状態が変更されました。再度開いてください。');
     ui.password.value='';vault=candidate;ui.panel.remove();installHomeLock(scope);resolve(candidate);
    }catch(e){showGateError(ui.unlockError,e instanceof Error?e.message:String(e));ui.button.disabled=false;ui.button.textContent='保管庫を開く';}
   })();});
@@ -206,12 +233,15 @@ function installHomeLock(scope:string):void {
  if(!footerActions||footerActions.querySelector('#payroll-cloud-lock'))return;
  const button=document.createElement('button');button.id='payroll-cloud-lock';
  button.type='button';button.className='payroll-cloud-lock site-footer__button';button.textContent='保管庫をロック';
- button.title='このタブの一時的な解除状態を破棄します';
+ button.title='開いているすべてのPayrollタブをロックします';
  button.addEventListener('click',()=>{void(async()=>{
   button.disabled=true;
-  clearTabUnlock();invalidateAuthSession();await clearKey(scope);tokenCache=undefined;tokenPending=undefined;
+  tabLocks.broadcast();
+  clearTabUnlock();invalidateAuthSession();
   vault?.lock();vault=undefined;unlocking=undefined;
-  window.location.reload();
+  tokenCache=undefined;tokenPending=undefined;
+  document.documentElement.style.visibility='hidden';
+  try{await clearAllKeys();}finally{window.location.reload();}
  })();});
  footerActions.append(button);
 }
@@ -221,6 +251,7 @@ function installHomeLock(scope:string):void {
  * タブの一時解除鍵を使う。新しいアカウントでは決して流用しない。 */
 async function resumeOrPrompt():Promise<PayrollVault> {
  const id=clientId();
+ const startEpoch=tabLocks.epoch();
  if(validId(id)) {
   try {
    const app=await getMsal();
@@ -229,19 +260,25 @@ async function resumeOrPrompt():Promise<PayrollVault> {
     const scope=sessionScope(id,user);
     // sessionStorageはページをまたぐ。SharedWorker単独ではリロード時に消えることがある。
     // 期限切れの一時鍵は復元時に除去される。
-    const tabSession=await restoredTabUnlock(scope);
-    const session=tabSession??await restoredKey(scope);
+    const eligible=tabLocks.canResume();
+    if(!eligible)clearTabUnlock(); // An old tab-key must not survive a missed lock signal.
+    const tabSession=eligible?await restoredTabUnlock(scope):null;
+    const session=eligible?(tabSession??await restoredKey(scope)):null;
     if(session) {
      try {
       const candidate=new PayrollVault(new PayrollGraph(token,undefined,invalidateNavigationSnapshot));
       candidate.setNavigationScope(scope);
       if(!await candidate.resumeFromSnapshot(session.key,session.salt))
        await candidate.unlockWithKey(session.key,session.salt);
+      requireCurrentLockEpoch(startEpoch);
+      if(!tabLocks.acceptUnlock(startEpoch))throw new Error('別のタブで保管庫がロックされました。');
       vault=candidate;
       await rememberKey(scope,session.key,session.salt);
+      requireCurrentLockEpoch(startEpoch);
       installHomeLock(scope);
       return candidate;
      } catch(error) {
+      if(!tabLocks.check())throw error;
       const message=error instanceof Error?error.message:String(error);
       if(/暗号鍵|パスフレーズ|破損|暗号形式|用途が一致/.test(message)) {
        clearTabUnlock();await clearKey(scope);
@@ -255,6 +292,7 @@ async function resumeOrPrompt():Promise<PayrollVault> {
  return beginUnlock();
 }
 export async function cloudVault():Promise<PayrollVault> {
+ if(!tabLocks.check())throw new Error('別のタブで保管庫がロックされました。再度開いてください。');
  if(vault?.isUnlocked())return vault;
  if(!unlocking)unlocking=resumeOrPrompt();
  try{return await unlocking;}catch(e){unlocking=undefined;throw e;}
@@ -266,8 +304,9 @@ export async function refreshSessionAfterKeyRotation():Promise<void> {
  const app=await getMsal(),user=account(app);
  if(!user)throw new Error('Microsoft接続を確認できません。変更後の新しいパスフレーズで入り直してください。');
  const scope=sessionScope(clientId(),user);
+ tabLocks.broadcast(true);
  clearTabUnlock();clearNavigationSnapshot();
- await clearKey(scope);
+ await clearAllKeys();
  if(vault?.isUnlocked()){
   const session=vault.sessionKey();
   await rememberKey(scope,session.key,session.salt);
@@ -285,9 +324,8 @@ export async function cloudConnectionState():Promise<{clientId:string;user:strin
 export async function saveCloudClientId(input:string):Promise<'unchanged'|'changed'> {
  const id=input.trim();if(!validId(id))throw new Error('Client IDはUUID形式で指定してください。');
  if(id===clientId())return 'unchanged';
- const previous=msal?account(msal):undefined;
- if(previous)await clearKey(sessionScope(clientId(),previous));
- clearTabUnlock();invalidateAuthSession();
+ await clearAllKeys();
+ tabLocks.broadcast(true);clearTabUnlock();invalidateAuthSession();
  vault?.lock();vault=undefined;unlocking=undefined;
  tokenCache=undefined;tokenPending=undefined;msal=undefined;pending=undefined;
  localStorage.setItem(CLIENT_KEY,id);
@@ -296,9 +334,8 @@ export async function saveCloudClientId(input:string):Promise<'unchanged'|'chang
 /** Explicit switch/login button. OAuth tokens remain exclusively under MSAL. */
 export async function chooseMicrosoftAccount():Promise<void> {
  const app=await getMsal();
- const previous=account(app);
- if(previous)await clearKey(sessionScope(clientId(),previous));
- clearTabUnlock();invalidateAuthSession();vault?.lock();vault=undefined;unlocking=undefined;
+ await clearAllKeys();
+ tabLocks.broadcast(true);clearTabUnlock();invalidateAuthSession();vault?.lock();vault=undefined;unlocking=undefined;
  tokenCache=undefined;tokenPending=undefined;
  await app.loginRedirect({scopes:SCOPES,prompt:'select_account'});
 }

@@ -41,8 +41,10 @@ if(!flags.has('--no-history')){
   if(!isPublicAuthor(an,ae)||!isPublicAuthor(cn,ce))flagged.add(hash.slice(0,12));
  }
  for(const sha of flagged)problems.push(`Git履歴の作者情報を要確認：${sha}（氏名・メール非表示）`);
- const match=/^(.*?) <(.*?)> \d+ [+-]\d{4}$/.exec(git(['var','GIT_AUTHOR_IDENT']).trim());
- if(match&&!isPublicAuthor(match[1],match[2]))problems.push('次回コミットの作者情報が公開用ハンドル名＋GitHub noreply形式ではありません（値は非表示）');
+ if(!flags.has('--skip-current-author')){
+  const match=/^(.*?) <(.*?)> \d+ [+-]\d{4}$/.exec(git(['var','GIT_AUTHOR_IDENT']).trim());
+  if(match&&!isPublicAuthor(match[1],match[2]))problems.push('次回コミットの作者情報が公開用ハンドル名＋GitHub noreply形式ではありません（値は非表示）');
+ }
 }
 if(!flags.has('--no-gitleaks')){
  const probe=spawnSync('gitleaks',['version'],{stdio:'ignore'});

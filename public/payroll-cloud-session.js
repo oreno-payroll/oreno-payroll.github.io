@@ -30,6 +30,9 @@ self.onconnect = (event) => {
     } else if (action === 'clear') {
       sessions.delete(scope);
       result = true;
+    } else if (action === 'clear-all') {
+      sessions.clear();
+      result = true;
     }
     port.postMessage({id, result});
   };

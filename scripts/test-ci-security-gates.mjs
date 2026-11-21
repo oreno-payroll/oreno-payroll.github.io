@@ -1,0 +1,23 @@
+/** Fail if deploy can bypass privacy or secret scans. No external dependencies. */
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const workflow=readFileSync(new URL('../.github/workflows/deploy.yml',import.meta.url),'utf8');
+const privacy=readFileSync(new URL('./audit-private-data.mjs',import.meta.url),'utf8');
+assert.match(workflow,/fetch-depth:\s*0/,'full history is required');
+assert.match(workflow,/persist-credentials:\s*false/,'checkout should not leave a credential in .git/config');
+assert.match(workflow,/gitleaks_8\.30\.1_linux_x64\.tar\.gz/,'Gitleaks is pinned');
+assert.match(workflow,/551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb/,'archive digest must be checked');
+assert.match(workflow,/node scripts\/audit-publish\.mjs/);
+assert.match(workflow,/node scripts\/audit-private-data\.mjs --strict-gitleaks --skip-current-author/);
+assert.match(workflow,/gitleaks git --log-opts=--all --redact --no-banner \./);
+assert.match(workflow,/npm audit --audit-level=high/);
+const verify=workflow.indexOf('Full Git history Gitleaks audit');
+const upload=workflow.indexOf('Upload Pages artifact');
+assert.ok(verify>0&&upload>verify,'Gitleaks must gate the upload/deployment');
+assert.doesNotMatch(workflow,/continue-on-error:\s*true/,'security checks must fail closed');
+assert.doesNotMatch(workflow,/\|\|\s*true/,'security checks must not be silenced');
+assert.match(privacy,/\['git',root,'--log-opts=--all'/,'CLI must use position argument, not removed --source');
+assert.doesNotMatch(privacy,/\['git','--source'/);
+assert.match(privacy,/if\(!flags\.has\('--skip-current-author'\)\)/,'only current CI author check may be skipped');
+assert.match(privacy,/for\(const row of git\(\['log','--all'/,'Git author history remains inspected');
+console.log('PASS: CI executes full privacy, Gitleaks and vulnerability scans before publishing');

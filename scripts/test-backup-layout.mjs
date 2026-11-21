@@ -32,7 +32,9 @@ assert.doesNotMatch(yearEndSaveCard,/backup-card__footer/,'export button should 
 assert.match(css,/\.settings-page \.ye-backup-export\s*\{\s*width:\s*100%;\s*white-space:\s*normal;/,'inline export button should occupy the card width');
 assert.match(html,/<section class="card settings-panel backup-cloud-settings"/);
 assert.match(html,/<section class="card settings-panel backup-key-change"/);
-assert.doesNotMatch(html,/<details\b|<summary\b/,'settings should not need accordions');
+const withoutRestorePreview=html.replace(/<details id="ye-restore-people"[\s\S]*?<\/details>/,'');
+assert.doesNotMatch(withoutRestorePreview,/<details\b|<summary\b/,'settings sections must not be accordions; only restore-preview list may collapse');
+assert.match(html,/id="ye-restore-people"/,'large restore preview can collapse');
 for(const [id,title] of [['settings-backup-title','バックアップ'],['settings-yearend-backup-title','年末調整のバックアップ'],['settings-auth-title','認証'],['settings-details-title','詳細設定']]){
  assert.ok(html.includes(`<h2 id="${id}">${title}</h2>`));
 }

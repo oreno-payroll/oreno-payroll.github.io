@@ -80,6 +80,8 @@
         <div class="backup-secret-fields"><label for="ye-restore-password">復元パスワード</label><span class="password-field"><input id="ye-restore-password" type="password" maxlength="512" autocomplete="off"><button type="button" class="password-visibility" data-toggle-password="ye-restore-password" aria-label="パスワードを表示" aria-pressed="false">表示</button></span></div>
         <button type="button" class="btn btn--secondary backup-verify" id="ye-restore-verify">ファイルを検証</button>
         <p class="vault-info" id="ye-restore-preview" aria-live="polite">暗号化バックアップを選択してください。</p>
+        <details id="ye-restore-people" class="ye-restore-people" hidden><summary id="ye-restore-people-summary">従業員別の復元内容</summary><ul id="ye-restore-people-list"></ul></details>
+        <button type="button" id="ye-restore-recheck" class="btn btn--secondary" hidden disabled>OneDriveの復元状態を確認</button>
         <div id="ye-restore-diagnosis" class="vault-info ye-restore-diagnosis" role="status" aria-live="polite" hidden></div>
         <button type="button" id="ye-restore-resume" class="btn btn--secondary" hidden disabled>照合して復元を再開</button>
         <div class="backup-card__footer backup-restore-actions"><p class="backup-restore-warning">既存従業員は変更せず、未登録または削除済みの従業員だけを追加復元します。索引不整合・孤立ファイルがある場合は中止します。本人の明細には触れません。</p><label class="vault-check"><input id="ye-restore-ack" type="checkbox" disabled>重複は上書きせずスキップすることを確認しました</label><button type="button" id="ye-restore-commit" class="btn btn--danger-outline" disabled>従業員データを復元</button></div>

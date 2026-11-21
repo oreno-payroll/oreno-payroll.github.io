@@ -18,7 +18,7 @@ assert.match(repository,/await this\.saveYear\(a,id,year,context\.file,next,cont
 const html=read('public/year-end-assist/index.html');
 for(const id of ['yea-year-memo','yea-save-memo','yea-memo-state'])assert.match(html,new RegExp(`id="${id}"`));
 const ui=read('src/year-end-assist.ts');
-assert.match(ui,/memoDirty/);assert.match(ui,/checkMemoExit\(\)/);
+assert.match(ui,/memoDirty/);assert.match(ui,/checkDetailExit\(\)/);
 assert.match(ui,/await repo\.saveYearMemo\(id,year,text\)/);
 assert.doesNotMatch(html,/id="yea-copy(?:-raw)?"/);
 assert.doesNotMatch(ui,/navigator\.clipboard\.writeText/);

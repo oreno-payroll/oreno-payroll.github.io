@@ -38,6 +38,8 @@
 .yea-stat--total{grid-column:1/-1;display:flex;flex-direction:column;align-items:stretch;gap:7px;border-color:#b2c7e9;background:#f7faff}
 .yea-stat--total>span{display:block}
 .yea-stat--total>strong{font-size:clamp(24px,3.6vw,36px)}
+.yea-stat--total .yea-total-missing{align-self:flex-start;margin:3px 0 0;padding:6px 10px;border:1px solid var(--state-warning-border);border-radius:7px;background:var(--state-warning-bg);color:var(--state-warning-text);font-size:12px;font-weight:750;line-height:1.6;overflow-wrap:anywhere}
+.yea-stat--total .yea-total-missing-note{margin:0;color:var(--color-muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 
 .yea-help{font-size:12px;line-height:1.65;color:var(--color-muted);margin:9px 0 10px}
 .yea-month-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:15px}
@@ -184,3 +186,13 @@
 
 /* Confirmed months are noneditable; the month label remains fully legible. */
 .yea-month[data-state="actual"] strong.yea-month__head,.yea-month[data-state="loading"] strong.yea-month__head{color:var(--color-text);opacity:1}
+
+/* Completed batch details and read-only recovery actions. Only visible when relevant. */
+.yea-save-result,.yea-save-recovery{margin-top:12px;padding:12px 14px;border:1px solid var(--color-border);border-radius:var(--radius-md,10px);background:var(--color-surface,#fff);font-size:13px;line-height:1.6}
+.yea-save-result>strong{display:block;margin-bottom:5px}
+.yea-save-result>p{margin:5px 0}
+.yea-excluded-list{list-style:none;padding:0;margin:4px 0 0;display:grid;gap:6px}
+.yea-excluded-list li{display:flex;flex-wrap:wrap;gap:5px 12px;border-top:1px solid var(--color-border);padding-top:6px;overflow-wrap:anywhere}
+.yea-excluded-list li span{color:var(--color-muted)}
+.yea-save-recovery__actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+@media(max-width:640px){.yea-save-recovery__actions{display:grid;grid-template-columns:1fr}}

@@ -145,3 +145,38 @@ assert.match(ui,/resumeVerifiedOrphans:\s*true/);
 assert.match(html,/id="ye-restore-diagnosis"/);
 assert.match(html,/id="ye-restore-resume"[^>]*hidden disabled/);
 console.log('PASS: diagnosis and opt-in resume UI are connected');
+
+// Preview is read-only and separates prospective restores from existing employees.
+const fresh=env();const freshWrites=fresh.writes;
+const startPlan=await fresh.repo.previewBackupRestore(dataset);
+assert.equal(startPlan.restorable,1);assert.equal(startPlan.skipped,0);assert.equal(startPlan.blocked,0);
+assert.equal(startPlan.canRestore,true);assert.equal(fresh.writes,freshWrites);
+const orphanPlan=await extra.repo.previewBackupRestore(dataset);
+assert.equal(orphanPlan.canRestore,false);assert.equal(orphanPlan.blocked,1);
+const currentPlan=await first.repo.previewBackupRestore(dataset);
+assert.equal(currentPlan.restorable,0);assert.equal(currentPlan.skipped,1);
+assert.equal(currentPlan.items[0].status,'skip');
+// Same display name with a different UUID is a separate record and must be disclosed.
+const shadowId=model.randomPersonId();
+const sameNameBackup={exportedAt:at,persons:[{profile:{...profile,id:shadowId,yearFiles:{}},years:[],originals:[]}]};
+const namePlan=await first.repo.previewBackupRestore(sameNameBackup);
+assert.equal(namePlan.canRestore,true);
+assert.equal(namePlan.restorable,1);
+assert.equal(namePlan.sameNameCollisions,1);
+assert.equal(namePlan.items[0].sameNameCollision,true);
+assert.match(namePlan.items[0].reason,/同名の別データが追加されます/);
+assert.equal(currentPlan.sameNameCollisions,0,'same UUID already registered must be skipped without warning');
+const differentNameBackup={exportedAt:at,persons:[{profile:{...profile,id:shadowId,displayName:'別の架空従業員',yearFiles:{}},years:[],originals:[]}]};
+assert.equal((await first.repo.previewBackupRestore(differentNameBackup)).sameNameCollisions,0);
+assert.equal(first.trashCalls,0);
+console.log('PASS: a different UUID sharing an active employee name warns before restore, without writes or deletion');
+
+// All orphan original reports are metadata-only and never attempt cleanup.
+const beforeInspection=first.writes;
+const healthy=await first.repo.inspectUnreferencedOriginals(id);
+assert.equal(healthy.unreferenced,0);assert.equal(healthy.missing,0);assert.equal(healthy.referenced,1);
+first.remote.set(path([...first.access.path,'persons',id,'originals'],'unexpected.enc'),{text:'opaque',etag:'orphan-tag',id:'orphan-id'});
+const foundOrphan=await first.repo.inspectUnreferencedOriginals(id);
+assert.equal(foundOrphan.unreferenced,1);assert.equal(foundOrphan.missing,0);
+assert.equal(first.writes,beforeInspection);assert.equal(first.trashCalls,0);
+console.log('PASS: read-only employee restore preview; unreferenced PDF remains untouched and prevents blind retry');

@@ -16,7 +16,7 @@ for(const id of ['yea-pdf-dropzone','yea-drafts','yea-review-form','yea-save-all
   assert.ok(body.includes(`id="${id}"`), `${id} must collapse along with the whole editor`);
 assert.equal((html.match(/<details\b/g)||[]).length, 2, 'one PDF accordion and one income forecast accordion');
 assert.match(script,/uploadAccordion\.open=data\.documents\.length===0/);
-assert.match(script,/if\(result\.data\.documents\.length\)uploadAccordion\.open=false/);
+assert.match(script,/if\(result\.data\.documents\.length\)uploadAccordion\.open=excluded\.length>0/,'show excluded-file details after successful mixed batch');
 assert.match(script,/count\.textContent=pendingCount\?`未保存/,'unsaved state visible when closed');
 for(const symbol of ['file','close']) {
  assert.ok(standard.includes(`id="icon-${symbol}"`), 'standard file symbol present');

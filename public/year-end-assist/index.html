@@ -111,13 +111,18 @@
           </section>
         </div>
         <div class="yea-upload-savebar"><span id="yea-upload-progress" role="status" aria-live="polite"></span><button type="button" class="btn btn--primary" id="yea-save-all" disabled>すべて保存</button></div>
+        <section id="yea-save-result" class="yea-save-result" role="status" aria-live="polite" hidden></section>
+        <section id="yea-save-recovery" class="yea-save-recovery" hidden>
+          <p id="yea-save-recovery-status" role="status" aria-live="polite"></p>
+          <div class="yea-save-recovery__actions"><button type="button" class="btn btn--secondary" id="yea-save-recheck">OneDriveの状態を再確認</button><button type="button" class="btn btn--secondary" id="yea-save-reload" disabled>保存済みデータを読み直す</button></div>
+        </section>
       </div>
     </details>
     <section class="yea-stats" aria-label="課税支給額の集計">
      <div class="card yea-stat"><span>確定済み給与</span><strong id="yea-salary">0円</strong></div>
      <div class="card yea-stat"><span>確定済み賞与</span><strong id="yea-bonus">0円</strong></div>
      <div class="card yea-stat"><span>未支給分の見込み</span><strong id="yea-forecast">0円</strong></div>
-     <div class="card yea-stat yea-stat--total"><span>年間課税支給額（実績＋見込み）</span><strong id="yea-total">0円</strong></div>
+     <div class="card yea-stat yea-stat--total"><span>年間課税支給額（実績＋見込み）</span><strong id="yea-total">0円</strong><p id="yea-total-missing" class="yea-total-missing" role="status" aria-live="polite" hidden></p><p id="yea-total-missing-note" class="yea-total-missing-note" hidden></p></div>
     </section>
     <details class="card yea-forecast-panel yea-forecast-accordion" id="yea-forecast-accordion">
       <summary class="yea-upload-summary"><span class="yea-upload-chevron" aria-hidden="true"></span><strong id="yea-salary-forecast-heading">未支給給与・賞与の見込み</strong></summary>

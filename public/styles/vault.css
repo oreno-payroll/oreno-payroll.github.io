@@ -241,3 +241,14 @@
 }
 
 .ye-restore-diagnosis { white-space: pre-line; overflow-wrap: anywhere; }
+
+/* Employee-by-employee restore preview; readable in both themes. */
+.ye-restore-people{margin-top:10px;padding:10px 12px;border:1px solid var(--color-border);border-radius:var(--radius-md,10px)}
+.ye-restore-people summary{cursor:pointer;font-size:13px;font-weight:600}
+.ye-restore-people ul{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:6px;max-height:260px;overflow:auto}
+.ye-restore-people li{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;border-top:1px solid var(--color-border);padding:6px 0 0;font-size:13px;overflow-wrap:anywhere}
+.ye-restore-people li span{color:var(--color-muted)}
+.ye-restore-people li span[data-state="restore"]{color:var(--color-success)}
+.ye-restore-people li span[data-state="blocked"]{color:var(--color-danger)}
+.ye-restore-people li span[data-name-collision="true"]{color:var(--state-warning-text);font-weight:750}
+.ye-restore-people .ye-restore-warning{color:var(--color-danger)}

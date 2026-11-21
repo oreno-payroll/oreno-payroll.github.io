@@ -25,6 +25,11 @@ export interface YearEndRestoreOrphan {
  profile:boolean; yearFiles:number; originals:number; inBackup:boolean; unexpectedFiles:number;
 }
 export interface YearEndRestoreInspection {items:YearEndRestoreOrphan[]; canAttemptResume:boolean}
+/** Read-only preview. A plan can become stale; restoreBackupSnapshot validates again. */
+export interface YearEndRestorePreview {
+ items:Array<{id:PersonId;label:string;status:'restore'|'skip'|'blocked';reason:string;sameNameCollision:boolean}>;
+ restorable:number;skipped:number;blocked:number;sameNameCollisions:number;canRestore:boolean;warning:string;
+}
 
 export class YearEndRepository {
  private async access():Promise<Access> {const vault=await cloudVault();return vault.yearEndAccess();}
@@ -532,6 +537,82 @@ export class YearEndRepository {
   const live=await this.access();
   if(live.path.join('/')!==a.path.join('/'))throw new Error('バックアップ中に暗号化保管庫が切り替わりました。');
   return {exportedAt:new Date().toISOString(),persons};
+ }
+ /** Read-only preview of the encrypted index, active employee profiles and folder metadata. Never writes. */
+ async previewBackupRestore(data:YearEndBackupData):Promise<YearEndRestorePreview>{
+  const a=await this.access();
+  // Do not call readIndex: the first interrupted restore may have folders without an index.
+  const stored=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
+  const indexed=new Map((stored?validateIndex(stored.value):emptyIndex()).persons.map(p=>[p.id,p]));
+  const folders=await a.graph.listFolder([...a.path,'persons'])??[];
+  const found=new Map(folders.map(folder=>[folder.name,folder]));
+  const unindexed=folders.filter(folder=>!folder.folder||!isUuid(folder.name)||indexed.get(folder.name as PersonId)?.state!=='active');
+  // A backup ID and a newly created employee ID can differ while their visible names match.
+  // Look up active profiles only for the names that may actually be restored; read-only.
+  const restorableNames=new Set(data.persons.filter(person=>indexed.get(asPersonId(person.profile.id))?.state!=='active')
+   .map(person=>person.profile.displayName.normalize('NFKC').trim()));
+  const activeNames=new Map<string,Set<PersonId>>();
+  if(restorableNames.size){
+   const activeRows=[...indexed.values()].filter(row=>row.state==='active');
+   for(let i=0;i<activeRows.length;i+=6){
+    const profiles=await Promise.all(activeRows.slice(i,i+6).map(async row=>{
+     const file=await this.readJson<PersonProfile>(a,'profile',this.personPath(a,row.id),'profile.enc',MAX_PROFILE);
+     if(!file)throw new Error('登録済み従業員の情報が見つかりません。復元前に保存状態を確認してください。');
+     return validateProfile(file.value,row.id);
+    }));
+    for(const profile of profiles){
+     const name=profile.displayName.normalize('NFKC').trim();
+     if(!restorableNames.has(name))continue;
+     const matches=activeNames.get(name)??new Set<PersonId>();matches.add(profile.id);activeNames.set(name,matches);
+    }
+   }
+  }
+  let restorable=0,skipped=0,blocked=0,sameNameCollisions=0;
+  const ids=new Set<string>();
+  const items=data.persons.map(person=>{
+   const id=asPersonId(person.profile.id);
+   if(ids.has(id))throw new Error('バックアップ内で従業員IDが重複しています。');ids.add(id);
+   const label=person.profile.alias?`${person.profile.displayName}（${person.profile.alias}）`:person.profile.displayName;
+   const prior=indexed.get(id),folder=found.get(id);
+   let status:'restore'|'skip'|'blocked'='restore',reason='未登録・復元対象';
+   if(prior?.state==='active'){
+    if(folder?.folder){status='skip';reason='登録済み・スキップ';}
+    else {status='blocked';reason='登録済みですが保存フォルダーが見つかりません';}
+   }else if(prior?.state==='deleting'){status='blocked';reason='削除途中のため復元できません';}
+   else if(folder){status='blocked';reason='索引未登録・削除済みのフォルダーがあります。復元再開の確認が必要です';}
+   else if(prior?.state==='deleted'){reason='削除済み・復元対象';}
+   const sameNameCollision=status==='restore'&&[...(activeNames.get(person.profile.displayName.normalize('NFKC').trim())??[])].some(otherId=>otherId!==id);
+   if(sameNameCollision){reason+='（同名の別データが追加されます）';sameNameCollisions++;}
+   if(status==='restore')restorable++;
+   else if(status==='skip')skipped++;
+   else blocked++;
+   return {id,label,status,reason,sameNameCollision};
+  });
+  const warnings:string[]=[];
+  if(unindexed.length)warnings.push('保存途中または索引未登録の従業員フォルダーがあります。復元前に保存状態を確認してください。');
+  if(sameNameCollisions)warnings.push(`同名の別データが${sameNameCollisions}名追加されます。従業員別の復元内容を確認してください。`);
+  return {items,restorable,skipped,blocked,sameNameCollisions,warning:warnings.join(' '),canRestore:blocked===0&&unindexed.length===0};
+ }
+ /** After a failed batch, inspect all PDF references before allowing the user to retry.
+  * Never delete, overwrite, or automatically claim unreferenced originals. */
+ async inspectUnreferencedOriginals(id:PersonId):Promise<{unreferenced:number;missing:number;referenced:number}>{
+  const a=await this.access(),before=await this.readIndex(a),profile=await this.profile(a,id);
+  const expected=new Set<string>();
+  for(const [year,fileId] of Object.entries(profile.value.yearFiles)){
+   const remote=await this.readJson<YearData>(a,'year',[...this.personPath(a,id),'years'],fileId+'.enc',MAX_YEAR);
+   if(!remote)throw new Error('参照先の年度ファイルが見つかりません。');
+   const yearData=validateYear(remote.value,id,Number(year));
+   for(const record of yearData.documents)expected.add(record.id+'.enc');
+  }
+  const files=await a.graph.listFolder([...this.personPath(a,id),'originals'])??[];
+  const found=new Set(files.filter(f=>!f.folder).map(f=>f.name));
+  const unreferenced=files.filter(file=>file.folder||!expected.has(file.name)).length;
+  const missing=[...expected].filter(name=>!found.has(name)).length;
+  const after=await this.readIndex(a);
+  const profileNow=await a.graph.metadata(this.personPath(a,id),'profile.enc');
+  if((before.file?.etag??null)!==(after.file?.etag??null)||!profileNow||profileNow.etag!==profile.file?.etag)
+   throw new Error('確認中に別タブでデータが変更されました。もう一度確認してください。');
+  return {unreferenced,missing,referenced:expected.size};
  }
  /** Inspect orphan folders without writing or deleting files. The backup is optional and stays in memory. */
  async inspectRestoreOrphans(backup?:YearEndBackupData):Promise<YearEndRestoreInspection>{

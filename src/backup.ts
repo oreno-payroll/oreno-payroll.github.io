@@ -7,7 +7,7 @@ import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encry
 import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
 import {clearNavigationSnapshot} from './cloud/snapshot';
 import type {CloudFolderItem} from './cloud/graph';
-import {YearEndRepository} from './yearEnd/repository';
+import {YearEndRepository,type YearEndRestorePreview} from './yearEnd/repository';
 import {createYearEndBackup,readYearEndBackup,type YearEndBackupData} from './yearEnd/backup';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -107,15 +107,42 @@ const yearEndPreviewLabel=$<HTMLElement>('ye-restore-preview');
 const yearEndStatus=$<HTMLElement>('ye-backup-status');
 const yearEndDiagnosis=$<HTMLElement>('ye-restore-diagnosis');
 const yearEndResume=$<HTMLButtonElement>('ye-restore-resume');
+const yearEndRecheck=$<HTMLButtonElement>('ye-restore-recheck');
+const yearEndPeople=$<HTMLDetailsElement>('ye-restore-people');
+const yearEndPeopleSummary=$<HTMLElement>('ye-restore-people-summary');
+const yearEndPeopleList=$<HTMLUListElement>('ye-restore-people-list');
 let yearEndPreview:YearEndBackupData|undefined;
+let yearEndPlan:YearEndRestorePreview|undefined;
+function showYearEndPlan(plan:YearEndRestorePreview){
+ yearEndPlan=plan;
+ yearEndPeople.hidden=false;
+ yearEndPeople.open=plan.items.length<=8||plan.sameNameCollisions>0;
+ yearEndPeopleSummary.textContent=`復元対象 ${plan.restorable}名・登録済み ${plan.skipped}名${plan.blocked?`・要確認 ${plan.blocked}名`:''}${plan.sameNameCollisions?`・同名注意 ${plan.sameNameCollisions}名`:''}`;
+ yearEndPeopleList.replaceChildren();
+ for(const entry of plan.items){
+  const row=document.createElement('li');
+  const label=document.createElement('strong');label.textContent=entry.label;
+  const state=document.createElement('span');state.textContent=entry.reason;
+  state.dataset.state=entry.status;
+  if(entry.sameNameCollision)state.dataset.nameCollision='true';
+  row.append(label,state);yearEndPeopleList.append(row);
+ }
+ if(plan.warning){
+  const row=document.createElement('li');row.textContent=plan.warning;
+  row.classList.add('ye-restore-warning');yearEndPeopleList.append(row);
+ }
+ updateButtons();
+}
+
 
 function updateButtons(): void {
   reportStatusTransition();
   orphanCheck.disabled=busy;orphanRecover.disabled=busy||!orphanYears?.length;
   exportButton.disabled = busy || !loadedDb;
   yearEndExport.disabled=busy;yearEndVerify.disabled=busy||!yearEndFile.files?.length||!yearEndRestorePassword.value;
-  yearEndCommit.disabled=busy||!yearEndPreview||!yearEndAck.checked;yearEndAck.disabled=busy||!yearEndPreview;
+  yearEndCommit.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable||!yearEndAck.checked;yearEndAck.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable;
   yearEndResume.disabled=busy||Boolean(yearEndResume.hidden)||!yearEndPreview;
+  yearEndRecheck.disabled=busy||Boolean(yearEndRecheck.hidden)||!yearEndPreview;
   for(const item of [yearEndPassword,yearEndConfirm,yearEndFile,yearEndRestorePassword])item.disabled=busy;
   cloudLoad.disabled=busy;
   changeButton.disabled=busy;
@@ -460,29 +487,34 @@ localDelete.addEventListener('click',()=>{void(async()=>{
 // Year-end records belong to a separate, encrypted OneDrive namespace. Never mix
 // their restore action with personal payroll's destructive replaceAllRecords().
 function invalidateYearEndPreview(message='暗号化バックアップを選択してください。'){
- yearEndResume.hidden=true;yearEndDiagnosis.hidden=true;yearEndDiagnosis.textContent='';
- yearEndPreview=undefined;yearEndAck.checked=false;yearEndPreviewLabel.textContent=message;
+ yearEndResume.hidden=true;yearEndRecheck.hidden=true;yearEndDiagnosis.hidden=true;yearEndDiagnosis.textContent='';
+ yearEndPreview=undefined;yearEndPlan=undefined;yearEndAck.checked=false;yearEndPreviewLabel.textContent=message;
+ yearEndPeople.hidden=true;yearEndPeopleList.replaceChildren();
  updateButtons();
 }
 yearEndFile.addEventListener('change',()=>invalidateYearEndPreview());
 yearEndRestorePassword.addEventListener('input',()=>invalidateYearEndPreview('パスワードを入力し、ファイルを検証してください。'));
 yearEndAck.addEventListener('change',updateButtons);
 function reportYearEnd(message:string){yearEndStatus.textContent=message;}
-async function diagnoseIncompleteYearEndRestore(backup:YearEndBackupData):Promise<void>{
+async function diagnoseIncompleteYearEndRestore(backup:YearEndBackupData,context:'failure'|'manual'='failure'):Promise<boolean>{
  yearEndResume.hidden=true;yearEndDiagnosis.hidden=false;
  try{
   const report=await yearEndRepo.inspectRestoreOrphans(backup);
   if(!report.items.length){
-   yearEndDiagnosis.textContent='索引未登録の従業員フォルダーは見つかりませんでした。ネットワーク・競合状態を確認し、バックアップを再検証してください。';
-   return;
+   yearEndDiagnosis.textContent=context==='manual'
+    ?'索引未登録の従業員フォルダーは見つかりませんでした。従業員別の復元対象を確認してください。'
+    :'索引未登録の従業員フォルダーは見つかりませんでした。ネットワーク・競合状態を確認し、バックアップを再検証してください。';
+   return true;
   }
   const lines=report.items.slice(0,20).map(item=>
    `・${item.label}［ID: ${item.id}］（${item.state==='deleted'?'削除済み':item.state==='deleting'?'削除途中':item.state==='unexpected'?'不明な項目':'索引未登録'}）: 原本 ${item.originals}件、年度 ${item.yearFiles}件、プロフィール ${item.profile?'あり':'なし'}${item.inBackup?' / 選択したバックアップに含まれる':' / 選択したバックアップに含まれない'}${item.unexpectedFiles?' / 想定外の項目あり':''}`);
   yearEndDiagnosis.textContent=`保存途中とみられる従業員フォルダー ${report.items.length}件を検出しました。\n${lines.join('\n')}${report.items.length>20?'\nほかの項目もあります。':''}\n\n暗号化ファイルは削除・上書きしていません。バックアップ原本を保管してください。`+
-   (report.canAttemptResume?'\n同じバックアップとの復号・完全性照合に合格した項目だけ、下のボタンで明示的に復元を再開できます。':'\n復元に使ったファイルと一致しない項目があります。自動再開せず、OneDriveの年末調整領域を確認してください。手動削除はしないでください。');
+   (report.canAttemptResume?'\n保存途中のデータが見つかりました。同じバックアップを使って復元を再開できます。再開時にすべてのファイルを照合し、一致しない場合は変更せず中断します。':'\n安全に再開できないデータがあります。自動再開せず、OneDriveの年末調整領域を確認してください。手動削除はしないでください。');
   yearEndResume.hidden=!report.canAttemptResume;
+  return true;
  }catch(error){
   yearEndDiagnosis.textContent=`保存状態の確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}。ファイルは自動削除していません。バックアップ原本を保管してください。`;
+  return false;
  }finally{updateButtons();}
 }
 
@@ -518,25 +550,32 @@ yearEndVerify.addEventListener('click',()=>{void(async()=>{
   if(!await isEncryptedBackup(file))throw new Error('暗号化された.payrollファイルだけを受け付けます。');
   const decoded=await decryptBackup(file,yearEndRestorePassword.value);
   const data=await readYearEndBackup(decoded);
+  const plan=await yearEndRepo.previewBackupRestore(data);
   yearEndPreview=data;yearEndRestorePassword.value='';
+  showYearEndPlan(plan);
+  // A browser crash loses the previous diagnosis; allow read-only inspection after any valid backup.
+  yearEndRecheck.hidden=false;
   const pdfs=data.persons.reduce((n,p)=>n+p.originals.length,0);
   const years=data.persons.reduce((n,p)=>n+p.years.length,0);
-  yearEndPreviewLabel.textContent=`検証済み：従業員 ${data.persons.length}名、年度 ${years}件、原本PDF ${pdfs}件。作成日時 ${new Date(data.exportedAt).toLocaleString('ja-JP')}。既存従業員は上書きせず、未登録・削除済みの従業員だけを復元します。`;
-  reportYearEnd('バックアップの完全性検査が完了しました。');
+  yearEndPreviewLabel.textContent=`検証済み：従業員 ${data.persons.length}名、年度 ${years}件、原本PDF ${pdfs}件。作成日時 ${new Date(data.exportedAt).toLocaleString('ja-JP')}。`+
+   (plan.canRestore?(plan.restorable?`復元対象は${plan.restorable}名です。`:'復元対象の従業員はいません。'):'OneDriveに未完了・不整合の可能性があるため、復元を開始できません。')+
+   (plan.sameNameCollisions?`同名の別データが${plan.sameNameCollisions}名追加されます。従業員別一覧を確認してください。`:'');
+  if(!plan.canRestore){yearEndRecheck.hidden=false;await diagnoseIncompleteYearEndRestore(data);}
+  reportYearEnd(plan.canRestore?'バックアップの完全性検査が完了しました。':'バックアップは検証済みです。OneDriveの保存状態を確認してください。');
  }catch(error){yearEndError(error);invalidateYearEndPreview('バックアップの検証に失敗しました。OneDriveのデータは変更していません。');}
  finally{busy=false;updateButtons();}
 })()});
 yearEndCommit.addEventListener('click',()=>{void(async()=>{
- if(busy||!yearEndPreview||!yearEndAck.checked)return;
+ if(busy||!yearEndPreview||!yearEndAck.checked||!yearEndPlan?.canRestore||!yearEndPlan.restorable)return;
  const data=yearEndPreview;
- if(!window.confirm(`年末調整の従業員 ${data.persons.length}名を復元します。\n既存の従業員はスキップします。索引不整合・孤立ファイルがあれば中止します。\nOneDriveへの書き込みを開始しますか？`))return;
+ if(!window.confirm(`年末調整の従業員 ${yearEndPlan.restorable}名を復元します（登録済み ${yearEndPlan.skipped}名はスキップ）。${yearEndPlan.sameNameCollisions?`\n注意：同名の別データが${yearEndPlan.sameNameCollisions}名追加されます。`:''}\n索引不整合・孤立ファイルがあれば中止します。\nOneDriveへの書き込みを開始しますか？`))return;
  busy=true;updateButtons();reportYearEnd('従業員データの復元を開始しています…');
  try{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd);
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
   yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名を復元しました（既存の ${result.skipped}名は変更なし）。`);
  }catch(error){
-  yearEndAck.checked=false;
+  yearEndAck.checked=false;yearEndRecheck.hidden=false;yearEndPlan=undefined;
   yearEndPreviewLabel.textContent='復元は完了していません。下の保存状況を確認してください。';
   yearEndError(error);
   await diagnoseIncompleteYearEndRestore(data);
@@ -552,6 +591,27 @@ yearEndResume.addEventListener('click',()=>{void(async()=>{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd,{resumeVerifiedOrphans:true});
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
   yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名の復元を完了しました（既存の ${result.skipped}名は変更なし）。`);
- }catch(error){yearEndError(error);await diagnoseIncompleteYearEndRestore(data);}
+ }catch(error){yearEndRecheck.hidden=false;yearEndError(error);await diagnoseIncompleteYearEndRestore(data);}
+ finally{busy=false;updateButtons();}
+})()});
+
+// Available after backup verification, including after browser restart. Read-only: never retries the restore.
+yearEndRecheck.addEventListener('click',()=>{void(async()=>{
+ if(busy||!yearEndPreview||yearEndRecheck.hidden)return;
+ busy=true;yearEndAck.checked=false;yearEndResume.hidden=true;yearEndPlan=undefined;
+ updateButtons();reportYearEnd('OneDriveの復元状態を確認しています…');
+ try{
+  const data=yearEndPreview;
+  const plan=await yearEndRepo.previewBackupRestore(data);
+  showYearEndPlan(plan);
+  const inspected=await diagnoseIncompleteYearEndRestore(data,'manual');
+  if(!inspected){
+   // A read failure cannot confirm a safe restore plan.
+   yearEndPlan=undefined;
+   reportYearEnd('OneDriveの復元状態を確認できませんでした。通信状態を確認して再試行してください。');
+  }else if(plan.canRestore){
+   reportYearEnd('復元状態を確認しました。最新の復元対象を確認してから操作してください。');
+  }else reportYearEnd('安全に復元を開始できないデータがあります。診断結果を確認してください。');
+ }catch(error){yearEndPlan=undefined;yearEndResume.hidden=true;yearEndError(error);}
  finally{busy=false;updateButtons();}
 })()});

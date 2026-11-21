@@ -54,6 +54,35 @@ let peopleLoaded=false;
 const reviewForm=$<HTMLFormElement>('yea-review-form');
 const reviewValidation=$<HTMLParagraphElement>('yea-review-validation');
 const saveAll=$<HTMLButtonElement>('yea-save-all');
+const saveResult=$<HTMLElement>('yea-save-result');
+const saveRecovery=$<HTMLElement>('yea-save-recovery');
+const saveRecoveryStatus=$<HTMLElement>('yea-save-recovery-status');
+const saveRecheck=$<HTMLButtonElement>('yea-save-recheck');
+const saveReload=$<HTMLButtonElement>('yea-save-reload');
+let saveRecoveryRequired=false;
+let saveRecoveryChecked=false;
+let saveRecoverySafe=false;
+function resetSaveRecovery(){
+ saveRecoveryRequired=false;saveRecoveryChecked=false;saveRecoverySafe=false;
+ saveRecovery.hidden=true;saveRecoveryStatus.textContent='';saveResult.hidden=true;saveResult.replaceChildren();
+}
+function resetSaveRecoveryStateAfterSuccess(){
+ saveRecoveryRequired=false;saveRecoveryChecked=false;saveRecoverySafe=false;
+ saveRecovery.hidden=true;saveRecoveryStatus.textContent='';
+}
+function showSkippedResult(savedCount:number,updatedCount:number,excluded:Array<{name:string;reason:string}>){
+ saveResult.replaceChildren();
+ if(!excluded.length){saveResult.hidden=true;return;}
+ saveResult.hidden=false;
+ saveResult.append(el('strong','',`保存完了：新規 ${savedCount}件・変更 ${updatedCount}件、重複除外 ${excluded.length}件`));
+ const heading=el('p','', '保存対象外となったPDF');
+ const list=el('ul','yea-excluded-list');
+ for(const item of excluded){
+  const row=el('li');row.append(el('strong','',item.name),el('span','',item.reason));list.append(row);
+ }
+ saveResult.append(heading,list);
+}
+
 const reviewFields=['kind','paymentDate','targetMonth','taxable','gross','transportation','nonTaxable','healthInsurance','pension','employmentInsurance','incomeTax','residentTax'] as const;
 type ReviewField=typeof reviewFields[number];
 
@@ -157,10 +186,13 @@ async function action(description:string,fn:()=>Promise<void>,_showSuccess=true)
   updateDrafts(true);updateForecastSaveState();updateBonusSaveState();
  }
 }
-function checkMemoExit():boolean{return !memoDirty||window.confirm('年度メモに未保存の変更があります。破棄して切り替えますか？');}
+/** One decision for all draft categories; never ask again for the same navigation. */
 function checkDetailExit():boolean{
- return checkMemoExit()&&(!pendingEdits()||window.confirm('未保存の明細変更があります。破棄して切り替えますか？'))&&
-  (!(forecastDirty||bonusDirty)||window.confirm('見込み額に未保存の変更があります。破棄して切り替えますか？'));
+ const unsaved:string[]=[];
+ if(pendingEdits())unsaved.push('明細');
+ if(forecastDirty||bonusDirty)unsaved.push('給与・賞与の見込み');
+ if(memoDirty)unsaved.push('年度メモ');
+ return unsaved.length===0||window.confirm(`未保存の変更があります。\n対象：${unsaved.join('・')}\n破棄して移動しますか？`);
 }
 const displayPerson=(p:PersonProfile):string=>p.alias?`${p.displayName}（${p.alias}）`:p.displayName;
 function clearMemo(){memoKey='';memoDirty=false;memoInput.value='';memoButton.disabled=true;memoState.textContent='';}
@@ -192,7 +224,7 @@ function renderYearOptions(){
  if(activeYear<min||activeYear>max)activeYear=currentYear;yearSelect.value=String(activeYear);
 }
 async function selectPerson(id:string){
- data=null;otherYearNames=[];clearDrafts();resetForecastForm();resetBonusForm();clearMemo();
+ resetSaveRecovery();data=null;otherYearNames=[];clearDrafts();resetForecastForm();resetBonusForm();clearMemo();
  if(!id){resetSelection();return;}
  const p=people.find(x=>x.id===id&&x.state==='active');if(!p){say('削除中・未登録の従業員は編集できません。',true);resetSelection();return;}
  selected=p.id;activeYear=currentYear;uploadContext='';
@@ -207,6 +239,8 @@ async function loadPeople(){
 function showYearPlaceholders(){
  yearContent.hidden=false;yearContent.dataset.loading='true';
  for(const id of ['yea-salary','yea-bonus','yea-forecast','yea-total'])$(id).textContent='—';
+ $('yea-total-missing').hidden=true;
+ $('yea-total-missing-note').hidden=true;
  $('yea-workspace-count').textContent='読み込み中';
  $('yea-file-count').textContent='…';
  const fileEmpty=$('yea-files-empty');
@@ -268,6 +302,13 @@ function renderYear(){
  memoState.textContent=memoDirty?'未保存の変更があります。':'';
  $('yea-salary').textContent=yen(totals.salary);$('yea-bonus').textContent=yen(totals.bonus);
  $('yea-forecast').textContent=yen(totals.forecast);$('yea-total').textContent=yen(totals.total);
+ const missing=$<HTMLElement>('yea-total-missing'),missingNote=$<HTMLElement>('yea-total-missing-note');
+ missing.hidden=missingNote.hidden=totals.unknownMonths.length===0;
+ if(totals.unknownMonths.length){
+  const months=totals.unknownMonths.map(month=>`${Number(month.slice(5))}月`).join('・');
+  missing.textContent=`未登録・見込みなし：${totals.unknownMonths.length}か月（${months}）`;
+  missingNote.textContent='実績と保存済み見込みの合計です。未入力月の金額は含まれていません。';
+ }else{missing.textContent='';missingNote.textContent='';}
  const bonusRows=data.bonusEstimates.map(x=>`${displayDate(x.month)}: ${yen(x.amount)}`).join(' / ');
  const bonusHeadline=$<HTMLElement>('yea-bonus-result');
  bonusHeadline.hidden=!bonusRows;bonusHeadline.textContent=bonusRows?`保存済みの賞与見込み：${bonusRows}`:'';
@@ -442,14 +483,39 @@ function updateSaveState(){
  const ready=fileQueue.filter(item=>item.status==='ready'&&item.draft);
  const updates=data?.documents.filter(r=>{const e=savedEdits.get(r.id);return Boolean(e&&isChanged(r,e));})??[];
  const pending=fileQueue.some(item=>item.status==='reading');
- const errors=fileQueue.some(item=>item.status==='error'||item.status==='duplicate');
+ const errors=fileQueue.some(item=>item.status==='error');
+ const duplicates=fileQueue.filter(item=>item.status==='duplicate').length;
  const blocked=ready.some(item=>validateQueueItem(item)!==null)||updates.some(r=>validateSavedEdit(r,savedEdits.get(r.id)!)!==null);
- saveAll.disabled=busy||!selected||!data||pending||errors||blocked||(ready.length===0&&updates.length===0);
+ saveAll.disabled=busy||saveRecoveryRequired||!selected||!data||pending||errors||blocked||(ready.length===0&&updates.length===0);
  saveAll.textContent=savingDocuments?'保存中…':'すべて保存';
+ saveRecheck.disabled=busy;saveReload.disabled=busy||!saveRecoveryChecked||!saveRecoverySafe;
  $('yea-upload-progress').textContent=savingDocuments?'保存中…':
-  !ready.length&&!updates.length&&!errors&&!pending?'':pending?'PDFを解析中…':
-  errors?'読み取れないPDFを一覧から削除してください。':blocked?'入力内容に問題があります。':
-  `新規${ready.length}件・変更${updates.length}件`;
+  !ready.length&&!updates.length&&!errors&&!pending&&!duplicates?'':pending?'PDFを解析中…':
+  errors?'解析できないPDFを確認・削除してください。':blocked?'入力内容に問題があります。':
+  saveRecoveryRequired?'前回の保存が未完了です。OneDriveの状態を確認してください。':
+  !ready.length&&!updates.length&&duplicates?`重複${duplicates}件は保存対象外です。`:
+  `新規${ready.length}件・変更${updates.length}件${duplicates?`・重複除外${duplicates}件`:''}`;
+}
+/** When the primary queued copy is removed, the next identical file is no longer a duplicate.
+ * Reparse it instead of leaving every remaining copy permanently excluded. */
+function promoteRemainingDuplicate(removed:QueueItem){
+ const hash=removed.hash;
+ if(!hash||data?.documents.some(record=>record.fileHash===hash)){updateDrafts();return;}
+ const next=fileQueue.filter(item=>item.hash===hash&&item.status==='duplicate')
+  .sort((a,b)=>a.id-b.id)
+  .find(item=>!fileQueue.some(other=>other!==item&&other.id<item.id&&other.hash===hash));
+ if(!next){updateDrafts();return;}
+ next.status='reading';next.error='';next.draft=null;
+ updateDrafts();
+ void action('重複PDFの再解析',async()=>{
+  try{
+   const parsed=await parseAssistedPdf(next.file);
+   if(!fileQueue.includes(next))return;
+   next.draft=parsed;next.status='ready';
+  }catch(error){
+   next.status='error';next.error=error instanceof Error?error.message:'PDFの解析に失敗しました。';
+  }finally{updateDrafts();}
+ },false);
 }
 function renderSelectedReview(){
  const queue=selectedQueueItem(),record=selectedRecord(),saved=record? savedEdits.get(record.id):undefined;
@@ -459,11 +525,11 @@ function renderSelectedReview(){
  if(!visible)return;
  $('yea-selected-name').textContent=record?.fileName??queue?.file.name??'';
  $('yea-selected-meta').textContent=record?(saved&&isChanged(record,saved)?'変更あり':'保存済み'):
-  queue?.status==='ready'?'新規・保存待ち':queue?.status==='reading'?'解析中':'読み取りエラー';
+  queue?.status==='ready'?'新規・保存待ち':queue?.status==='reading'?'解析中':queue?.status==='duplicate'?'重複・保存対象外':'読み取りエラー';
  const warningAmounts=d?documentAmountWarnings(d):[];
  const message=record?warningAmounts.join('\n'):queue?.status==='ready'&&queue?.draft?
   [possibleNameMismatch(queue)?'他のPDFと読み取り氏名が一致しません。':'',...warningAmounts,...queue.draft.warnings].filter(Boolean).join('\n'):
-  queue?.status==='error'?queue.error:queue?.status==='duplicate'?'同じPDFが一覧にあります。':'';
+  queue?.status==='error'?queue.error:queue?.status==='duplicate'?queue.error||'同じPDFが登録済み、または一覧にあります。':'';
  const notice=$<HTMLElement>('yea-review-notice');notice.hidden=!message;notice.textContent=message;
  notice.classList.toggle('read-result--warning',Boolean(message));notice.classList.toggle('read-result--error',queue?.status==='error');
  $<HTMLButtonElement>('yea-discard-edit').hidden=!record||!saved||!isChanged(record,saved);
@@ -541,15 +607,16 @@ function updateDrafts(preserveReview=false){
   const detail=el('span','file-caption',formatBytes(item.file.size));
   const failed=item.status==='error'||item.status==='duplicate';
   const valid=item.status==='ready'&&!validateQueueItem(item);
-  const label=item.status==='reading'?'解析中':failed?'読取不可':valid?'保存待ち':'要修正';
-  const status=el('span',`file-status file-status--${failed?'error':item.status==='reading'?'pending':valid?'ready':'warning'}`,label);
+  const label=item.status==='reading'?'解析中':item.status==='duplicate'?'重複・除外':item.status==='error'?'読取不可':valid?'保存待ち':'要修正';
+  const status=el('span',`file-status file-status--${item.status==='duplicate'?'warning':failed?'error':item.status==='reading'?'pending':valid?'ready':'warning'}`,label);
+  if(item.status==='duplicate')detail.textContent=`${formatBytes(item.file.size)} · ${item.error||'同一PDF'}`;
   info.append(name,detail,status);choose.append(icon,info);
   if(chosen){const current=el('span','file-list__current','表示中');choose.append(current);}
   choose.addEventListener('click',()=>{activeDraft=item.id;activeSavedId=null;updateDrafts();});
   const remove=el('button','file-list__remove');remove.type='button';
   remove.title='一覧から削除';remove.setAttribute('aria-label',`${item.file.name} を一覧から削除`);
   remove.disabled=busy;remove.append(uploadIcon('close'));
-  remove.addEventListener('click',()=>{if(busy)return;fileQueue=fileQueue.filter(x=>x!==item);updateDrafts();});
+  remove.addEventListener('click',()=>{if(busy)return;fileQueue=fileQueue.filter(x=>x!==item);promoteRemainingDuplicate(item);});
   li.append(choose,remove);orderedItems.push({month:item.draft?.targetMonth??'',date:item.draft?.paymentDate??'',node:li});
  }
  // List rows match the standard PDF importer. Sorting is chronological, not grouping:
@@ -571,6 +638,7 @@ async function saveAllDocuments(){
  const id=selected,year=activeYear;
  const updates=data.documents.filter(r=>{const e=savedEdits.get(r.id);return Boolean(e&&isChanged(r,e));});
  const additions=fileQueue.filter(x=>x.status==='ready'&&x.draft);
+ const excluded=fileQueue.filter(x=>x.status==='duplicate').map(x=>({name:x.file.name,reason:x.error||'同一PDFのため除外'}));
  if(!updates.length&&!additions.length)return;
  for(const record of updates){const edit=savedEdits.get(record.id)!;
   if(validateSavedEdit(record,edit)){activeSavedId=record.id;activeDraft=null;updateDrafts();say('変更する明細の入力内容を確認してください。',true);return;}
@@ -581,6 +649,7 @@ async function saveAllDocuments(){
  const amountWarnings=[...updates.map(r=>savedEdits.get(r.id)!.draft),...additions.map(i=>i.draft!)].flatMap(documentAmountWarnings);
  const acknowledged=amountWarnings.length>0;
  if(acknowledged&&!window.confirm(`支給額の検算に不一致があります。\n${[...new Set(amountWarnings)].join('\n')}\nPDF原本を確認し、この金額で保存しますか？`))return;
+ saveResult.hidden=true;saveResult.replaceChildren();
  busy=true;savingDocuments=true;uploadAccordion.open=false;showBusy('明細を保存中');updateSaveState();
  try{
   const result=await repo.saveDocumentsBatch(id,year,
@@ -595,12 +664,15 @@ async function saveAllDocuments(){
   savedEdits.clear();fileQueue=[];activeDraft=null;activeSavedId=null;
   uiPdf.value='';
   renderYear();
+  showSkippedResult(additions.length,updates.length,excluded);
   if(forecastSnapshot)restoreForecastInput(forecastSnapshot);
   if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
-  if(result.data.documents.length)uploadAccordion.open=false;
-  appStatus.success('明細を保存しました');
+  if(result.data.documents.length)uploadAccordion.open=excluded.length>0;
+  appStatus.success(excluded.length?`明細を保存しました。重複${excluded.length}件は除外しました。`:'明細を保存しました');
+  resetSaveRecoveryStateAfterSuccess();
  }catch(error){
-  uploadAccordion.open=true;
+  uploadAccordion.open=true;saveRecoveryRequired=true;saveRecoveryChecked=false;saveRecoverySafe=false;
+  saveRecovery.hidden=false;saveReload.disabled=true;saveRecoveryStatus.textContent='保存状態が不明です。再保存する前にOneDriveの状態を確認してください。';
   say(`保存できませんでした：${error instanceof Error?error.message:'通信エラー'}`,true);
  }finally{
   busy=false;savingDocuments=false;updateDrafts();updateForecastSaveState();updateBonusSaveState();
@@ -613,7 +685,7 @@ function bind(){
  $<HTMLButtonElement>('yea-back-directory').addEventListener('click',()=>{if(busy||!checkDetailExit())return;resetSelection();say('従業員を選択してください。');});
  $<HTMLButtonElement>('yea-open-manage').addEventListener('click',()=>{if(!selected||busy)return;$<HTMLInputElement>('yea-rename-name').value=displayPerson(person());$<HTMLDialogElement>('yea-manage-dialog').showModal();});
  $<HTMLButtonElement>('yea-close-manage').addEventListener('click',()=>{$<HTMLDialogElement>('yea-manage-dialog').close();});
- yearSelect.addEventListener('change',()=>{if(busy||!checkDetailExit()){yearSelect.value=String(activeYear);return;}if(!selected)return;const y=Number(yearSelect.value);if(!validYear(y))return;activeYear=y;clearMemo();data=null;clearDrafts();resetForecastForm();resetBonusForm();void action('暦年データの読み込み',loadYear,false);});
+ yearSelect.addEventListener('change',()=>{if(busy||!checkDetailExit()){yearSelect.value=String(activeYear);return;}if(!selected)return;const y=Number(yearSelect.value);if(!validYear(y))return;resetSaveRecovery();activeYear=y;clearMemo();data=null;clearDrafts();resetForecastForm();resetBonusForm();void action('暦年データの読み込み',loadYear,false);});
  $<HTMLFormElement>('yea-person-create').addEventListener('submit',e=>{e.preventDefault();const name=$<HTMLInputElement>('yea-new-name').value;void action('従業員の登録',async()=>{const id=await repo.createPerson(name,'');await loadPeople();$<HTMLInputElement>('yea-new-name').value='';await selectPerson(id);});});
  $<HTMLFormElement>('yea-rename').addEventListener('submit',e=>{e.preventDefault();if(!selected)return;const id=selected,name=$<HTMLInputElement>('yea-rename-name').value;void action('従業員名の変更',async()=>{await repo.renamePerson(id,name,'');await refreshPeopleKeepSelection();$<HTMLDialogElement>('yea-manage-dialog').close();});});
  $<HTMLButtonElement>('yea-delete-person').addEventListener('click',()=>{
@@ -649,6 +721,7 @@ function bind(){
  const queuePdfFiles=(files:File[])=>{
   if(busy||!selected||!data){say('従業員を選択してください。',true);return;}
   if(!files.length)return;
+  saveResult.hidden=true;saveResult.replaceChildren();
   if(files.length+fileQueue.length>30){say('一度に選択できるPDFは最大30件です。',true);return;}
   const id=selected,year=activeYear;
   const items:QueueItem[]=files.map(file=>({id:++draftSerial,file,draft:null,personId:id,year,hash:'',status:'reading',error:'',fieldErrors:new Set<string>()}));
@@ -660,8 +733,10 @@ function bind(){
     try{
      const bytes=await item.file.arrayBuffer();
      item.hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join('');
-     if(data?.documents.some(r=>r.fileHash===item.hash)||fileQueue.some(x=>x!==item&&x.id<item.id&&x.hash===item.hash)){
-      item.status='duplicate';continue;
+     const saved=data?.documents.some(r=>r.fileHash===item.hash);
+     const earlier=fileQueue.some(x=>x!==item&&x.id<item.id&&x.hash===item.hash);
+     if(saved||earlier){
+      item.status='duplicate';item.error=saved?'OneDriveに同じPDF原本が保存済みです。':'今回選択したPDFと内容が重複しています。';continue;
      }
      item.draft=await parseAssistedPdf(item.file);item.status='ready';
     }catch(error){item.status='error';item.error=error instanceof Error?error.message:'PDFの解析に失敗しました。';}
@@ -725,6 +800,38 @@ function bind(){
   }
   updateDrafts(true);
  });
+ saveRecheck.addEventListener('click',()=>{void(async()=>{
+  if(busy||!selected||!saveRecoveryRequired)return;
+  busy=true;updateSaveState();saveRecoveryStatus.textContent='OneDriveの保存状態を確認しています…';
+  try{
+   const id=selected,year=activeYear;
+   const [latest,integrity]=await Promise.all([repo.year(id,year),repo.inspectUnreferencedOriginals(id)]);
+   if(selected!==id||activeYear!==year)throw new Error('確認中に従業員・年が変わりました。');
+   saveRecoveryChecked=true;saveRecoverySafe=integrity.unreferenced===0&&integrity.missing===0;
+   saveRecoveryStatus.textContent=saveRecoverySafe?
+    `OneDriveの保存済み明細 ${latest.documents.length}件を確認しました。保存前に「保存済みデータを読み直す」を押してください。`:
+    `参照されていないPDF原本 ${integrity.unreferenced}件・参照先が欠落したPDF ${integrity.missing}件を検出しました。自動削除・再保存は行いません。OneDriveの暗号化ファイルを保持し、保存状態を調査してください。`;
+  }catch(error){saveRecoveryChecked=false;saveRecoverySafe=false;
+   saveRecoveryStatus.textContent=`OneDriveの確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}。再保存しないでください。`;
+  }finally{busy=false;saveReload.disabled=!saveRecoveryChecked||!saveRecoverySafe;updateSaveState();}
+ })()});
+ saveReload.addEventListener('click',()=>{void(async()=>{
+  if(busy||!saveRecoveryChecked||!saveRecoverySafe||!selected)return;
+  if(!window.confirm('新規PDFの取り込み待ち・明細の未保存編集を破棄し、OneDriveの最新の明細を読み直しますか？\nPDFファイルは必要に応じて再度選択してください。'))return;
+  busy=true;showBusy('OneDriveの明細を再取得中');
+  try{
+   // Reinspect immediately before discarding local drafts. No cloud write is performed.
+   const id=selected,year=activeYear;
+   const integrity=await repo.inspectUnreferencedOriginals(id);
+   if(integrity.unreferenced||integrity.missing)throw new Error('原本の参照状態が変わりました。再確認してください。');
+   if(id!==selected||year!==activeYear)throw new Error('従業員または年が切り替わりました。');
+   clearDrafts();resetSaveRecovery();
+   await loadYear();uploadAccordion.open=true;
+   say('OneDriveの最新の明細を読み直しました。変更内容を確認してから保存してください。');
+  }catch(error){saveRecoveryRequired=true;saveRecoveryChecked=false;saveRecoverySafe=false;
+   saveRecovery.hidden=false;saveRecoveryStatus.textContent=`再読み込みできませんでした：${error instanceof Error?error.message:'通信エラー'}。OneDriveの状態を再確認してください。`;
+  }finally{busy=false;updateDrafts();updateForecastSaveState();}
+ })()});
  saveAll.addEventListener('click',()=>{void saveAllDocuments();});
  bonusMonthInput.addEventListener('input',()=>{
   const month=bonusMonthInput.value;

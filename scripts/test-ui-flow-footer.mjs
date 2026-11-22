@@ -39,7 +39,7 @@ console.log('PASS: footer has stable description and action groups on desktop an
 const finance=settings.match(/<section class="settings-details-column settings-finance-income"[^>]*>([\s\S]*?)<\/section>/);
 assert.ok(finance,'Finance settings card missing');
 assert.match(finance[1],/<div class="settings-action-row">\s*<button type="button" id="payroll-income-publish"/);
-assert.match(settingsCss,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3/);
+assert.match(settingsCss,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2/);
 assert.match(settingsCss,/\.settings-page \.settings-details-column \.settings-action-row,/);
 assert.match(settingsCss,/\.settings-page \.settings-action-row \{[^}]*justify-content: flex-end/);
 console.log('PASS: Finance action remains in shared settings panel below its description');

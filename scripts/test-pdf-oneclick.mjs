@@ -13,7 +13,7 @@ const store=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.ur
 const pdf=new Blob(['%PDF-1.7\nsynthetic-only'],{type:'application/pdf'});
 const link={href:'https://payroll.example/view/index.html?id=42'};
 let fetches=0;
-preparePdfHandoff(link,42,async()=>{fetches++;return {fileName:'test-only.pdf',pdf};});
+preparePdfHandoff(link,42,async()=>{fetches++;return {fileName:'test-only.pdf',pdf};},()=>true);
 const ticket=new URL(link.href).hash.slice('#handoff='.length);
 assert.match(ticket,/^[0-9a-f-]{36}$/i);
 assert.equal(new URL(link.href).search,'?id=42');
@@ -26,6 +26,7 @@ assert.equal(link.href,'https://payroll.example/view/index.html?id=42','stable l
 assert.equal(receivePdfHandoff(42,'not-a-ticket'),null,'malformed ticket must be rejected');
 assert.match(main,/link\.rel = 'noopener noreferrer'/,'reverse-tabnabbing protection retained');
 assert.match(main,/preparePdfHandoff\(link,\s*record\.id/,'handoff prepared only on source link activation');
+assert.match(main,/capturePdfHandoffAuthorization\(\)/,'each click binds a fresh vault/lock-generation guard');
 assert.match(view,/receivePdfHandoff\(id,ticket/,'viewer must prefer same-origin Blob transfer');
 assert.match(view,/await getRecord\(id\)/,'direct URL still supports normal auth fallback');
 assert.match(store,/vault\.records\(\)\.find\(r=>r\.id===id\)/,'existing authenticated annual summaries reused');

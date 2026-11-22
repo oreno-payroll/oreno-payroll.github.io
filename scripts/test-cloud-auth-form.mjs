@@ -18,7 +18,8 @@ assert.doesNotMatch(login,/Microsoft接続設定を変更|初回のみ|パスフ
 assert.match(unlock,/autocomplete="on"/);
 assert.match(unlock,/id="payroll-passphrase" type="password" name="password" autocomplete="current-password"/);
 assert.match(unlock,/id="payroll-unlock" type="submit"[^>]*>保管庫を開く<\/button>/);
-assert.match(unlock,/payroll-cloud-remember/,'opt-in temporary key retention remains');
+assert.match(unlock,/id="payroll-remember-browser"/,'opt-in non-extractable browser key remains');
+assert.doesNotMatch(unlock,/payroll-remember"|value="tab"/,'legacy 2h choice removed');
 assert.match(unlock,/id="payroll-unlock-error"[^>]*hidden/,'error is hidden above unlock button');
 assert.doesNotMatch(markup,/OneDriveの明細を復号します|初回のみClient ID|Microsoft接続設定を変更|パスフレーズはこの端末へ保存しません|Microsoftログイン成功|payroll-cloud-status|payroll-cloud-account|<details/);
 assert.match(auth,/ui\.loginForm\.addEventListener\('submit',event=>\{event\.preventDefault\(\)/);

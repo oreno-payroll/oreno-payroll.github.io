@@ -19,8 +19,8 @@ assert.equal(model.calculateYear({...annual,estimates:[...estimates,{month:'2026
 const html=read('public/year-end-assist/index.html'),ui=read('src/year-end-assist.ts'),css=read('public/styles/year-end-assist.css');
 for(const id of ['yea-total-missing','yea-total-missing-note'])assert.match(html,new RegExp(`id="${id}"[^>]*hidden`));
 assert.match(ui,/totals\.unknownMonths\.length===0/);
-assert.match(ui,/未登録・見込みなし/);
-assert.match(ui,/未入力月の金額は含まれていません/);
+assert.match(ui,/未取得の月あり/);
+assert.match(ui,/未取得月の金額は年間課税支給額に含まれていません/);
 assert.match(ui,/\$\('yea-total-missing'\)\.hidden=true/,'reset stale warning while loading a different year');
 assert.match(css,/\.yea-total-missing/);
 console.log('PASS: missing months are shown alongside annual total without changing the calculation, and reset on year loading');

@@ -28,7 +28,7 @@ const remove=ui.slice(ui.indexOf("$<HTMLButtonElement>('yea-delete-person').addE
 assert.match(remove,/if\(dialog\.open\)dialog\.close\(\)/);
 assert.ok(remove.indexOf('dialog.close()')<remove.indexOf('await repo.deletePerson(id)'));
 assert.match(css,/\.yea-manage-dialog\{width:min\(390px/);
-assert.match(repo,/for\(let i=0;i<pending\.length;i\+=2\)/);
+assert.match(repo,/for\(let i=0;i<pending\.length;i\+=3\)/);
 assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile\)/);
 // Exercise exact adapter with synthetic side-bonus and guard for non-taxable rows.
 let nonTaxable=undefined,transportation=undefined,gross='120000';

@@ -15,7 +15,7 @@ assert.match(html,/href="\.\.\/styles\/upload\.css"/,'normal-mode CSS imported')
 for(const id of ['yea-upload-accordion','yea-pdf-dropzone','yea-file-count','yea-drafts','yea-review-content','yea-review-form','yea-save-all','yea-clear-all'])
  assert.ok(html.includes(`id="${id}"`),`UI requires ${id}`);
 assert.match(html,/class="yea-upload-workspace"/);
-assert.match(html,/<details class="card yea-upload-panel" id="yea-upload-accordion" open>/);
+assert.match(html,/<details class="card yea-upload-panel yea-accordion" id="yea-upload-accordion" open>/);
 assert.doesNotMatch(html,/id="yea-upload-accordion"[\s\S]*<details class="yea-import-toggle"/);
 assert.ok(html.indexOf('id="yea-drafts"')<html.indexOf('id="yea-review-content"'),'left list precedes right review');
 assert.match(css,/\.yea-upload-workspace\{display:grid;grid-template-columns/);

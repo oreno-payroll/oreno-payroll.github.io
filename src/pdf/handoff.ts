@@ -16,8 +16,8 @@ const TICKET=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const MAX_BYTES=50*1024*1024;
 
 /** Called synchronously from a real anchor click/auxclick, before native navigation. */
-export function preparePdfHandoff(link:HTMLAnchorElement,id:number,load:()=>Promise<HandoffPdf>):void {
- if(typeof BroadcastChannel==='undefined'||!globalThis.crypto?.randomUUID)return;
+export function preparePdfHandoff(link:HTMLAnchorElement,id:number,load:()=>Promise<HandoffPdf>,mayTransfer:()=>boolean):void {
+ if(!mayTransfer()||typeof BroadcastChannel==='undefined'||!globalThis.crypto?.randomUUID)return;
  const ticket=crypto.randomUUID();
  let channel:BroadcastChannel;
  try {channel=new BroadcastChannel(PREFIX+ticket);}catch{return;}
@@ -36,12 +36,19 @@ export function preparePdfHandoff(link:HTMLAnchorElement,id:number,load:()=>Prom
   const message=event.data as Partial<HandoffMessage>;
   if(message?.action!=='ready'||message.id!==id||message.ticket!==ticket||started)return;
   started=true;clearTimeout(timer);
+  if(!mayTransfer()){
+   channel.postMessage({action:'error',ticket,id,message:'保管庫がロックまたは切り替えられました。PDFを開き直してください。'} satisfies HandoffMessage);
+   close();return;
+  }
   channel.postMessage({action:'loading',ticket,id} satisfies HandoffMessage);
   void (async()=>{
    try {
     const payload=await load();
     if(!(payload.pdf instanceof Blob)||payload.pdf.size<1||payload.pdf.size>MAX_BYTES||
        !payload.fileName||payload.fileName.length>500)throw new Error('PDF原本の形式が正しくありません。');
+    // A different tab may have locked or switched accounts during load().
+    // Never transfer plaintext even when the original passed integrity checks.
+    if(!mayTransfer())throw new Error('保管庫がロックまたは切り替えられました。PDFを開き直してください。');
     channel.postMessage({action:'pdf',ticket,id,...payload} satisfies HandoffMessage);
    }catch(error){
     const message=error instanceof Error?error.message:'PDF原本を取得できませんでした。';

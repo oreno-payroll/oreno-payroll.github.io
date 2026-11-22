@@ -20,6 +20,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@azure/msal-browser": "5.30.0",
     "pdfjs-dist": "^6.5.438"
   },
   "private": true

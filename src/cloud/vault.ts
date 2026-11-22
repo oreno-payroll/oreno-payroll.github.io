@@ -17,7 +17,15 @@ interface Index {format:'payroll-index-v1'; years:string[]; incomeYears:string[]
 type IncomeRecord = PublicIncomeRecord;
 interface IncomeDocument {format:'payroll-income-v1';year:string;records:IncomeRecord[]}
 export interface OrphanAnnualYear {year:string;etag:string;records:number}
-interface OriginalInventoryEntry {month:string;uuid:string;path:string[];name:string;etag:string;size:number}
+interface OriginalInventoryEntry {id:string;month:string;uuid:string;path:string[];name:string;etag:string;size:number}
+export interface DetachedOriginal {
+  id:string;month:string;uuid:string;etag:string;size:number;
+}
+export interface DetachedOriginalReport {
+  generation:string;indexEtag:string;
+  years:Array<{year:string;etag:string}>;
+  originals:DetachedOriginal[];
+}
 const emptyDoc=():AnnualDocument=>({format:'payroll-annual-v1',records:[],deleted:[]});
 const emptyIndex=():Index=>({format:'payroll-index-v1',years:[],incomeYears:[]});
 const copy=<T>(v:T):T=>structuredClone(v);
@@ -97,6 +105,10 @@ export class InterruptedRotationError extends Error {
  constructor(){super('別のタブで保管庫のパスフレーズ変更が進行中か、中断されています。変更中のタブを確認してください。');}
 }
 
+export class RememberedKeyMismatchError extends Error {
+ constructor(message='記憶した暗号鍵が現在の保管庫と一致しません。'){super(message);this.name='RememberedKeyMismatchError';}
+}
+
 export class PayrollVault {
  private key:CryptoKey|null=null;
  private salt='';
@@ -141,15 +153,8 @@ export class PayrollVault {
  isUnlocked():boolean{return this.key!==null;}
  lock():void{this.key=null;this.salt='';this.index=emptyIndex();this.shards.clear();this.firstDashboardIndexUntil=0;this.rotationId=null;this.reusedSnapshot=false;this.snapshotDeadline=0;clearNavigationSnapshot();}
  private unlocked():CryptoKey{if(!this.key)throw new Error('OneDriveの給与保管庫を解除してください。');return this.key;}
- async unlock(passphrase:string, createIfMissing=false, onVerifiedMaterial?: (raw:Uint8Array,salt:string)=>void):Promise<boolean> {
-  let transient:Uint8Array|null=null;
-  const derive=async (salt:string):Promise<CryptoKey> => deriveKey(passphrase,salt,onVerifiedMaterial ? bytes=>{transient=new Uint8Array(bytes);} : undefined);
-  const accept=(salt:string):void=>{
-   const raw=transient;transient=null;
-   if(!raw)return;
-   try {onVerifiedMaterial?.(raw,salt);} finally {raw.fill(0);}
-  };
-  try {
+ async unlock(passphrase:string, createIfMissing=false):Promise<boolean> {
+  const derive=(salt:string):Promise<CryptoKey>=>deriveKey(passphrase,salt);
   let file:RemoteFile|null;
   try {file=await this.graph.read(['payroll'],'index.enc',MAX_INDEX);}
   catch(error){throw new Error('暗号索引 index.enc の初回取得に失敗しました（Graph API/配信応答）。OneDriveは変更していません。',{cause:error});}
@@ -161,7 +166,7 @@ export class PayrollVault {
    const verify=await this.graph.read(['payroll'],'index.enc',MAX_INDEX);
    if(!verify)throw new Error('暗号化索引を読み戻せません。');
    const decoded=validateIndex(await decryptJson<Index>('index',verify.text,key));
-   this.key=key;this.salt=salt;this.index=decoded;this.firstDashboardIndexUntil=Date.now()+15_000;accept(salt);return true;
+   this.key=key;this.salt=salt;this.index=decoded;this.firstDashboardIndexUntil=Date.now()+15_000;return true;
   }
   if (file.size === 0 && file.text.length === 0) throw new EmptyPayrollIndexError();
   let salt: string;
@@ -173,10 +178,9 @@ export class PayrollVault {
   const key=await derive(salt);
   const index=validateIndex(await decryptJson<Index>('index',file.text,key));
   this.ensureRotationAllowed(index);
-  this.key=key;this.salt=salt;this.index=index;this.firstDashboardIndexUntil=Date.now()+15_000;accept(salt);
+  this.key=key;this.salt=salt;this.index=index;this.firstDashboardIndexUntil=Date.now()+15_000;
   // 起動時は索引の検証だけにする。全年度の取得と収入ファイル再保存は画面表示/更新時のみ。
   return true;
-  } finally {(transient as Uint8Array|null)?.fill(0);}
  }
  /** ページ移動後、SharedWorkerのメモリにある非抽出CryptoKeyで再開する。
   * 認証済みOneDriveの現在の索引を必ず復号して、アカウント/鍵の取り違えを拒否する。 */
@@ -184,8 +188,19 @@ export class PayrollVault {
   let file:RemoteFile|null;
   try {file=await this.graph.read(['payroll'],'index.enc',MAX_INDEX);}
   catch(error){throw new Error('暗号索引 index.enc の取得に失敗しました（Graph API/配信応答）。OneDriveは変更していません。',{cause:error});}
-  if(!file||envelopeSalt(file.text)!==salt)throw new Error('クラウド索引の暗号鍵が以前と一致しません。');
-  const index=validateIndex(await decryptJson<Index>('index',file.text,key));
+  if(!file)throw new Error('Payrollの暗号索引が見つかりません。OneDriveは変更していません。');
+  // A salt change can also be caused by a damaged remote index. It is not proof
+  // that the saved browser key is stale; never revoke it from this read path.
+  if(envelopeSalt(file.text)!==salt)throw new RememberedKeyMismatchError(
+   'OneDrive索引のソルトと記憶鍵が一致しません。保管庫の鍵変更・接続先・索引破損を確認してください。記憶鍵は削除していません。');
+  let decoded:Index;
+  try{decoded=await decryptJson<Index>('index',file.text,key);}
+  catch(error){
+   // AES-GCM authentication failure cannot distinguish a wrong key from
+   // corrupt ciphertext. Keep the locally remembered key for recovery.
+   throw new Error('OneDriveの暗号索引を検証できません。鍵の不一致か索引破損の可能性があります。記憶鍵は削除していません。',{cause:error});
+  }
+  const index=validateIndex(decoded);
   this.ensureRotationAllowed(index);
   this.key=key;this.salt=salt;this.index=index;this.firstDashboardIndexUntil=Date.now()+15_000;
  }
@@ -193,6 +208,8 @@ export class PayrollVault {
  sessionKey():{key:CryptoKey;salt:string} {
   return {key:this.unlocked(),salt:this.salt};
  }
+ /** The generation is metadata of the freshly verified remote index. */
+ rememberedKeyGeneration():string|null {this.unlocked();return this.index.generation??null;}
  async yearEndAccess():Promise<{path:string[];key:CryptoKey;salt:string;graph:PayrollGraph}> {
   const {index}=await this.readIndex();
   if(index.rotation)throw new Error('暗号鍵の変更中は年末調整の操作を中断してください。');
@@ -285,13 +302,84 @@ export class PayrollVault {
     for(const file of files){
      if(file.folder||!/^[0-9a-f-]{36}\.enc$/i.test(file.name))throw new Error('PDF原本のファイル名または構造が想定外です。');
      if(!file.etag||!file.id||file.size<1)throw new Error('PDF原本のファイル情報が不正です。');
-     result.push({month:`${year.name}-${month.name}`,uuid:file.name.slice(0,-4),path,name:file.name,etag:file.etag,size:file.size});
+     result.push({id:file.id,month:`${year.name}-${month.name}`,uuid:file.name.slice(0,-4),path,name:file.name,etag:file.etag,size:file.size});
      if(result.length>10000)throw new Error('PDF原本の件数が多すぎるため、自動で鍵変更・整理できません。');
     }
    }
   }
   return result.sort((a,b)=>(a.month+'/'+a.uuid).localeCompare(b.month+'/'+b.uuid));
  }
+  /**
+   * 参照されていない本人PDF原本の読み取り専用監査。削除済みとアップロード中断の原本は
+   * 構造上区別できないため、どちらも「未参照」と表記する。
+   * 保管庫の年別明細が索引にない場合、安全な判定ができないため中断する。
+   */
+  async inspectDetachedOriginals():Promise<DetachedOriginalReport> {
+    this.unlocked();
+    const {index,file:indexFile}=await this.readIndex();
+    const entries=await this.graph.listFolder(this.pathFor(index,'statements'))??[];
+    const expectedYears=new Set(index.years);
+    for(const entry of entries){
+      if(entry.folder||!/^(19|20|21)\d{2}\.enc$/.test(entry.name)||!expectedYears.has(entry.name.slice(0,-4)))
+        throw new Error('索引に登録されていない年度または不明なファイルがあります。年度データの復旧を先に行ってください。');
+    }
+    const yearEtags:Array<{year:string;etag:string}>=[];
+    const used=new Set<string>();
+    for(const year of index.years){
+      const {doc,file}=await this.readYear(year,index);
+      if(!file)throw new Error(`${year}年度の明細がありません。原本整理を中断しました。`);
+      yearEtags.push({year,etag:file.etag});
+      for(const record of doc.records){
+        if(shardYear(record)!==year)throw new Error('年別明細の所属年度が不正です。原本整理を中断しました。');
+        used.add(`${record.originalMonth}/${record.originalId.toLowerCase()}`);
+      }
+    }
+    const inventory=await this.listOriginalFiles(index);
+    const available=new Set(inventory.map(x=>`${x.month}/${x.uuid.toLowerCase()}`));
+    for(const ref of used)if(!available.has(ref))
+      throw new Error('有効な給与明細が参照する原本が見つかりません。整理を中断しました。');
+    const latest=await this.readIndex();
+    if(latest.file.etag!==indexFile.etag)
+      throw new Error('監査中に索引が変更されました。再確認してください。');
+    return {
+      generation:index.generation??'',indexEtag:indexFile.etag,years:yearEtags,
+      originals:inventory.filter(x=>!used.has(`${x.month}/${x.uuid.toLowerCase()}`))
+       .map(({id,month,uuid,etag,size})=>({id,month,uuid,etag,size})),
+    };
+  }
+  private async verifiedDetachedOriginal(report:DetachedOriginalReport,item:DetachedOriginal):Promise<{data:Blob;path:string[];target:CloudFolderItem}> {
+    const fresh=await this.inspectDetachedOriginals();
+    if(!same(fresh,report))throw new Error('原本一覧か年別明細が更新されました。再検査してください。');
+    if(!fresh.originals.some(x=>same(x,item)))throw new Error('選択したPDF原本が未参照であると確認できません。');
+    const [year,month]=item.month.split('-');
+    const path=this.storagePath('originals',year,month),name=`${item.uuid}.enc`;
+    const file=await this.graph.read(path,name,MAX_ORIGINAL);
+    if(!file||file.id!==item.id||file.etag!==item.etag||file.size!==item.size)
+      throw new Error('原本が更新されました。再検査してください。');
+    const bytes=await decryptBytes('original',file.text,this.unlocked());
+    if(bytes.length<5||new TextDecoder().decode(bytes.slice(0,1024)).indexOf('%PDF-')<0)
+      throw new Error('PDFとして確認できない原本です。削除せず、元データを調査してください。');
+    return {data:new Blob([new Uint8Array(bytes)],{type:'application/pdf'}),path,
+      target:{id:item.id,name,etag:item.etag,size:item.size,folder:false}};
+  }
+  /** PDF本体だけを回収する。削除前の解析値・手動編集値は復元しない。 */
+  async retrieveDetachedOriginal(report:DetachedOriginalReport,item:DetachedOriginal):Promise<Blob> {
+    return (await this.verifiedDetachedOriginal(report,item)).data;
+  }
+  /** 個別確認後のごみ箱移動。データが変わった場合は必ず再監査する。 */
+  async trashDetachedOriginal(report:DetachedOriginalReport,item:DetachedOriginal):Promise<void> {
+    const checked=await this.verifiedDetachedOriginal(report,item);
+    const latest=await this.readIndex();
+    if(latest.file.etag!==report.indexEtag||(latest.index.generation??'')!==report.generation)
+      throw new Error('保管庫が更新されました。原本の整理を中断します。');
+    for(const year of report.years){
+      const meta=await this.graph.metadata(this.storagePath('statements'),`${year.year}.enc`);
+      if(!meta||meta.etag!==year.etag)
+        throw new Error('別端末で給与明細が変更されました。原本の整理を中断します。');
+    }
+    await this.graph.trashPayrollOriginal(checked.path,checked.target);
+    clearNavigationSnapshot();
+  }
  /** Explicit, read-only discovery; never mutates or exposes data from unknown folders. */
  async inspectOrphanYears():Promise<OrphanAnnualYear[]> {
   this.unlocked();

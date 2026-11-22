@@ -70,6 +70,20 @@ for (const directory of ["cmaps", "standard_fonts", "wasm", "iccs"]) {
   );
 }
 
+// Build both the standalone MSAL Browser bundle and the v5 dedicated redirect bridge.
+// Both come from the exact npm dependency in package-lock.json; no unchecked JS is served.
+await fs.mkdir(path.join(distDir,'vendor','msal'),{recursive:true});
+await fs.mkdir(path.join(distDir,'auth'),{recursive:true});
+for (const [entry,output] of [
+  ['scripts/msal-entry.mjs','vendor/msal/msal-browser.bundle.js'],
+  ['scripts/msal-redirect-bridge.mjs','auth/redirect-bridge.js'],
+]) {
+  await esbuild.build({
+    entryPoints:[path.join(root,entry)],outfile:path.join(distDir,output),
+    bundle:true,format:'esm',platform:'browser',target:'es2022',minify:true,logLevel:'warning',
+  });
+}
+
 // 全ページ共通の実ビルド識別子。修正パッチの未反映を画面から判断できる。
 const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
 let gitHash = "local";

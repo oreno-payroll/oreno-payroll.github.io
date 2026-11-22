@@ -73,7 +73,7 @@ const ui=readFileSync(new URL('../src/backup.ts',import.meta.url),'utf8');
 const store=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
 assert.match(view,/id="legacy-cleanup-delete"[^>]*>旧DBを削除<\/button>/);
 assert.doesNotMatch(view,/id="legacy-cleanup-delete"[^>]*(?:hidden|disabled)/);
-assert.ok(view.indexOf('id="legacy-cleanup-delete"')<view.indexOf('id="migrate-legacy-cloud"'),'cleanup should be first');
+assert.ok(view.indexOf('id="legacy-cleanup-check"')<view.indexOf('id="migrate-legacy-cloud"') && view.indexOf('id="migrate-legacy-cloud"')<view.indexOf('id="legacy-cleanup-delete"'),'safe action order: inspect, migrate, then delete');
 assert.doesNotMatch(ui,/oldLocalCount/);
 assert.match(view,/id="backup-cloud-load"[^>]*hidden/);
 assert.match(ui,/if\(legacyExists\)/);

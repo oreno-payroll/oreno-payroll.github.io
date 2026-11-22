@@ -77,12 +77,13 @@
 .settings-page .vault-file-input { width: 100%; min-width: 0; min-height: 43px; margin: 0; padding: 7px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 9px; font-size: 12px; }
 .settings-page .vault-file-input::file-selector-button { border: 1px solid var(--color-border); border-radius: 7px; padding: 6px 9px; margin-right: 9px; background: var(--color-bg); color: var(--color-text); font-weight: 650; cursor: pointer; }
 .settings-page .backup-verify { align-self: flex-start; }
-.settings-page .backup-card__footer { display: grid; gap: 11px; margin-top: auto; padding-top: 14px; }
+.settings-page .backup-card__footer { display: grid; gap: 11px; margin-top: 0; padding-top: 8px; }
+.settings-page .backup-restore-actions { padding-top: 2px; }
 .settings-page .backup-card__footer > .btn { width: 100%; white-space: normal; }
-/* 従業員バックアップの保存操作は、入力欄の直後に自然な間隔で配置する。 */
-.settings-page .ye-backup-export { width: 100%; white-space: normal; }
-.settings-page .backup-footnote, .settings-page .settings-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--color-muted); }
-.settings-page .backup-restore-warning { margin: 0; font-size: 12px; font-weight: 700; color: var(--color-danger); line-height: 1.5; }
+/* 本人・従業員の保存カードは同じ「説明 → 入力 → 保存」構造にする。 */
+.settings-page .backup-save-button { width: 100%; white-space: normal; }
+.settings-page .backup-export-summary { padding-top: 5px; font-weight: 650; color: var(--color-text); }
+.settings-page .settings-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--color-muted); }
 .settings-page .vault-check { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 12px; font-weight: 500; line-height: 1.5; cursor: pointer; }
 .settings-page .vault-check input { flex: none; width: 16px; height: 16px; margin-top: 1px; }
 .settings-page .vault-status { margin: 10px 0 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -90,6 +91,8 @@
 .settings-page .settings-panel { margin-top: 0; }
 .settings-page .settings-auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; align-items: stretch; }
 .settings-page .settings-panel__head { display: flex; align-items: baseline; gap: 8px 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.settings-page .backup-cloud-settings { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+.settings-page .backup-cloud-settings .settings-panel__head { margin-bottom: 0; }
 .settings-page .settings-panel__head h3 { margin: 0; font-size: 15px; font-weight: 780; }
 .settings-page .settings-panel__head p { margin: 0; font-size: 12px; color: var(--color-muted); }
 .settings-page .backup-key-change__body { display: grid; gap: 13px; }
@@ -97,20 +100,6 @@
 .settings-page .settings-field { display: grid; align-content: start; gap: 8px; min-width: 0; }
 .settings-page .settings-action-row { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; }
 .settings-page .settings-action-row .btn { flex: none; }
-.settings-page .backup-legacy { padding-top: 18px; padding-bottom: 18px; }
-.settings-page .settings-legacy-caption { margin: 0; font-size: 12px; color: var(--color-muted); }
-/* 旧データ移行: 説明文は左、関連操作は隙間なく右にまとめる。 */
-.settings-page .backup-legacy .settings-inline-panel { gap: 16px; }
-.settings-page .backup-legacy .settings-legacy-caption { flex: 1 1 250px; min-width: 0; }
-.settings-page .settings-legacy-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-left: auto;
-}
-.settings-page .settings-legacy-actions > .btn { flex: none; }
 .settings-page .settings-inline-panel { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
 .settings-page .settings-inline-panel .settings-panel__head { margin: 0; }
 .settings-page .settings-connection-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 21px; }
@@ -151,18 +140,10 @@
 }
 
 
-/* 設定画面の任意整理操作。確認前の削除ボタンは表示しない。 */
-.settings-page .settings-cleanup { border-top: 1px solid var(--color-border); padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.settings-page .settings-cleanup strong { font-size: 12px; }
-.settings-page .settings-cleanup p { margin: 3px 0 0; font-size: 11px; color: var(--color-muted); line-height: 1.5; }
-.settings-page .settings-cleanup .btn { flex: none; }
-.settings-page #cloud-cleanup-delete { margin-top: 8px; }
-@media (max-width: 480px) { .settings-page .settings-cleanup .btn { width: 100%; } }
-
-/* 詳細設定: 既存の設定カードと同じ「見出し → 説明 → 操作」構成。 */
+/* Detailed settings: four independent functions in one responsive 2x2 card. */
 .settings-page .settings-details-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: stretch;
   overflow: hidden;
   box-shadow: none;
@@ -171,73 +152,66 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 13px;
+  gap: 12px;
   min-width: 0;
   padding: 22px 24px;
 }
-.settings-page .settings-details-column + .settings-details-column {
-  border-left: 1px solid var(--color-border);
-}
+.settings-page .settings-details-column:nth-child(even) { border-left: 1px solid var(--color-border); }
+.settings-page .settings-details-column:nth-child(n+3) { border-top: 1px solid var(--color-border); }
 .settings-page .settings-details-column h3 {
   margin: 0;
   font-size: 15px;
   font-weight: 780;
   line-height: 1.5;
 }
+.settings-page .settings-details-column h4 { margin: 0; font-size: 12px; font-weight: 750; }
 .settings-page .settings-details-column .settings-note,
 .settings-page .settings-details-column .settings-legacy-caption {
   margin: 0;
-  flex: none;
-  min-height: 5.4em;
   color: var(--color-muted);
   font-size: 12px;
-  line-height: 1.8;
+  line-height: 1.7;
 }
 .settings-page .settings-details-column .settings-action-row,
 .settings-page .settings-details-column .settings-legacy-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  justify-content: stretch;
+  display: flex;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   width: 100%;
   margin: 0;
 }
 .settings-page .settings-details-column .settings-action-row > .btn,
 .settings-page .settings-details-column .settings-legacy-actions > .btn {
-  width: 100%;
   min-width: 0;
   min-height: 40px;
-  padding: 9px 10px;
+  padding: 9px 12px;
   white-space: normal;
   text-align: center;
   line-height: 1.45;
 }
-/* Keep the legacy action DOM order stable for existing code/tests; destructive control displays last. */
-.settings-page .settings-details-column #legacy-cleanup-check { order: 1; }
-.settings-page .settings-details-column #migrate-legacy-cloud { order: 2; }
-.settings-page .settings-details-column #legacy-cleanup-delete { order: 3; }
-.settings-page .settings-details-column .settings-inline-panel {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  flex-wrap: nowrap;
-  gap: 13px;
+.settings-page .settings-details-column .settings-legacy-subsection {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  min-width: 0;
 }
-.settings-page .settings-details-column .vault-status {
-  margin: 0;
-  overflow-wrap: anywhere;
+.settings-page .settings-details-column .settings-legacy-subsection + .settings-legacy-subsection {
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
 }
+.settings-page .settings-details-column .vault-status { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 850px) {
   .settings-page .settings-details-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-page .settings-details-column { padding: 20px; }
-  .settings-page .settings-details-column + .settings-details-column {
-    border-left: 0;
-    border-top: 1px solid var(--color-border);
-  }
-  .settings-page .settings-details-column .settings-note,
-  .settings-page .settings-details-column .settings-legacy-caption { min-height: 0; }
+  .settings-page .settings-details-column:nth-child(even) { border-left: 0; }
+  .settings-page .settings-details-column + .settings-details-column { border-top: 1px solid var(--color-border); }
+}
+@media (max-width: 480px) {
+  .settings-page .settings-details-column .settings-action-row > .btn,
+  .settings-page .settings-details-column .settings-legacy-actions > .btn,
+  .settings-page .settings-details-column .settings-action-row > a.btn { width: 100%; }
 }
 
 .ye-restore-diagnosis { white-space: pre-line; overflow-wrap: anywhere; }
@@ -252,3 +226,26 @@
 .ye-restore-people li span[data-state="blocked"]{color:var(--color-danger)}
 .ye-restore-people li span[data-name-collision="true"]{color:var(--state-warning-text);font-weight:750}
 .ye-restore-people .ye-restore-warning{color:var(--color-danger)}
+
+/* Scoped, local browser-key management in the existing Authentication panel. */
+.settings-page .settings-remember-browser{display:grid;gap:7px;padding:13px 0;border-top:1px solid var(--color-border)}
+.settings-page .settings-remember-browser>strong{font-size:15px;font-weight:780;line-height:1.5}
+.settings-page #remember-browser-state{font-size:12px;font-weight:400;color:var(--color-muted);line-height:1.6}
+.settings-page .settings-remember-browser>p{margin:0}
+.settings-page .settings-remember-browser__note{color:var(--color-muted);font-size:12px;line-height:1.6}
+.settings-page .settings-remember-browser__actions{display:flex;gap:9px;flex-wrap:wrap;justify-content:flex-start}
+
+/* Personal-only orphan PDF archive: bounded list, readable on small screens. */
+.settings-page .settings-detached-originals .settings-action-row a.btn{display:flex;align-items:center;justify-content:center;min-height:40px;text-decoration:none;text-align:center;font-size:12px}
+.settings-page .detached-original-list{list-style:none;padding:0;margin:0;display:grid;gap:8px;max-height:360px;overflow-y:auto}
+.settings-page .detached-original-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:10px;border:1px solid var(--color-border);border-radius:10px;font-size:12px;overflow-wrap:anywhere}
+.settings-page .detached-original-actions{display:flex;flex-wrap:wrap;gap:6px}
+.settings-page .detached-original-actions .btn{font-size:11px;min-height:36px;padding:7px 9px}
+.settings-page .detached-original-pager{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;font-size:12px}.settings-page .detached-original-pager .btn{font-size:11px;min-height:36px;padding:7px 9px}
+.settings-page .settings-details-column.settings-detached-originals{margin:0;min-width:0}
+.settings-page .settings-detached-originals h3{margin:0;font-size:15px;font-weight:780}
+.settings-page .settings-detached-originals .settings-note{min-height:0;font-size:12px;line-height:1.8}
+.settings-page .settings-detached-originals .settings-action-row{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-start}
+.settings-page .settings-detached-originals .settings-action-row .btn{width:auto;min-height:40px;padding:9px 12px}
+.settings-page .settings-detached-originals .vault-status{margin:0}
+@media(max-width:600px){.settings-page .settings-detached-originals{padding:20px}.settings-page .settings-detached-originals .settings-action-row{display:grid;grid-template-columns:1fr}.settings-page .settings-detached-originals .settings-action-row .btn{width:100%}}

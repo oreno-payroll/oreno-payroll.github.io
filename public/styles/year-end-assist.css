@@ -38,7 +38,7 @@
 .yea-stat--total{grid-column:1/-1;display:flex;flex-direction:column;align-items:stretch;gap:7px;border-color:#b2c7e9;background:#f7faff}
 .yea-stat--total>span{display:block}
 .yea-stat--total>strong{font-size:clamp(24px,3.6vw,36px)}
-.yea-stat--total .yea-total-missing{align-self:flex-start;margin:3px 0 0;padding:6px 10px;border:1px solid var(--state-warning-border);border-radius:7px;background:var(--state-warning-bg);color:var(--state-warning-text);font-size:12px;font-weight:750;line-height:1.6;overflow-wrap:anywhere}
+.yea-stat--total .yea-total-missing{align-self:flex-start;margin:2px 0 0;padding:0;border:0;background:none;color:var(--color-muted);font-size:12px;font-weight:400;line-height:1.6;overflow-wrap:anywhere}
 .yea-stat--total .yea-total-missing-note{margin:0;color:var(--color-muted);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 
 .yea-help{font-size:12px;line-height:1.65;color:var(--color-muted);margin:9px 0 10px}
@@ -84,15 +84,16 @@
 @media(max-width:400px){.yea-month-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.yea-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.yea-stat--total{grid-column:1/-1}.yea-context{gap:8px;flex-wrap:nowrap}.yea-context h2{flex:1;font-size:14px}.yea-context-tools{flex:none;margin-left:auto;gap:6px}.yea-context-tools .select{min-width:90px;width:90px;max-width:100px;font-size:12px;padding:8px 27px 8px 9px}.yea-context-tools .btn{min-height:36px;padding:8px 10px;white-space:nowrap;font-size:11px}}
 
 /* One accordion contains all editing controls; closed after saving. */
-.yea-upload-panel{padding:0!important;overflow:hidden;min-width:0}
+/* All three year-end accordions share one header, border, icon and type scale. */
+.yea-accordion{padding:0!important;overflow:hidden;min-width:0}
 .yea-upload-summary{display:flex;align-items:center;gap:11px;padding:16px 20px;cursor:pointer;list-style:none;user-select:none;min-height:54px}
 .yea-upload-summary::-webkit-details-marker{display:none}
 .yea-upload-summary::marker{content:''}
 .yea-upload-summary strong{font-size:14px;font-weight:800}
 .yea-upload-summary:focus-visible{outline:2px solid var(--color-primary);outline-offset:-3px}
-.yea-upload-panel[open]>.yea-upload-summary{border-bottom:1px solid var(--color-border)}
+.yea-accordion[open]>.yea-upload-summary{border-bottom:1px solid var(--color-border)}
 .yea-upload-chevron{display:block;flex:none;width:9px;height:9px;border-right:2px solid var(--color-muted);border-bottom:2px solid var(--color-muted);transform:rotate(-45deg);transition:transform .15s}
-:is(.yea-upload-panel,.yea-forecast-accordion)[open]>.yea-upload-summary .yea-upload-chevron{transform:rotate(45deg)}
+.yea-accordion[open]>.yea-upload-summary .yea-upload-chevron{transform:rotate(45deg)}
 .yea-workspace-summary-state{margin-left:auto;color:var(--color-muted);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
 .yea-upload-body{padding:16px;min-width:0}
 .yea-upload-workspace{display:grid;grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr);gap:18px;align-items:start}
@@ -172,9 +173,7 @@
 .yea-manage-danger{margin-top:15px;padding-top:14px}
 .yea-manage-danger .btn{min-height:36px;padding:8px 12px;font-size:12px}
 
-/* V6: one forecast accordion, using the same summary/chevron as PDF management. */
-.yea-forecast-accordion{padding:0!important;overflow:hidden;min-width:0}
-.yea-forecast-accordion[open]>.yea-upload-summary{border-bottom:1px solid var(--color-border)}
+/* Forecast-specific body, using the shared accordion header. */
 .yea-forecast-body{padding:18px 23px 22px;min-width:0}
 .yea-forecast-body .yea-forecast-work{margin-top:0}
 .yea-forecast-bonus{border-top:1px solid var(--color-border);padding-top:18px;display:grid;gap:11px}
@@ -196,3 +195,36 @@
 .yea-excluded-list li span{color:var(--color-muted)}
 .yea-save-recovery__actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 @media(max-width:640px){.yea-save-recovery__actions{display:grid;grid-template-columns:1fr}}
+
+/* 保存済みPDFの一括取得は、取り込み明細一覧の補助操作として配置。 */
+.yea-upload-left .file-panel > .panel-title-row{flex-wrap:wrap}
+.yea-file-tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:5px;margin-left:auto}
+.yea-file-tools .btn{font-size:11px;line-height:1.4;min-height:28px;padding:4px 7px;white-space:nowrap}
+/* Deletion drafts stay INSIDE the scrollable PDF list. No second card-height section. */
+.yea-upload-left .yea-file-pending{gap:8px;min-width:0;min-height:64px;padding:8px 9px;background:var(--color-surface,#fff)}
+.yea-upload-left .yea-file-pending:hover{background:var(--color-surface,#fff);border-color:transparent}
+.yea-file-pending .file-list__icon{flex:none;color:var(--color-muted);background:#f1f4f8}
+.yea-file-pending .file-name{color:var(--color-muted)}
+.yea-file-pending .file-list__text{min-width:0;flex:1}
+.yea-file-pending__state{color:var(--color-muted);font-weight:600}
+.yea-file-pending .yea-undo-delete{margin-left:auto;flex:none;white-space:nowrap;font-size:11px;min-height:28px;padding:4px 7px}
+.yea-pending-group{list-style:none;border-top:1px solid var(--color-border);min-width:0}
+.yea-pending-group__header{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px}
+.yea-pending-group__toggle{appearance:none;background:none;border:0;cursor:pointer;min-width:0;flex:1;text-align:left;color:var(--color-muted);font-size:12px;font-weight:700;padding:5px 0}
+.yea-pending-group__toggle::before{content:'▸';display:inline-block;margin-right:7px;transition:transform .15s ease}
+.yea-pending-group__toggle[aria-expanded='true']::before{transform:rotate(90deg)}
+.yea-pending-group .yea-undo-all{font-size:11px;min-height:28px;padding:4px 7px;white-space:nowrap;flex:none}
+.yea-pending-group__items{list-style:none;padding:0;margin:0;min-width:0}
+.yea-pending-group__items[hidden]{display:none}
+.yea-pending-group__items .yea-file-pending{border-top:1px solid var(--color-border);border-radius:0;padding-inline:12px}
+/* 年間課税支給額の監査用内訳。 */
+.yea-stat--total #yea-total{user-select:all;-webkit-user-select:all;cursor:text}
+
+.yea-taxable-audit__note{margin:12px 18px;color:var(--color-muted);font-size:12px;line-height:1.6}
+.yea-taxable-audit__scroll{overflow-x:auto;padding:0 18px 17px}
+.yea-taxable-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.yea-taxable-table th,.yea-taxable-table td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--color-border)}
+.yea-taxable-table thead th{color:var(--color-muted);font-weight:700}
+.yea-taxable-table th:first-child{text-align:left}
+.yea-taxable-table__total{font-weight:800}
+@media(max-width:680px){.yea-file-tools{justify-content:flex-end}.yea-file-tools .btn{min-height:30px}}

@@ -2,6 +2,9 @@
 import {cloudVault} from '../cloud/auth';
 import {encryptJson,decryptJson,encryptBytes,decryptBytes} from '../cloud/crypto';
 import {isCollision,type RemoteFile} from '../cloud/graph';
+import {yearEndPdfName,yearEndUpdatedPdfName} from '../storage/fileNaming';
+import {MAX_TOTAL_PDF_BYTES} from '../storage/storageLimits';
+import type {VerifiedYearEndPdf} from './pdfExport';
 import type {YearEndBackupData} from './backup';
 import {
  asPersonId,asDocumentId,randomPersonId,randomDocumentId,isUuid,validYear,validDate,monthOf,checkedMoney,documentAmountWarnings,
@@ -57,13 +60,24 @@ export class YearEndRepository {
   return {value:emptyIndex(),file:null};
  }
  async people():Promise<Array<PersonProfile & {state:'active'|'deleting'}>>{
-  const a=await this.access(),idx=await this.readIndex(a),result:Array<PersonProfile & {state:'active'|'deleting'}>=[];
-  for(const row of idx.value.persons){if(row.state==='deleted')continue;
-   const file=await this.readJson<PersonProfile>(a,'profile',this.personPath(a,row.id),'profile.enc',MAX_PROFILE);
-   if(!file){if(row.state==='deleting'){result.push({format:'payroll-year-end-person-v1',id:row.id,displayName:'削除未完了',alias:'',createdAt:row.createdAt,updatedAt:row.updatedAt,yearFiles:{},state:'deleting'});continue;}throw new Error('従業員プロフィールが存在しません。');}
-   result.push({...validateProfile(file.value,row.id),state:row.state});
-  }
-  return result.sort((x,y)=>x.createdAt.localeCompare(y.createdAt));
+  const a=await this.access(),idx=await this.readIndex(a);
+  const rows=idx.value.persons.filter(row=>row.state!=='deleted');
+  const result:Array<PersonProfile & {state:'active'|'deleting'}|undefined>=new Array(rows.length);
+  // Profile GETs are independent. Limit concurrency to avoid Graph throttling, and
+  // publish the list only after every profile passes its existing validation.
+  let cursor=0;
+  const worker=async():Promise<void>=>{
+   while(cursor<rows.length){
+    const position=cursor++,row=rows[position];
+    const file=await this.readJson<PersonProfile>(a,'profile',this.personPath(a,row.id),'profile.enc',MAX_PROFILE);
+    if(!file){
+     if(row.state!=='deleting')throw new Error('従業員プロフィールが存在しません。');
+     result[position]={format:'payroll-year-end-person-v1',id:row.id,displayName:'削除未完了',alias:'',createdAt:row.createdAt,updatedAt:row.updatedAt,yearFiles:{},state:'deleting'};
+    }else result[position]={...validateProfile(file.value,row.id),state:row.state==='active'?'active':'deleting'};
+   }
+  };
+  await Promise.all(Array.from({length:Math.min(5,rows.length)},()=>worker()));
+  return result.map(profile=>{if(!profile)throw new Error('従業員一覧の取得が完了しませんでした。');return profile;}).sort((x,y)=>x.createdAt.localeCompare(y.createdAt));
  }
  private async assertActive(a:Access,id:PersonId):Promise<void>{
   const idx=await this.readIndex(a);
@@ -166,7 +180,7 @@ export class YearEndRepository {
   const documentId=randomDocumentId(),record:DocumentRecord={id:documentId,personId:id,kind:draft.kind,paymentDate:draft.paymentDate,targetMonth:draft.targetMonth,
    taxable,gross:draft.gross,transportation:draft.transportation,nonTaxable:draft.nonTaxable,
    healthInsurance:draft.healthInsurance,pension:draft.pension,employmentInsurance:draft.employmentInsurance,incomeTax:draft.incomeTax,residentTax:draft.residentTax,
-   fileName:base64Name(file.name),pdfSize:bytes.byteLength,fileHash:digest,detectedName:draft.detectedName??null,confirmedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),source:'pdf-reviewed',revision:1};
+   fileName:base64Name(yearEndPdfName(draft.kind,draft.paymentDate,file.name)),pdfSize:bytes.byteLength,fileHash:digest,detectedName:draft.detectedName??null,confirmedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),source:'pdf-reviewed',revision:1};
   for(const key of ['gross','transportation','nonTaxable','healthInsurance','pension','employmentInsurance','incomeTax','residentTax'] as const)if(record[key]!==null)checkedMoney(record[key]);
   // Store original first. A metadata failure can leave an unreferenced encrypted original;
   // never claim an all-or-nothing rollback and never publish any plain PDF.
@@ -196,10 +210,11 @@ export class YearEndRepository {
   * Never publishes plaintext, never drops verification, never overwrites a stale year. */
  async saveDocumentsBatch(id:PersonId,year:number,
    updates:Array<{documentId:string;expectedRevision:number;draft:DraftDocument}>,
-   additions:Array<{file:File;draft:DraftDocument}>,acknowledgedAmountWarning=false):Promise<{data:YearData;yearFiles:PersonProfile['yearFiles']}>{
+   additions:Array<{file:File;draft:DraftDocument}>,acknowledgedAmountWarning=false,onProgress?:(done:number,total:number)=>void,
+   deletions:Array<{documentId:string;expectedRevision:number}>=[]):Promise<{data:YearData;yearFiles:PersonProfile['yearFiles'];cleanupPending:number}>{
   asPersonId(id);if(!validYear(year))throw new Error('保存先の暦年が不正です。');
-  if(!updates.length&&!additions.length)throw new Error('保存する明細がありません。');
-  if(updates.length+additions.length>50)throw new Error('一度に保存できる明細が多すぎます。');
+  if(!updates.length&&!additions.length&&!deletions.length)throw new Error('保存する明細がありません。');
+  if(updates.length+additions.length+deletions.length>50)throw new Error('一度に保存できる明細が多すぎます。');
   // Validate every field before creating files on OneDrive.
   const verifyDraft=(d:DraftDocument)=>{
    if(!['salary','bonus'].includes(d.kind)||!validDate(d.paymentDate)||Number(d.paymentDate.slice(0,4))!==year||
@@ -220,6 +235,20 @@ export class YearEndRepository {
   let working:YearData={...context.data,documents:[...context.data.documents],estimates:[...context.data.estimates],
    bonusEstimates:[...context.data.bonusEstimates],noPaymentMonths:[...context.data.noPaymentMonths],history:[...context.data.history]};
   const changes=new Set<string>();
+  const removed:DocumentRecord[]=[];
+  for(const deletion of deletions){
+   asDocumentId(deletion.documentId);
+   if(changes.has(deletion.documentId))throw new Error('同じ明細が重複指定されています。');
+   changes.add(deletion.documentId);
+   const prior=working.documents.find(r=>r.id===deletion.documentId);
+   if(!prior||prior.revision!==deletion.expectedRevision)throw new Error('他の画面で削除対象の明細が更新されています。年度を読み直してください。');
+   removed.push(prior);
+   working={...working,documents:working.documents.filter(r=>r.id!==prior.id),
+    estimates:working.estimates.filter(e=>!e.references.includes(prior.id)),
+    confirmedAt:null,
+    history:[...working.history.filter(event=>event.documentId!==prior.id),
+     {at:now,kind:'document-deleted',month:monthOf(prior.paymentDate),documentId:prior.id}]};
+  }
   for(const update of updates){
    asDocumentId(update.documentId);
    if(changes.has(update.documentId))throw new Error('同じ明細が重複編集されています。');
@@ -227,7 +256,7 @@ export class YearEndRepository {
    const prior=working.documents.find(r=>r.id===update.documentId);
    if(!prior||prior.revision!==update.expectedRevision)throw new Error('他の画面で明細が更新されています。年度を読み直してください。');
    const d=update.draft;
-   const record:DocumentRecord={...prior,kind:d.kind,paymentDate:d.paymentDate,targetMonth:d.targetMonth,
+   const record:DocumentRecord={...prior,fileName:yearEndUpdatedPdfName(prior.kind,prior.paymentDate,prior.fileName,d.kind,d.paymentDate),kind:d.kind,paymentDate:d.paymentDate,targetMonth:d.targetMonth,
     taxable:checkedMoney(d.taxable),gross:d.gross,transportation:d.transportation,nonTaxable:d.nonTaxable,
     healthInsurance:d.healthInsurance,pension:d.pension,employmentInsurance:d.employmentInsurance,
     incomeTax:d.incomeTax,residentTax:d.residentTax,detectedName:d.detectedName??prior.detectedName??null,revision:prior.revision+1,
@@ -241,17 +270,28 @@ export class YearEndRepository {
   }
   if(working.history.length>1000)throw new Error('変更履歴の保存上限です。');
   const pending:Array<{file:File;bytes:ArrayBuffer;digest:string;record:DocumentRecord}>=[];
-  for(const x of additions){
-   const bytes=await x.file.arrayBuffer();
-   if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw new Error('PDF原本のヘッダーが不正です。');
-   const digest=await hash(bytes);
+  const prepared:Array<{file:File;bytes:ArrayBuffer;digest:string;draft:DraftDocument}|undefined>=new Array(additions.length);
+  let prepareCursor=0;
+  const prepareWorker=async():Promise<void>=>{
+   while(prepareCursor<additions.length){
+    const position=prepareCursor++,x=additions[position];
+    const bytes=await x.file.arrayBuffer();
+    if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw new Error('PDF原本のヘッダーが不正です。');
+    prepared[position]={file:x.file,bytes,digest:await hash(bytes),draft:x.draft};
+   }
+  };
+  // Parallelize read/hash only; duplicate/model checks still finish before cloud writes.
+  await Promise.all(Array.from({length:Math.min(3,additions.length)},()=>prepareWorker()));
+  for(const entry of prepared){
+   if(!entry)throw new Error('PDF原本の準備が完了しませんでした。');
+   const x=entry,bytes=x.bytes,digest=x.digest;
    if(working.documents.some(r=>r.fileHash===digest)||pending.some(p=>p.digest===digest))
     throw new Error('同一内容のPDFが保存済みまたは保存対象にあります。');
    const d=x.draft;
    const record:DocumentRecord={id:randomDocumentId(),personId:id,kind:d.kind,paymentDate:d.paymentDate,targetMonth:d.targetMonth,
     taxable:checkedMoney(d.taxable),gross:d.gross,transportation:d.transportation,nonTaxable:d.nonTaxable,
     healthInsurance:d.healthInsurance,pension:d.pension,employmentInsurance:d.employmentInsurance,
-    incomeTax:d.incomeTax,residentTax:d.residentTax,fileName:base64Name(x.file.name),pdfSize:bytes.byteLength,
+    incomeTax:d.incomeTax,residentTax:d.residentTax,fileName:base64Name(yearEndPdfName(d.kind,d.paymentDate,x.file.name)),pdfSize:bytes.byteLength,
     fileHash:digest,detectedName:d.detectedName??null,confirmedAt:now,updatedAt:now,source:'pdf-reviewed',revision:1};
    const month=monthOf(record.paymentDate),old=working.estimates.find(e=>e.month===month);
    working={...working,documents:[...working.documents,record],
@@ -266,13 +306,19 @@ export class YearEndRepository {
   working={...working,confirmedAt:null};validateYear(working,id,year);
   if(pending.length){
    // Same person, other year: never store an existing PDF twice.
-   const otherYears=Object.keys(context.profile.value.yearFiles).map(Number).filter(y=>y!==year);
-   const otherRecords=await Promise.all(otherYears.map(async y=>(await this.year(id,y)).documents));
+   const otherYears=Object.entries(context.profile.value.yearFiles).filter(([y])=>Number(y)!==year);
+   const otherRecords=await Promise.all(otherYears.map(async ([y,fileId])=>{
+    const remote=await this.readJson<YearData>(a,'year',[...this.personPath(a,id),'years'],fileId+'.enc',MAX_YEAR);
+    if(!remote)throw new Error('同じ従業員の別年度ファイルが見つかりません。');
+    return validateYear(remote.value,id,Number(y)).documents;
+   }));
    const otherHashes=new Set(otherRecords.flat().map(r=>r.fileHash));
    if(pending.some(x=>otherHashes.has(x.digest)))throw new Error('同じ従業員の別年度に登録済みのPDFがあります。');
   }
-  // A bounded two-file pipeline reduces wall-clock time while keeping memory sane.
+  // Three concurrent, independently verified originals; all writes must settle
+  // before returning a failure so no upload keeps running after the error UI appears.
   const originalPath=[...this.personPath(a,id),'originals'];
+  let completedOriginals=0;
   const uploadAndCheck=async (entry:typeof pending[number])=>{
    const encrypted=await encryptBytes(kinds.original,new Uint8Array(entry.bytes),a.key);
    await a.graph.write(originalPath,entry.record.id+'.enc',encrypted,null,MAX_PDF);
@@ -281,14 +327,33 @@ export class YearEndRepository {
    const restored=await decryptBytes(kinds.original,stored.text,a.key);
    if(restored.byteLength!==entry.bytes.byteLength||await hash(restored.buffer as ArrayBuffer)!==entry.digest)
     throw new Error('暗号化PDF原本のSHA-256照合に失敗しました。');
+   onProgress?.(++completedOriginals,pending.length);
   };
-  for(let i=0;i<pending.length;i+=2){
-   try{await Promise.all(pending.slice(i,i+2).map(uploadAndCheck));}
-   catch(error){throw new Error('PDFの暗号化保存中に問題が発生しました。未参照の暗号化PDFが残った可能性があります。再読み込みして状況を確認してください。',{cause:error});}
+  for(let i=0;i<pending.length;i+=3){
+   const outcomes=await Promise.allSettled(pending.slice(i,i+3).map(uploadAndCheck));
+   const failed=outcomes.find((result):result is PromiseRejectedResult=>result.status==='rejected');
+   if(failed)throw new Error('PDFの暗号化保存中に問題が発生しました。未参照の暗号化PDFが残った可能性があります。再読み込みして状況を確認してください。',{cause:failed.reason});
   }
   try{await this.saveYear(a,id,year,context.file,working,context.yearFile);}
   catch(error){throw new Error(pending.length?'暗号化PDF原本は保存されましたが、年度データの確定に失敗しました。二重登録せず再読み込みしてください。':'年度データの保存に失敗しました。再読み込みしてください。',{cause:error});}
-  return {data:working,yearFiles:context.profile.value.yearFiles};
+  // The annual ETag commit is authoritative. Original PDFs are moved to the
+  // OneDrive recycle bin only AFTER that successful commit. Cleanup failures
+  // cannot turn a committed save into an ambiguous retryable failure.
+  let cleanupPending=0;
+  if(removed.length){
+   const path=[...this.personPath(a,id),'originals'];
+   try{
+    const listed=await a.graph.listFolder(path);
+    if(!listed)throw new Error('原本フォルダを確認できません。');
+    const byName=new Map(listed.map(file=>[file.name,file]));
+    for(const record of removed){
+     const file=byName.get(record.id+'.enc');
+     if(!file||file.folder){cleanupPending++;continue;}
+     try{await a.graph.trashFile(path,file);}catch{cleanupPending++;}
+    }
+   }catch{cleanupPending=removed.length;}
+  }
+  return {data:working,yearFiles:context.profile.value.yearFiles,cleanupPending};
  }
  async updateDocument(id:PersonId,year:number,documentId:string,draft:DraftDocument,replacement:File|null=null):Promise<{cleanupPending:boolean}> {
   asDocumentId(documentId);asPersonId(id);
@@ -321,9 +386,10 @@ export class YearEndRepository {
     if((await this.year(id,Number(otherYear))).documents.some(r=>r.fileHash===nextHash))
      throw new Error('この従業員の別年度に同じPDFが登録されています。');
    }
-   nextId=randomDocumentId();nextName=base64Name(replacement.name);nextSize=bytes.byteLength;
+   nextId=randomDocumentId();nextName=base64Name(yearEndPdfName(draft.kind,draft.paymentDate,replacement.name));nextSize=bytes.byteLength;
   }
   const now=new Date().toISOString();
+  if(!replacement)nextName=yearEndUpdatedPdfName(prior.kind,prior.paymentDate,prior.fileName,draft.kind,draft.paymentDate);
   const updated:DocumentRecord={...prior,id:nextId,kind:draft.kind,paymentDate:draft.paymentDate,targetMonth:draft.targetMonth,
    taxable:checkedMoney(draft.taxable),gross:draft.gross,transportation:draft.transportation,nonTaxable:draft.nonTaxable,
    healthInsurance:draft.healthInsurance,pension:draft.pension,employmentInsurance:draft.employmentInsurance,
@@ -810,6 +876,35 @@ export class YearEndRepository {
   const merged=[...current.value.persons.map(p=>revived.get(p.id)??p),...entries.filter(p=>!indexed.has(p.id))];
   await this.writeJson(a,'index',a.path,'index.enc',{...emptyIndex(),persons:merged},current.file,MAX_INDEX);
   return {restored:entries.length,skipped};
+ }
+ /** 一括ZIP用。年度JSONは一度だけ取得し、各原本は最大3件並列で取得・復号・SHA-256照合。書込みなし。 */
+ async originalsForYear(id:PersonId,year:number):Promise<VerifiedYearEndPdf[]> {
+  const a=await this.access(),before=await this.yearContext(a,id,year,false);
+  const records=before.data.documents;
+  if(!records.length)throw new Error('対象年度に保存済みPDFがありません。');
+  const total=records.reduce((sum,record)=>sum+record.pdfSize,0);
+  if(total>MAX_TOTAL_PDF_BYTES)throw new Error('PDFの合計が480MiBを超えています。年度を分けて取得してください。');
+  if(!before.file||!before.yearFile)throw new Error('年度の保存情報が見つかりません。');
+  const result:Array<VerifiedYearEndPdf|undefined>=new Array(records.length);
+  const path=[...this.personPath(a,id),'originals'];
+  let cursor=0;
+  const worker=async()=>{
+   while(cursor<records.length){
+    const i=cursor++,record=records[i];
+    const file=await a.graph.read(path,record.id+'.enc',MAX_PDF);
+    if(!file)throw new Error('ZIP作成を中止しました。PDF原本が欠落しています。');
+    const bytes=await decryptBytes(kinds.original,file.text,a.key);
+    if(bytes.length!==record.pdfSize||await hash(bytes.buffer as ArrayBuffer)!==record.fileHash)
+     throw new Error('ZIP作成を中止しました。PDF原本の完全性が一致しません。');
+    result[i]={record,bytes};
+   }
+  };
+  await Promise.all(Array.from({length:Math.min(3,records.length)},()=>worker()));
+  const after=await this.yearContext(a,id,year,false);
+  if((after.file?.etag??null)!==before.file.etag||after.yearFile!==before.yearFile||
+     (await this.access()).path.join('/')!==a.path.join('/'))
+   throw new Error('取得中に年度の保存状態が変わりました。再度ダウンロードしてください。');
+  return result.map(item=>{if(!item)throw new Error('PDF原本をすべて取得できませんでした。');return item;});
  }
  async original(id:PersonId,year:number,documentId:string):Promise<Blob>{
   asDocumentId(documentId);

@@ -16,7 +16,7 @@ assert.match(backup,/vault\.syncIncome\(\)/);
 assert.match(ui,/id="payroll-income-publish"/);
 // The numeric grossPaymentYen field is verified above using real conversion.
 // Display text is not part of the Finance data contract.
-assert.match(ui, /<h3 id="settings-finance-income-title">Financeへの給与連携<\/h3>/);
+assert.match(ui, /<h3 id="settings-finance-income-title">Finance連携用の収入データ<\/h3>/);
 assert.match(ui,/id="cloud-cleanup-check"/);
 assert.match(ui,/id="legacy-cleanup-check"/);
 console.log('PASS: Finance income fields, sync, manual republish and cleanup controls coexist');

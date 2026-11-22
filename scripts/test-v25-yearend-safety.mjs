@@ -9,7 +9,7 @@ const block=source.slice(source.indexOf('function updateSaveState(){'),source.in
 assert.ok(block.startsWith('function updateSaveState(){'),'source policy must remain testable');
 function testQueue(statuses,{blocked=false}={}){
  const progress={textContent:''},saveAll={disabled:null,textContent:''},saveRecheck={disabled:null},saveReload={disabled:null};
- const state={fileQueue:statuses.map(status=>({status,draft:status==='ready'?{}:null})),data:{documents:[]},savedEdits:new Map(),
+ const state={fileQueue:statuses.map(status=>({status,draft:status==='ready'?{}:null})),data:{documents:[]},savedEdits:new Map(),pendingDeletions:new Map(),
   busy:false,saveRecoveryRequired:blocked,selected:'synthetic-uuid',savingDocuments:false,
   saveAll,saveRecheck,saveReload,saveRecoveryChecked:false,saveRecoverySafe:false,validateQueueItem:()=>null,isChanged:()=>false,validateSavedEdit:()=>null,$:()=>progress};
  runInNewContext(stripTypeScriptTypes(block,{mode:'strip'})+'\nupdateSaveState()',state);
@@ -56,7 +56,7 @@ const preserved={id:4,hash:'b'.repeat(64),status:'ready',file:{name:'other.pdf'}
 const list=[next,last,preserved];
 let parsed=0;
 let asynchronous;
-const promotionContext={fileQueue:list,data:{documents:[]},updateDrafts:()=>{},parseAssistedPdf:async file=>{parsed++;return {fileName:file.name}},action:(_label,callback)=>{asynchronous=callback();return asynchronous;},Error};
+const promotionContext={fileQueue:list,data:{documents:[]},pendingDeletions:new Map(),updateDrafts:()=>{},parseAssistedPdf:async file=>{parsed++;return {fileName:file.name}},action:(_label,callback)=>{asynchronous=callback();return asynchronous;},Error};
 const promote=runInNewContext(stripTypeScriptTypes(promotion,{mode:'strip'})+'\npromoteRemainingDuplicate',promotionContext);
 promote(oldest);
 assert.equal(next.status,'reading');
@@ -67,7 +67,7 @@ assert.equal(last.status,'duplicate','only one candidate should be promoted');
 assert.equal(preserved.status,'ready');
 const saved={id:5,hash:'c'.repeat(64),status:'ready',file:{name:'saved.pdf'}};
 // Variables declared with let/const in the VM lexical scope are not context properties.
-const blocked=runInNewContext(`let fileQueue=[{id:6,hash:'${saved.hash}',status:'duplicate',file:{name:'excluded.pdf'},draft:null}]; const data={documents:[{fileHash:'${saved.hash}'}]};\n`+
+const blocked=runInNewContext(`let fileQueue=[{id:6,hash:'${saved.hash}',status:'duplicate',file:{name:'excluded.pdf'},draft:null}]; const data={documents:[{fileHash:'${saved.hash}'}]}; const pendingDeletions=new Map();\n`+
  stripTypeScriptTypes(promotion,{mode:'strip'})+`\n({promoteRemainingDuplicate,fileQueue})`,{updateDrafts:()=>{},parseAssistedPdf:async()=>{throw new Error('should not parse')},action:()=>{throw new Error('should not start')},Error});
 blocked.promoteRemainingDuplicate(saved);
 assert.equal(blocked.fileQueue[0].status,'duplicate','a PDF already saved in OneDrive must remain excluded');

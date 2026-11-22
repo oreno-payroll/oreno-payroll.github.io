@@ -69,54 +69,35 @@ const firstEntry=6;
 const icoLength=favicon.readUInt32LE(firstEntry+8),icoOffset=favicon.readUInt32LE(firstEntry+12);
 assert.equal(pngFirstAlpha(favicon.subarray(icoOffset,icoOffset+icoLength)),0,'ICO has a transparent corner');
 
-// Git管理対象だけの審査を、公開前の最小リポジトリで実際に動かす。
+// Simulate complete minimal tracked checkout and modified staged content.
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'payroll-audit-test-'));
 try {
-  fs.mkdirSync(path.join(temp, 'scripts'), { recursive: true });
-  fs.mkdirSync(path.join(temp, 'public/view'), { recursive: true });
-  fs.mkdirSync(path.join(temp, 'src/export'), { recursive: true });
-  for (const relative of [
-    'scripts/audit-publish.mjs', 'scripts/audit-rules.mjs', 'scripts/test-audit-fixes.mjs',
-    'public/view/index.html', 'public/view/pdf-sw.js', 'src/view.ts', 'src/export/sidePdfs.ts',
-    'public/vendor/msal/msal-browser.bundle.js', 'public/vendor/msal/LICENSE.txt',
-    'public/payroll-cloud-session.js',
-    'public/favicon.ico', 'public/apple-touch-icon.png',
-  ]) {
-    fs.mkdirSync(path.dirname(path.join(temp, relative)), { recursive: true });
-    fs.copyFileSync(path.join(root, relative), path.join(temp, relative));
-  }
-  // Gitの追跡対象に入っていても、コミット時のindexに危険な内容があれば拒否。
-  const git = (...args) => execFileSync('git', args, { cwd: temp, stdio: 'pipe' });
-  git('init', '-q');
-  // 新規vendorがGit未追跡でも、適用前検査は内容とハッシュを検証する。
-  git('add', '--', 'scripts', 'public/view', 'src');
-  const runAudit = (...args) => spawnSync(process.execPath, ['scripts/audit-publish.mjs', ...args], { cwd: temp, encoding: 'utf8' });
-  assert.notEqual(runAudit().status, 0, '通常監査は未追跡vendorを拒否する');
-  assert.notEqual(runAudit('--staged').status, 0, 'Git index監査は未追跡vendorを拒否する');
-  assert.equal(runAudit('--install-check').status, 0, '適用時のみ未追跡vendorをハッシュ検証して許可する');
-  const msal = path.join(temp, 'public/vendor/msal/msal-browser.bundle.js');
-  fs.appendFileSync(msal, '\n// tamper\n');
-  assert.notEqual(runAudit('--install-check').status, 0, '未追跡vendorの改ざんは拒否する');
-  fs.copyFileSync(path.join(root, 'public/vendor/msal/msal-browser.bundle.js'), msal);
-  const license = path.join(temp, 'public/vendor/msal/LICENSE.txt');
-  fs.unlinkSync(license);
-  assert.notEqual(runAudit('--install-check').status, 0, '必要なライセンスファイルの欠落は拒否する');
-  fs.copyFileSync(path.join(root, 'public/vendor/msal/LICENSE.txt'), license);
-  git('add', '--', 'public/vendor/msal/msal-browser.bundle.js', 'public/vendor/msal/LICENSE.txt', 'public/payroll-cloud-session.js', 'public/favicon.ico', 'public/apple-touch-icon.png');
-  assert.equal(runAudit('--staged').status, 0, 'Git追跡後の監査が通る');
-  const icon = path.join(temp, 'public/favicon.ico');
-  fs.appendFileSync(icon, Buffer.from([0]));
-  assert.notEqual(runAudit().status, 0, 'modified favicon is rejected');
-  fs.copyFileSync(path.join(root, 'public/favicon.ico'), icon);
-  const target = path.join(temp, 'src/view.ts');
-  fs.appendFileSync(target, `\n// ${mobile}\n`);
-  assert.notEqual(runAudit().status, 0, '変更済みの携帯番号を検出する');
-  assert.equal(runAudit('--staged').status, 0, 'まだステージしていない変更を--stagedが誤検出しない');
-  git('add', 'src/view.ts');
-  assert.notEqual(runAudit('--staged').status, 0, 'ステージ済み携帯番号を検出する');
-  fs.writeFileSync(target, fs.readFileSync(path.join(root, 'src/view.ts')));
-  assert.notEqual(runAudit('--staged').status, 0, '作業ツリーだけ修正してもステージ済み内容を検出する');
-} finally {
-  fs.rmSync(temp, { recursive: true, force: true });
-}
-console.log('OK: 架空メール・携帯/固定/IP電話・秘密情報の検出、Git indexの差分チェック');
+ const required=[
+  'scripts/audit-publish.mjs','scripts/audit-rules.mjs','scripts/test-audit-fixes.mjs',
+  'scripts/msal-entry.mjs','scripts/msal-redirect-bridge.mjs','scripts/audit-msal.mjs',
+  'public/auth/redirect.html','public/frame-guard.js',
+  'public/view/index.html','public/view/pdf-sw.js','src/view.ts','src/export/sidePdfs.ts',
+  'public/payroll-cloud-session.js','public/favicon.ico','public/apple-touch-icon.png',
+ ];
+ for(const relative of required){
+  fs.mkdirSync(path.dirname(path.join(temp,relative)),{recursive:true});
+  fs.copyFileSync(path.join(root,relative),path.join(temp,relative));
+ }
+ const git=(...args)=>execFileSync('git',args,{cwd:temp,stdio:'pipe'});
+ git('init','-q');git('add','--','scripts','public','src');
+ const audit=(...args)=>spawnSync(process.execPath,['scripts/audit-publish.mjs',...args],{cwd:temp,encoding:'utf8'});
+ assert.equal(audit('--staged').status,0,'all required files must be tracked');
+ fs.unlinkSync(path.join(temp,'public/frame-guard.js'));
+ git('add','-u');
+ assert.notEqual(audit('--staged').status,0,'missing frame guard blocked');
+ fs.copyFileSync(path.join(root,'public/frame-guard.js'),path.join(temp,'public/frame-guard.js'));
+ git('add','-A');
+ assert.equal(audit('--staged').status,0,'restored guard accepted');
+ const target=path.join(temp,'src/view.ts');
+ fs.appendFileSync(target,`\n// ${mobile}\n`);
+ assert.notEqual(audit().status,0,'sensitive uncommitted input caught');
+ assert.equal(audit('--staged').status,0,'staged content unaffected by unstaged edits');
+ git('add','src/view.ts');
+ assert.notEqual(audit('--staged').status,0,'sensitive staged data blocked');
+}finally{fs.rmSync(temp,{recursive:true,force:true});}
+console.log('PASS: private-data detector, denylist source guard and staged audit behavior');

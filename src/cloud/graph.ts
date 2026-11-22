@@ -1,10 +1,32 @@
 /** Finance v1.1のAppFolder/ETag/事前認証URL方式をPayroll専用APIへ適用。 */
+import {MicrosoftSignInRequiredError,MicrosoftTemporaryError} from './msalPolicy.ts';
 const BASE = 'https://graph.microsoft.com/v1.0';
+// Graph のスロットリングと一時障害だけを、読み取り専用で再試行する。
+// Retry-After が待機上限を超える場合は早めに再送せず、呼び出し元へエラーを返す。
+const TEMPORARY_READ_STATUSES = new Set([408,429,500,502,503,504]);
+const READ_RETRIES = 2;
+const MAX_RETRY_WAIT_MS = 30_000;
+function retryWaitMs(response:Response, retry:number):number|null {
+  const retryAfter=response.headers.get('Retry-After')?.trim();
+  if(retryAfter) {
+    let ms:number;
+    if(/^\d+(?:\.\d+)?$/.test(retryAfter))ms=Number(retryAfter)*1000;
+    else {
+      const at=Date.parse(retryAfter);
+      if(!Number.isFinite(at))return Math.min(350*2**retry,MAX_RETRY_WAIT_MS);
+      ms=Math.max(0,at-Date.now());
+    }
+    return Number.isFinite(ms)&&ms<=MAX_RETRY_WAIT_MS?Math.max(0,Math.ceil(ms)):null;
+  }
+  return 350*2**retry;
+}
+const pause=(ms:number):Promise<void>=>new Promise(resolve=>setTimeout(resolve,ms));
+
 export interface RemoteFile { id: string; etag: string; text: string; size?: number; }
 interface Item { id?: string; name?: string; folder?: Record<string,unknown>; eTag?: string; size?: number; '@microsoft.graph.downloadUrl'?: string }
 export class GraphError extends Error {
   constructor(readonly status: number, readonly code: string) {
-    super(`OneDrive通信エラー HTTP ${status}${code ? ` (${code})` : ''}`);
+    super(status===403?'OneDriveへのアクセス権限がありません。Microsoftの接続権限を確認してください（HTTP 403）。':status===401?'Microsoft認証が無効です。再接続後にOneDriveの状態を確認してください（HTTP 401）。':`OneDrive通信エラー HTTP ${status}${code ? ` (${code})` : ''}`);
   }
 }
 export const isCollision = (e: unknown): boolean => e instanceof GraphError && (e.status === 409 || e.status === 412);
@@ -14,18 +36,63 @@ export class PayrollGraph {
   private rootPending:Promise<string>|undefined;
   private folders = new Map<string,string>();
   private folderPending = new Map<string,Promise<string|null>>();
-  constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}) {}
+  constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>}) {}
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    if(init.method && init.method.toUpperCase()!=='GET' && init.method.toUpperCase()!=='HEAD')this.onMutation();
-    const token=typeof this.token==='function'?await this.token():this.token;
-    const r = await this.http(`${BASE}${path}`, { ...init, headers: {Authorization:`Bearer ${token}`,...init.headers}, redirect:'error' });
-    if (!r.ok) {
-      let code = '';
-      try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
-      throw new GraphError(r.status,code);
+    const method=(init.method??'GET').toUpperCase();
+    const readonly=method==='GET'||method==='HEAD';
+    if(!readonly)this.onMutation();
+    let bearer=typeof this.token==='function'?await this.token():this.token;
+    const graphUrl=`${BASE}${path}`;
+    const send=()=>this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});
+    let retries=0,renewed=false;
+    for (;;) {
+      let r:Response;
+      try {r=await send();}
+      catch(error){
+        // GET/HEAD だけ、通信中断にも限定回数のバックオフを適用。
+        if(readonly&&retries<READ_RETRIES){await pause(350*2**retries++);continue;}
+        throw error;
+      }
+      if(r.status===401&&this.unauthorized&&!renewed){
+        this.unauthorized.invalidate();
+        if(readonly){
+          // 期限切れ認証は別系統の一回限りの再取得。書き込みは再送しない。
+          renewed=true;bearer=await this.unauthorized.refresh();
+          continue;
+        }
+      }
+      if(readonly&&TEMPORARY_READ_STATUSES.has(r.status)&&retries<READ_RETRIES){
+        const delay=retryWaitMs(r,retries);
+        if(delay!==null){
+          try{await r.body?.cancel();}catch{/* レスポンス本体を診断に使わない */}
+          retries++;await pause(delay);continue;
+        }
+      }
+      if (!r.ok) {
+        let code = '';
+        try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
+        throw new GraphError(r.status,code);
+      }
+      return r;
     }
-    return r;
   }
+  /** 署名付き原本ダウンロードURLもBearerなしのGETだけ再試行する。 */
+  private async download(url:string):Promise<Response> {
+    for(let retry=0;;){
+      let response:Response;
+      try {response=await this.http(url,{credentials:'omit',cache:'no-store'});}
+      catch(error){if(retry>=READ_RETRIES)throw error;await pause(350*2**retry++);continue;}
+      if(TEMPORARY_READ_STATUSES.has(response.status)&&retry<READ_RETRIES){
+        const delay=retryWaitMs(response,retry);
+        if(delay!==null){
+          try{await response.body?.cancel();}catch{}
+          retry++;await pause(delay);continue;
+        }
+      }
+      return response;
+    }
+  }
+
   /**
    * Graph の GET メタデータ応答だけを検証して再試行する。
    * OneDrive の暗号文は解析せず、書き込み・削除の再試行も行わない。
@@ -39,7 +106,7 @@ export class PayrollGraph {
           method:'GET',cache:'no-store',headers:{'Accept':'application/json'},
         });
       }catch(error){
-        if(error instanceof GraphError)throw error;
+        if(error instanceof GraphError||error instanceof MicrosoftSignInRequiredError||error instanceof MicrosoftTemporaryError)throw error;
         throw new Error(`${stage}：GraphのGET開始前（認証など）または通信処理で失敗しました。暗号ファイルは変更していません。`,{cause:error});
       }
       const contentType=(response.headers.get('content-type')??'unknown').split(';')[0].trim().toLowerCase();
@@ -182,7 +249,7 @@ export class PayrollGraph {
     if (!url) { const refreshed = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(item.id)}`,'ダウンロード情報の照会'); url = refreshed['@microsoft.graph.downloadUrl']; }
     if (!url || new URL(url).protocol !== 'https:') throw new Error('OneDriveのダウンロード先URLが不正です。');
     // 署名付きダウンロードURLにBearerトークンを付けてはいけない。
-    const response = await this.http(url,{credentials:'omit',cache:'no-store'});
+    const response = await this.download(url);
     if (!response.ok) throw new Error(`OneDriveの取得に失敗しました (HTTP ${response.status})。`);
     // Graph のダウンロード先が成功応答でログインHTMLなどを返しても、暗号ファイルと誤認しない。
     const mime = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
@@ -236,6 +303,22 @@ export class PayrollGraph {
     const latest=(await this.listFolder(parts))?.find(x=>x.name===item.name);
     if(!latest||latest.folder||latest.id!==item.id||latest.etag!==item.etag)
       throw new Error('整理対象が更新されました。古い原本の削除を中断しました。');
+    await this.request(`/me/drive/items/${encodeURIComponent(item.id)}`,{
+      method:'DELETE',headers:{'If-Match':item.etag},
+    });
+  }
+  /** 本人の未参照PDF原本だけをごみ箱へ。現行の参照有無は Vault 側で再検証する。 */
+  async trashPayrollOriginal(parts:string[],item:CloudFolderItem):Promise<void> {
+    const legacy=parts.length===4&&parts[0]==='payroll'&&parts[1]==='originals';
+    const generated=parts.length===6&&parts[0]==='payroll'&&parts[1]==='versions'&&
+      /^[0-9a-f-]{36}$/i.test(parts[2])&&parts[3]==='originals';
+    const year=parts.at(-2)??'',month=parts.at(-1)??'';
+    if((!legacy&&!generated)||!/^\d{4}$/.test(year)||!/^(0[1-9]|1[0-2])$/.test(month)||
+       item.folder||!item.id||!item.etag||!/^[0-9a-f-]{36}\.enc$/i.test(item.name))
+      throw new Error('給与PDF原本の保管領域以外は削除できません。');
+    const found=(await this.listFolder(parts))?.find(x=>x.name===item.name);
+    if(!found||found.folder||found.id!==item.id||found.etag!==item.etag||found.size!==item.size)
+      throw new Error('PDF原本が別端末で更新されました。整理対象を再検査してください。');
     await this.request(`/me/drive/items/${encodeURIComponent(item.id)}`,{
       method:'DELETE',headers:{'If-Match':item.etag},
     });

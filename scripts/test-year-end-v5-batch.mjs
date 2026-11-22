@@ -28,7 +28,7 @@ const sandbox={
  decryptBytes:async(_,text)=>new Uint8Array(Buffer.from(text,'base64')),
  isCollision:err=>/collision/.test(err.message),
 };
-const api=runInNewContext(strip(read('src/yearEnd/model.ts'))+'\n'+strip(read('src/yearEnd/repository.ts'))+'\n({YearEndRepository,randomPersonId,randomDocumentId,emptyYear,validateYear})',sandbox);
+const api=runInNewContext(strip(read('src/yearEnd/model.ts'))+'\n'+strip(read('src/storage/fileNaming.ts'))+'\n'+strip(read('src/yearEnd/repository.ts'))+'\n({YearEndRepository,randomPersonId,randomDocumentId,emptyYear,validateYear})',sandbox);
 const id=api.randomPersonId(),docId=api.randomDocumentId(),yearId=api.randomDocumentId();
 const now='2026-11-19T00:00:00Z';
 const profile={format:'payroll-year-end-person-v1',id,displayName:'検証',alias:'',createdAt:now,updatedAt:now,yearFiles:{'2026':yearId}};

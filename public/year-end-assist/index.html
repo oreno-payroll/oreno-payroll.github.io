@@ -3,11 +3,12 @@
 
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <script src="../frame-guard.js"></script>
 <script src="../theme.js"></script>
 <meta name="theme-color" content="#f5f7fb"><title>年末調整サポート | Payroll</title>
 <link rel="icon" href="../favicon.ico"><link rel="apple-touch-icon" href="../apple-touch-icon.png">
-<link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/cloud.css"><link rel="stylesheet" href="../styles/upload.css"><link rel="stylesheet" href="../styles/year-end-assist.css?v=20261119-audit-fix-v13">
-<script type="module" src="../year-end-assist.js?v=20261119-audit-fix-v13"></script>
+<link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/cloud.css"><link rel="stylesheet" href="../styles/upload.css"><link rel="stylesheet" href="../styles/year-end-assist.css?v=20261122-pending-ui-v2">
+<script type="module" src="../year-end-assist.js?v=20261122-pending-ui-v2"></script>
 <link rel="stylesheet" href="../styles/theme.css"></head><body>
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <symbol id="icon-file" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z"/><path d="M13 3v7h7M8 15h8"/></symbol>
@@ -48,7 +49,7 @@
     </div>
    </section>
     <p class="read-result read-result--warning" id="yea-name-warning" role="status" hidden></p>
-    <details class="card yea-upload-panel" id="yea-upload-accordion" open>
+    <details class="card yea-upload-panel yea-accordion" id="yea-upload-accordion" open>
       <summary class="yea-upload-summary"><span class="yea-upload-chevron" aria-hidden="true"></span><strong>明細を追加・管理</strong><span class="yea-workspace-summary-state" id="yea-workspace-count"></span></summary>
       <div class="yea-upload-body">
         <div class="yea-upload-workspace">
@@ -66,7 +67,7 @@
               <input id="yea-pdfs" type="file" accept=".pdf,application/pdf" multiple hidden>
             </section>
             <section class="card file-panel" aria-labelledby="yea-files-heading">
-              <div class="panel-title-row"><div><p class="section-kicker">FILES</p><h2 id="yea-files-heading">取り込み明細一覧 <span class="count-badge" id="yea-file-count">0件</span></h2></div><button type="button" class="btn btn--ghost btn--small" id="yea-clear-all" hidden>すべて削除</button></div>
+              <div class="panel-title-row"><div><p class="section-kicker">FILES</p><h2 id="yea-files-heading">取り込み明細一覧 <span class="count-badge" id="yea-file-count">0件</span></h2></div><div class="yea-file-tools"><button type="button" class="btn btn--ghost btn--small" id="yea-download-pdfs" disabled title="保存済みのPDFをZIPでダウンロード">PDF一括DL</button><button type="button" class="btn btn--ghost btn--small" id="yea-clear-all" hidden>新規をすべて外す</button></div></div>
               <div class="file-list-empty" id="yea-files-empty"><span class="file-list-empty__icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"/></svg></span><strong>明細はまだありません</strong><p>PDFを追加してください。</p></div>
               <ul class="file-list" id="yea-drafts" aria-label="保存済み・取り込み予定の明細一覧" hidden></ul>
               <div class="file-panel__foot"><span class="status-dot"></span><span id="yea-parse-state" role="status" aria-live="polite">取り込み待ち</span></div>
@@ -122,9 +123,14 @@
      <div class="card yea-stat"><span>確定済み給与</span><strong id="yea-salary">0円</strong></div>
      <div class="card yea-stat"><span>確定済み賞与</span><strong id="yea-bonus">0円</strong></div>
      <div class="card yea-stat"><span>未支給分の見込み</span><strong id="yea-forecast">0円</strong></div>
-     <div class="card yea-stat yea-stat--total"><span>年間課税支給額（実績＋見込み）</span><strong id="yea-total">0円</strong><p id="yea-total-missing" class="yea-total-missing" role="status" aria-live="polite" hidden></p><p id="yea-total-missing-note" class="yea-total-missing-note" hidden></p></div>
+     <div class="card yea-stat yea-stat--total"><span>年間課税支給額（実績＋見込み）</span><strong id="yea-total" title="この金額を選択してコピーできます">0円</strong><p id="yea-total-missing" class="yea-total-missing" role="status" aria-live="polite" hidden></p><p id="yea-total-missing-note" class="yea-total-missing-note" hidden></p></div>
     </section>
-    <details class="card yea-forecast-panel yea-forecast-accordion" id="yea-forecast-accordion">
+    <details class="card yea-taxable-audit yea-accordion">
+     <summary class="yea-upload-summary"><span class="yea-upload-chevron" aria-hidden="true"></span><strong>年間課税支給額の月別内訳を確認</strong></summary>
+     <p class="yea-taxable-audit__note">支給日が選択年度に属する給与・賞与の課税支給額と、保存済みの見込みを合算します。対象年月ではなく支給日を基準に集計しています。</p>
+     <div class="yea-taxable-audit__scroll" id="yea-taxable-breakdown"></div>
+    </details>
+    <details class="card yea-forecast-panel yea-forecast-accordion yea-accordion" id="yea-forecast-accordion">
       <summary class="yea-upload-summary"><span class="yea-upload-chevron" aria-hidden="true"></span><strong id="yea-salary-forecast-heading">未支給給与・賞与の見込み</strong></summary>
       <div class="yea-forecast-body">
         <div class="yea-forecast-work">

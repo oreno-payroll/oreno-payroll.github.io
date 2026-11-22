@@ -57,7 +57,7 @@ const upload=source('src/upload.ts'),storeCode=source('src/storage/payrollStore.
 assert.match(auth,/restoredKey\(/);
 assert.match(auth,/rememberKey\(/);
 assert.match(auth,/await candidate\.unlockWithKey\(/);
-assert.match(auth,/cacheLocation:'sessionStorage'/,'MSALのトークンをlocalStorageへ永続化しない');
+assert.match(auth,/cacheLocation:'localStorage'/,'MSAL v5による公式キャッシュを使用する');
 assert.match(vault,/async unlockWithKey\(/);
 assert.doesNotMatch(vault,/try\{await this\.refresh\(\);await this\.syncIncome\(\);\}/,'初回の収入全年度再同期禁止');
 assert.match(vault,/async syncIncome\(changedYears\?/);

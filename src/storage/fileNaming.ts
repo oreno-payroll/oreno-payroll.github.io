@@ -25,3 +25,25 @@ export function safePdfFileName(
   }
   return `${stem}.pdf`;
 }
+
+/** 年末調整で登録する原本の表示名は、通常モードの副業と同じ支給年月・種別で採番する。 */
+export function yearEndPdfName(kind: string, paymentDate: string, originalName: string): string {
+  return storedPdfName('side', kind, paymentDate, originalName);
+}
+
+/** 既存UUID名のPDFは表示・ダウンロード時だけ補完し、暗号化済み原本や保存済みJSONを変更しない。 */
+export function yearEndVisiblePdfName(kind: string, paymentDate: string, savedName: string): string {
+  const uuidName = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}(?:\.pdf)?$/i;
+  return uuidName.test(savedName) ? yearEndPdfName(kind, paymentDate, savedName) : savedName;
+}
+
+/** 自動名の明細だけ、支給日の訂正と同時に表示名を更新する。独自名は勝手に変えない。 */
+export function yearEndUpdatedPdfName(
+  oldKind:string,oldPaymentDate:string,savedName:string,newKind:string,newPaymentDate:string,
+):string {
+  const generated=yearEndPdfName(oldKind,oldPaymentDate,savedName);
+  const uuidName=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}(?:\.pdf)?$/i;
+  return savedName===generated||uuidName.test(savedName)
+    ? yearEndPdfName(newKind,newPaymentDate,savedName)
+    : savedName;
+}

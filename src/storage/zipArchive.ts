@@ -63,6 +63,10 @@ export function writeZip(files: ZipFile[]): Blob {
 export function writePdfExportZip(files: ZipFile[]): Blob {
   return writeZipFiles(files, name => /^pdf\/[0-9]{6}_[^/\\\x00-\x1f]{1,200}\.pdf$/i.test(name));
 }
+/** 年末調整従業員PDFの平文ZIP。ZIP直下にファイル名を保つ。 */
+export function writeYearEndPdfZip(files: ZipFile[]): Blob {
+  return writeZipFiles(files, name => /^[^/\\\x00-\x1f\x7f]{1,160}\.pdf$/i.test(name) && !name.startsWith('.'));
+}
 function ensure(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
 /** 自前で作成したstore方式ZIPのみ読み込み。他のZIPは安全側で拒否する。 */
 export function readZip(buffer: ArrayBuffer): Map<string, Uint8Array> {

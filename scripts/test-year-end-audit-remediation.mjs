@@ -22,7 +22,7 @@ const sandbox={crypto:webcrypto,Blob,TextDecoder,Uint8Array,Number,Set,Map,Date,
  encryptJson:async(_,v)=>JSON.stringify(v),decryptJson:async(_,s)=>JSON.parse(s),
  encryptBytes:async(_,v)=>Buffer.from(v).toString('base64'),decryptBytes:async(_,v)=>new Uint8Array(Buffer.from(v,'base64')),
  isCollision:e=>e.message.includes('collision')};
-const api=runInNewContext(strip(read('src/yearEnd/model.ts'))+'\n'+strip(read('src/yearEnd/repository.ts'))+
+const api=runInNewContext(strip(read('src/yearEnd/model.ts'))+'\n'+strip(read('src/storage/fileNaming.ts'))+'\n'+strip(read('src/yearEnd/repository.ts'))+
  '\n({YearEndRepository,randomPersonId,randomDocumentId,emptyYear,validateYear,documentAmountWarnings,inconsistentDetectedNames})',sandbox);
 const id=api.randomPersonId(),yearId=api.randomDocumentId();
 const at='2026-11-19T00:00:00Z';

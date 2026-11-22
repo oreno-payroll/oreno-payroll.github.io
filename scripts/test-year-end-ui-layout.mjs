@@ -27,11 +27,19 @@ assert.match(ts,/backHome\.hidden=false/);assert.match(ts,/backHome\.hidden=true
 assert.match(ts,/yearContent\.dataset\.empty=data\.documents\.length===0\?'true':'false'/);
 assert.doesNotMatch(css,/\.yea-main\[data-empty="true"\] >/);
 assert.match(ts,/function showYearPlaceholders\(\)/);
-assert.ok(detail.indexOf('class="yea-context"')<detail.indexOf('class="card yea-upload-panel"'));
-assert.ok(detail.indexOf('class="card yea-upload-panel"')<detail.indexOf('class="yea-stats"'));
+assert.ok(detail.indexOf('class="yea-context"')<detail.indexOf('class="card yea-upload-panel yea-accordion"'));
+assert.ok(detail.indexOf('class="card yea-upload-panel yea-accordion"')<detail.indexOf('class="yea-stats"'));
 assert.doesNotMatch(detail,/月別給与の状態|id="yea-docs"|保存済み給与・賞与明細|yea-copy-raw|yea-copy|yea-replace-pdf/);
+assert.match(detail,/id="yea-taxable-breakdown"/,'taxable breakdown is an explicit audit view');
+for(const type of ['yea-upload-panel','yea-taxable-audit','yea-forecast-accordion']){
+ const opening=detail.match(new RegExp(`<details class="[^"]*${type}[^"]*yea-accordion[^"]*"[^>]*>\\s*<summary class="yea-upload-summary"><span class="yea-upload-chevron" aria-hidden="true"></span><strong`));
+ assert.ok(opening,`${type} must share the exact accordion header markup`);
+}
+assert.match(css,/\.yea-accordion\s*\{[^}]*padding:0!important/,'all accordions should share one container style');
+assert.match(css,/\.yea-accordion\[open\]>.yea-upload-summary\{border-bottom:/,'all accordions should share the open border');
+assert.doesNotMatch(css,/\.yea-taxable-audit>summary\s*\{/,'monthly breakdown must not override the shared header');
 assert.doesNotMatch(html,/yea-upload-target|id="yea-pdf-dialog"|iframe|本人への確認・転記|id="yea-review-ack"/);
-assert.match(html,/<details class="card yea-upload-panel" id="yea-upload-accordion" open>/);
+assert.match(html,/<details class="card yea-upload-panel yea-accordion" id="yea-upload-accordion" open>/);
 const start=detail.indexOf('id="yea-upload-accordion"');
 const summary=detail.indexOf('class="yea-upload-summary"',start);
 const list=detail.indexOf('id="yea-drafts"',start);

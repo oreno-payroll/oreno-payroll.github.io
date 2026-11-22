@@ -28,6 +28,10 @@
 .zone-privacy .icon { width: 13px; height: 13px; }
 
 .workspace { display: grid; grid-template-columns: minmax(0,.86fr) minmax(0,1.14fr); gap: 18px; align-items: start; }
+/* PDF未選択時はアップロード操作だけを表示し、空の一覧・確認欄を隠す。 */
+.workspace.is-empty { grid-template-columns: minmax(0,1fr); max-width: 760px; margin-inline: auto; }
+.workspace.is-empty .file-panel, .workspace.is-empty .review-panel { display: none; }
+.save-bar.is-empty { display: none; }
 .file-panel, .review-panel { min-width: 0; }
 .panel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .panel-title-row h2 { font-size: 17px; font-weight: 850; margin: 0; display: flex; align-items: center; gap: 10px; }
@@ -304,6 +308,7 @@
   .upload-page > .notice--privacy { flex: none; margin-bottom: 10px; padding: 7px 10px; font-size: 10px; }
   .upload-page > .notice--privacy .icon { width: 14px; height: 14px; }
   .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(175px, .37fr) minmax(215px, .63fr); gap: 9px; }
+  .workspace.is-empty { flex: none; grid-template-rows: auto; width: 100%; }
   .upload-left { display: flex; flex-direction: column; min-height: 0; gap: 8px; }
   .upload-left .upload-zone-card { flex: none; padding: 5px; }
   .upload-left .zone-content { min-height: 73px; padding: 7px; }

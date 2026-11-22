@@ -2,6 +2,7 @@
 <html lang="ja"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <script src="../frame-guard.js"></script>
 <script src="../theme.js"></script><title>保存済み明細の編集 | Payroll</title>
   <link rel="icon" type="image/x-icon" href="../favicon.ico">
   <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png"><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/upload.css"><link rel="stylesheet" href="../styles/vault.css"><script type="module" src="../edit.js"></script>
@@ -18,7 +19,7 @@
 <div class="vault-heading"><h1>保存済み明細を編集</h1><p>PDF原本は変更せず、OneDriveに暗号化保存された入力値を確認・修正します。</p></div>
 <div id="edit-error" class="vault-alert" role="alert" hidden></div>
 <div id="editor" hidden>
-<div class="saved-file card"><div><strong id="record-name"></strong><p id="record-details"></p></div><div class="saved-file__actions"><a id="original-pdf" class="btn btn--secondary" target="_blank" rel="noopener noreferrer">原本を見る</a><a id="download-pdf" class="btn btn--icon" title="原本PDFをダウンロード" aria-label="原本PDFをダウンロード"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></a><button id="edit-delete" type="button" class="btn btn--danger-outline" title="保存済みの明細とPDF原本を削除"><svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>削除</button></div></div>
+<div class="saved-file card"><div><strong id="record-name"></strong><p id="record-details"></p></div><div class="saved-file__actions"><a id="original-pdf" class="btn btn--secondary" target="_blank" rel="noopener noreferrer">原本を見る</a><a id="download-pdf" class="btn btn--icon" title="原本PDFをダウンロード" aria-label="原本PDFをダウンロード"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></a><button id="edit-delete" type="button" class="btn btn--danger-outline" title="明細を削除（PDF原本はOneDriveに保持）" aria-label="明細を削除（PDF原本はOneDriveに保持）"><svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>削除</button></div></div>
 <section class="card review-panel saved-editor-panel" aria-label="保存データの編集">
 
             <form id="review-form" novalidate>

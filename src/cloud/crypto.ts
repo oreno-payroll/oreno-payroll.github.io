@@ -38,21 +38,13 @@ function unbase64(value: unknown, max = 100_000_000): Uint8Array<ArrayBuffer> {
   return b;
 }
 export function createSalt(): string { return base64(crypto.getRandomValues(new Uint8Array(16))); }
-export async function deriveKey(passphrase: string, salt: string, capture?: (material: Uint8Array) => void): Promise<CryptoKey> {
+export async function deriveKey(passphrase: string, salt: string): Promise<CryptoKey> {
   if ([...passphrase].length < 12) throw new Error('復号パスフレーズは12文字以上にしてください。');
   const bytes = unbase64(salt, 32);
   if (bytes.byteLength !== 16) throw new Error('保管庫の暗号ソルトが不正です。');
-  const params = {name:'PBKDF2' as const,salt:bytes,iterations:ITERATIONS,hash:'SHA-256'};
-  const base = await crypto.subtle.importKey('raw', encoder.encode(passphrase), 'PBKDF2', false, capture ? ['deriveBits'] : ['deriveKey']);
-  if (!capture) return crypto.subtle.deriveKey(params,base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
-  // Opt-in only. The raw key exists briefly so sessionStorage can keep a tab-scoped unlock.
-  // The operational key remains non-extractable, and the temporary bytes are zeroed.
-  const raw=new Uint8Array(await crypto.subtle.deriveBits(params,base,256));
-  try {
-    const key=await crypto.subtle.importKey('raw',raw,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
-    capture(raw);
-    return key;
-  } finally { raw.fill(0); }
+  const base = await crypto.subtle.importKey('raw', encoder.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:bytes,iterations:ITERATIONS,hash:'SHA-256'},
+    base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 export async function encryptBytes(kind: EnvelopeKind, bytes: Uint8Array, key: CryptoKey, salt?: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));

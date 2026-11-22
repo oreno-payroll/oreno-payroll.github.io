@@ -1,10 +1,10 @@
 import { createAppStatus } from './ui/appStatus';
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
-import type {OrphanAnnualYear} from './cloud/vault';
+import type {OrphanAnnualYear,DetachedOriginalReport,DetachedOriginal} from './cloud/vault';
 import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, verifyLegacyIndexedDbCloudBeforeDelete, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
-import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,cloudRedirectUri} from './cloud/auth';
+import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,signOutMicrosoftAccount,reconnectMicrosoftAccount,cloudRedirectUri,currentBrowserRememberState,rememberCurrentBrowser,forgetCurrentBrowser} from './cloud/auth';
 import {clearNavigationSnapshot} from './cloud/snapshot';
 import type {CloudFolderItem} from './cloud/graph';
 import {YearEndRepository,type YearEndRestorePreview} from './yearEnd/repository';
@@ -34,6 +34,12 @@ const changeConfirm=$<HTMLInputElement>('change-confirm');
 const changeAck=$<HTMLInputElement>('change-ack');
 const changeButton=$<HTMLButtonElement>('change-passphrase-button');
 const changeStatus=$<HTMLElement>('change-passphrase-status');
+const browserKeyState=$<HTMLElement>('remember-browser-state');
+const browserKeyRegister=$<HTMLButtonElement>('remember-browser-register');
+const browserKeyForget=$<HTMLButtonElement>('remember-browser-forget');
+const browserKeyFeedback=$<HTMLElement>('remember-browser-feedback');
+let browserKeyStateValue:'pending'|'saved'|'missing'|'unavailable'='pending';
+
 type OldCloudPlan={generation:string;indexEtag:string;targets:Array<{parent:string[];item:CloudFolderItem}>;files:number;bytes:number};
 let oldCloudPlan:OldCloudPlan|undefined;
 const cloudCheck=$<HTMLButtonElement>('cloud-cleanup-check');
@@ -46,6 +52,11 @@ let orphanYears:OrphanAnnualYear[]|undefined;
 const orphanCheck=$<HTMLButtonElement>('orphan-year-check');
 const orphanRecover=$<HTMLButtonElement>('orphan-year-recover');
 const orphanStatus=$<HTMLElement>('orphan-year-status');
+const detachedCheck=$<HTMLButtonElement>('detached-original-check');
+const detachedStatus=$<HTMLElement>('detached-original-status');
+const detachedList=$<HTMLElement>('detached-original-list');
+let detachedReport:DetachedOriginalReport|undefined;
+let detachedPage=0;
 let preview: LoadedBackup | undefined;
 let currentCount = 0;
 let initialSnapshot: string[] | undefined;
@@ -65,6 +76,7 @@ const operations: Record<string,Operation>={
  'cloud-cleanup-delete':{label:'旧暗号データを整理',result:'cloud-cleanup-status'},
  'orphan-year-check':{label:'年度データを検査',result:'orphan-year-status'},
  'orphan-year-recover':{label:'年度データを復旧',result:'orphan-year-status'},
+ 'detached-original-check':{label:'未参照PDFを検査',result:'detached-original-status'},
  'payroll-income-publish':{label:'Finance連携を更新',result:'payroll-income-publish-status'},
  'migrate-legacy-cloud':{label:'旧データを移行',result:'migrate-legacy-cloud-status'},
  'legacy-cleanup-check':{label:'旧DBを検査',result:'legacy-cleanup-status'},
@@ -138,6 +150,8 @@ function showYearEndPlan(plan:YearEndRestorePreview){
 function updateButtons(): void {
   reportStatusTransition();
   orphanCheck.disabled=busy;orphanRecover.disabled=busy||!orphanYears?.length;
+  detachedCheck.disabled=busy;
+  detachedList.querySelectorAll<HTMLButtonElement>('button').forEach(button=>button.disabled=busy);
   exportButton.disabled = busy || !loadedDb;
   yearEndExport.disabled=busy;yearEndVerify.disabled=busy||!yearEndFile.files?.length||!yearEndRestorePassword.value;
   yearEndCommit.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable||!yearEndAck.checked;yearEndAck.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable;
@@ -146,13 +160,19 @@ function updateButtons(): void {
   for(const item of [yearEndPassword,yearEndConfirm,yearEndFile,yearEndRestorePassword])item.disabled=busy;
   cloudLoad.disabled=busy;
   changeButton.disabled=busy;
+  browserKeyRegister.hidden=browserKeyStateValue!=='missing';
+  browserKeyForget.hidden=browserKeyStateValue!=='saved';
+  browserKeyRegister.disabled=busy||browserKeyStateValue!=='missing';
+  browserKeyForget.disabled=busy||browserKeyStateValue!=='saved';
+  const logoutControl=document.getElementById('backup-cloud-logout') as HTMLButtonElement|null;
+  if(logoutControl)logoutControl.disabled=busy||Boolean(logoutControl.hidden);
   $<HTMLButtonElement>('payroll-income-publish').disabled=busy;
   cloudCheck.disabled=busy;cloudDelete.disabled=busy||!oldCloudPlan;localCheck.disabled=busy;localDelete.disabled=busy;
   for(const item of [changeCurrent,changeNew,changeConfirm,changeAck])item.disabled=busy;
   filePicker.disabled = busy;
   document.querySelector<HTMLButtonElement>('#migrate-legacy-cloud')?.toggleAttribute('disabled',busy);
   restorePassword.disabled = busy || !encryptedFile;
-  verifyButton.disabled = busy || !encryptedFile || !filePicker.files?.length || !restorePassword.value;
+  verifyButton.disabled = busy || !filePicker.files?.length || (encryptedFile && !restorePassword.value);
   ack.disabled = busy || !preview;
   restoreButton.disabled = busy || !preview || !ack.checked;
 }
@@ -232,30 +252,29 @@ async function verifyRestore(file: File, password?: string): Promise<void> {
 filePicker.addEventListener('change', async () => {
   resetPreview();
   restorePassword.value = '';
+  encryptedFile = false;
   const file = filePicker.files?.[0];
   if (!file) { restorePreview.textContent = 'バックアップファイルを選択してください。'; return; }
   busy = true; updateButtons();
   try {
     encryptedFile = await isEncryptedBackup(file);
-    restorePasswordRow.hidden = !encryptedFile;
-    verifyButton.hidden = !encryptedFile;
+    restorePasswordRow.dataset.backupFormat = encryptedFile ? 'encrypted' : 'legacy-zip';
     if (encryptedFile) {
       restorePreview.textContent = '暗号化バックアップ。パスワードを入力して検証してください。';
       info('暗号化バックアップを検出しました。');
     } else {
-      restorePreview.textContent = 'ZIPファイルを検証中…';
+      restorePreview.textContent = '旧ZIPバックアップ。パスワードは不要です。「ファイルを検証」を押してください。';
     }
   } catch (error) {
     info(`ファイルを読み取れませんでした: ${error instanceof Error ? error.message : String(error)}`, true);
     return;
   } finally { busy = false; updateButtons(); }
-  if (!encryptedFile) await verifyRestore(file);
 });
 restorePassword.addEventListener('input', () => { resetPreview(); updateButtons(); });
 verifyButton.addEventListener('click', async () => {
   const file = filePicker.files?.[0];
-  if (!file || !encryptedFile || busy) return;
-  await verifyRestore(file, restorePassword.value);
+  if (!file || busy || (encryptedFile && !restorePassword.value)) return;
+  await verifyRestore(file, encryptedFile ? restorePassword.value : undefined);
 });
 ack.addEventListener('change', updateButtons);
 restoreButton.addEventListener('click', async () => {
@@ -276,19 +295,55 @@ restoreButton.addEventListener('click', async () => {
     busy = false; updateButtons();
   }
 });
+async function refreshBrowserKeyState():Promise<void>{
+ const state=await currentBrowserRememberState();
+ browserKeyStateValue=state;
+ browserKeyState.textContent=state==='saved'?'このブラウザ：記憶済み':state==='missing'?'このブラウザ：未登録':'保存鍵を確認できません';
+ updateButtons();
+}
+browserKeyRegister.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ busy=true;updateButtons();browserKeyFeedback.textContent='現在のOneDrive索引と鍵を確認しています…';
+ try{
+  await rememberCurrentBrowser();
+  browserKeyFeedback.textContent='このブラウザを記憶しました。次回から同じMicrosoftアカウントで自動解除できます。';
+ }catch(error){browserKeyFeedback.textContent=`登録できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ finally{busy=false;await refreshBrowserKeyState();updateButtons();}
+})()});
+browserKeyForget.addEventListener('click',()=>{void(async()=>{
+ if(busy||browserKeyStateValue!=='saved')return;
+ if(!window.confirm('このブラウザの保存鍵を削除し、開いているPayrollのすべてのタブをロックします。次回はパスフレーズで解除してください。続けますか？'))return;
+ busy=true;updateButtons();browserKeyFeedback.textContent='保存鍵を削除しています…';
+ try{await forgetCurrentBrowser();busy=false;window.location.reload();}
+ catch(error){browserKeyFeedback.textContent=`記憶を解除できませんでした：${error instanceof Error?error.message:String(error)}`;busy=false;await refreshBrowserKeyState();updateButtons();}
+})()});
+
 const cloudState=$<HTMLElement>('backup-cloud-status');
 const cloudLogin=$<HTMLButtonElement>('backup-cloud-login');
+const cloudReconnect=$<HTMLButtonElement>('backup-cloud-reconnect');
+const cloudLogout=$<HTMLButtonElement>('backup-cloud-logout');
 const cloudId=$<HTMLInputElement>('backup-cloud-client-id');
 const cloudSave=$<HTMLButtonElement>('backup-cloud-save');
 $<HTMLElement>('backup-cloud-redirect-uri').textContent=cloudRedirectUri();
 async function refreshCloudSettings():Promise<boolean>{
  const state=await cloudConnectionState();
  cloudId.value=state.clientId;
- cloudState.textContent=state.error??(state.user?`サインイン済み · ${state.user}`:state.clientId?'未ログイン':'Client ID未設定');
- cloudState.dataset.error=String(Boolean(state.error));
+ cloudState.textContent=state.status==='connected'?`Microsoft認証済み · ${state.user??'Microsoftアカウント'}`:
+  state.status==='reauth'?`Microsoftアカウントの再認証が必要 · ${state.user??''}`:
+  state.status==='temporary'?'一時的にMicrosoft認証を確認できません。通信を確認してください。':
+  state.clientId?'Microsoftアカウントが未接続':'Client ID未設定';
+ cloudState.dataset.error=String(state.status==='reauth'||state.status==='temporary');
  cloudLogin.disabled=!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(state.clientId);
- cloudLogin.textContent=state.user?'別のアカウントでログイン':'Microsoftにログイン';
- return Boolean(state.user);
+ cloudLogin.textContent=state.user?'別のアカウントでログイン':'Microsoftアカウントを選択';
+ cloudReconnect.hidden=state.status==='connected'||!state.clientId;
+ cloudReconnect.disabled=busy||!state.clientId;
+ cloudReconnect.textContent=state.status==='temporary'?'接続を再確認':'Microsoftに再接続';
+ // MSAL may cache multiple identities even when none is selected.
+ // Allow an explicit all-account sign-out whenever the Client ID is valid.
+ const canSignOut=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(state.clientId);
+ cloudLogout.hidden=!canSignOut;
+ cloudLogout.disabled=busy||!canSignOut;
+ return state.status==='connected';
 }
 cloudSave.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
@@ -300,11 +355,32 @@ cloudSave.addEventListener('click',()=>{void(async()=>{
  }catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';}
  finally{cloudSave.disabled=false;}
 })()});
+cloudReconnect.addEventListener('click',()=>{void(async()=>{
+ if(busy)return;
+ cloudReconnect.disabled=true;
+ try{await reconnectMicrosoftAccount();await refreshCloudSettings();}
+ catch(error){cloudState.textContent=error instanceof Error?error.message:'Microsoft認証を確認できませんでした。';cloudState.dataset.error='true';}
+ finally{cloudReconnect.disabled=false;}
+})()});
 cloudLogin.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
  cloudLogin.disabled=true;
  try{await chooseMicrosoftAccount();}
  catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';cloudLogin.disabled=false;}
+})()});
+let logoutRedirectReady=false;
+cloudLogout.addEventListener('click',()=>{void(async()=>{
+ if(busy||cloudLogout.disabled)return;
+ if(!window.confirm('PayrollからMicrosoftアカウントをサインアウトします。\n\nこのブラウザに記憶したPayrollの鍵をすべて削除し、開いているPayrollのタブをロックして、Microsoftのサインアウト画面に移動します。続けますか？'))return;
+ busy=true;updateButtons();cloudLogout.disabled=true;
+ cloudState.textContent='Payrollをロックし、鍵の消去を確認しています…';
+ try{await signOutMicrosoftAccount(()=>{logoutRedirectReady=true;});}
+ catch(error){
+  logoutRedirectReady=false;busy=false;updateButtons();
+  // Once the vault is locked, do not redisplay old decrypted DOM content.
+  window.alert(`サインアウトを完了できませんでした。Payrollはロックしたまま再読み込みします。\n${error instanceof Error?error.message:'通信エラー'}\n\n鍵の削除が確認できなかった場合は、再読み込み後にもう一度サインアウトを実行してください。`);
+  window.location.reload();
+ }
 })()});
 // 旧DBが見つかればクラウド解除の自動開始を避け、ローカルの整理を優先する。
 // 明細を読み込みたい場合だけ、利用者が明示的にOneDrive読み込みを開始する。
@@ -329,6 +405,7 @@ void(async()=>{
   updateButtons();
  }
  const connected=await refreshCloudSettings();
+ void refreshBrowserKeyState();
  if(legacyExists){appStatus.clear();return;}
  if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';appStatus.clear();return;}
  await refreshCount();updateButtons();appStatus.success('設定を読み込みました');
@@ -409,7 +486,7 @@ migrateButton?.addEventListener('click',()=>{void(async()=>{
 
 // データ書換中はタブを閉じる前に確認。ページ遷移ではロックと転送状況を守る。
 window.addEventListener('beforeunload',event=>{
- if(busy){event.preventDefault();event.returnValue='';}
+ if(busy&&!logoutRedirectReady){event.preventDefault();event.returnValue='';}
 });
 changeButton.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
@@ -428,9 +505,13 @@ changeButton.addEventListener('click',()=>{void(async()=>{
   await vault.changePassphrase(changeCurrent.value,changeNew.value,value=>{stage=value;report();});
   // 移行はこの時点でOneDriveに確定済み。旧タブ鍵を消し、メモリ鍵を更新する。
   changeCurrent.value='';changeNew.value='';changeConfirm.value='';changeAck.checked=false;
-  try{await refreshSessionAfterKeyRotation();}
+  let remembered:'updated'|'not-registered'|'storage-warning';
+  try{remembered=await refreshSessionAfterKeyRotation();}
   catch{changeStatus.textContent='OneDriveの変更は完了しました。セッションの引継ぎに失敗したため、次回は新しいパスフレーズで解除してください。';return;}
-  changeStatus.textContent='パスフレーズを変更しました。次回の解除には新しいパスフレーズを使用してください。';
+  changeStatus.textContent=remembered==='updated'?'パスフレーズを変更し、このブラウザの記憶鍵も更新しました。':
+   remembered==='storage-warning'?'パスフレーズの変更は完了しましたが、ブラウザ記憶の更新・削除を確認できませんでした。設定から確認してください。':
+   'パスフレーズを変更しました。次回の解除には新しいパスフレーズを使用してください。';
+  await refreshBrowserKeyState();
  }catch(error){changeStatus.textContent=`変更を完了できませんでした: ${error instanceof Error?error.message:String(error)}`;}
  finally{clearInterval(timer);busy=false;updateButtons();}
 })()});
@@ -459,6 +540,74 @@ cloudDelete.addEventListener('click',()=>{void(async()=>{
   cloudStatus.textContent=`旧暗号フォルダー ${count}件をごみ箱に移動しました。完全に消す場合はOneDriveのごみ箱も空にしてください。`;
  }catch(error){cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
+})()});
+// 暗号化原本の管理は本人用のみ。どの操作も最新年度・索引・原本ETagを再検証する。
+function clearDetachedReport():void{detachedReport=undefined;detachedPage=0;detachedList.replaceChildren();}
+function detachedItemLabel(item:DetachedOriginal):string{return `${item.month} / ${item.uuid.slice(0,8)}… / ${sizes(item.size)}`;}
+async function downloadDetached(item:DetachedOriginal,report:DetachedOriginalReport):Promise<void>{
+  const vault=await cloudVault();
+  const pdf=await vault.retrieveDetachedOriginal(report,item);
+  const link=document.createElement('a');
+  const url=URL.createObjectURL(pdf);
+  try{
+    link.href=url;link.download=`payroll-unreferenced-${item.month}-${item.uuid}.pdf`;
+    document.body.append(link);link.click();link.remove();
+  }finally{setTimeout(()=>URL.revokeObjectURL(url),30_000);}
+}
+function renderDetachedReport(report:DetachedOriginalReport):void{
+  detachedList.replaceChildren();
+  const pages=Math.ceil(report.originals.length/200);
+  detachedPage=Math.min(detachedPage,Math.max(0,pages-1));
+  for(const item of report.originals.slice(detachedPage*200,(detachedPage+1)*200)){
+    const row=document.createElement('li');row.className='detached-original-row';
+    const name=document.createElement('span');name.textContent=detachedItemLabel(item);
+    const actions=document.createElement('div');actions.className='detached-original-actions';
+    const retrieve=document.createElement('button');retrieve.type='button';retrieve.className='btn btn--secondary';retrieve.textContent='PDFを回収';
+    retrieve.addEventListener('click',()=>{void(async()=>{
+      if(busy||!detachedReport)return;
+      busy=true;updateButtons();detachedStatus.textContent='原本を復号・検証しています…';
+      try{await downloadDetached(item,report);detachedStatus.textContent='PDFをダウンロードしました。再登録する場合はアップロード画面から取り込んでください。';}
+      catch(error){clearDetachedReport();detachedStatus.textContent=`原本の回収に失敗しました。再検査してください：${error instanceof Error?error.message:String(error)}`;}
+      finally{busy=false;updateButtons();}
+    })();});
+    const trash=document.createElement('button');trash.type='button';trash.className='btn btn--danger-outline';trash.textContent='ごみ箱へ移動';
+    trash.addEventListener('click',()=>{void(async()=>{
+      if(busy||!detachedReport)return;
+      if(!confirm(`${detachedItemLabel(item)}\nこのPDFは現在の本人明細から参照されていません。\n削除済み明細の原本だけでなく、保存中断で残ったPDFの可能性もあります。\nバックアップを別途保存しましたか？`))return;
+      if(prompt('OneDriveのごみ箱に移動します。実行するには「原本整理」と入力してください。')!=='原本整理')return;
+      busy=true;updateButtons();detachedStatus.textContent='参照先と原本の内容を再検証しています…';
+      try{
+        const vault=await cloudVault();
+        await vault.trashDetachedOriginal(report,item);
+        clearDetachedReport();
+        detachedStatus.textContent='PDF原本をごみ箱へ移動しました。完全消去が必要ならOneDrive側のごみ箱も確認してください。残りの原本を見るには再検査してください。';
+      }catch(error){clearDetachedReport();detachedStatus.textContent=`原本整理を中断しました。最新の状態を再検査してください：${error instanceof Error?error.message:String(error)}`;}
+      finally{busy=false;updateButtons();}
+    })();});
+    actions.append(retrieve,trash);row.append(name,actions);detachedList.append(row);
+  }
+  if(pages>1){
+    const pager=document.createElement('li');pager.className='detached-original-pager';
+    const prev=document.createElement('button');prev.type='button';prev.className='btn btn--secondary';prev.textContent='前の200件';prev.disabled=detachedPage===0;
+    const next=document.createElement('button');next.type='button';next.className='btn btn--secondary';next.textContent='次の200件';next.disabled=detachedPage>=pages-1;
+    const current=document.createElement('span');current.textContent=`${detachedPage+1} / ${pages}ページ`;
+    prev.addEventListener('click',()=>{detachedPage--;renderDetachedReport(report);});
+    next.addEventListener('click',()=>{detachedPage++;renderDetachedReport(report);});
+    pager.append(prev,current,next);detachedList.append(pager);
+  }
+}
+detachedCheck.addEventListener('click',()=>{void(async()=>{
+  if(busy)return;
+  clearDetachedReport();busy=true;updateButtons();detachedStatus.textContent='OneDriveの全年度と暗号化PDF原本を照合しています…';
+  try{
+    const vault=await cloudVault();
+    const report=await vault.inspectDetachedOriginals();
+    detachedReport=report;renderDetachedReport(report);
+    detachedStatus.textContent=report.originals.length
+      ?`未参照の暗号化PDF原本 ${report.originals.length}件（${sizes(report.originals.reduce((sum,item)=>sum+item.size,0))}）。削除済み明細・中断した保存の区別はできません。${report.originals.length>200?'200件ずつ表示します。':''}`
+      :'未参照の暗号化PDF原本はありません。';
+  }catch(error){clearDetachedReport();detachedStatus.textContent=`原本を検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  finally{busy=false;updateButtons();}
 })()});
 // 旧DBは任意検査可能。削除時はOneDriveの全件照合に成功した場合のみ実行する。
 localCheck.addEventListener('click',()=>{void(async()=>{

@@ -41,15 +41,34 @@ const encoder=new TextEncoder();
  const http=async url=>{
   if(url.endsWith('/me/drive/special/approot')){
    roots++;
-   return roots===1?new Response(JSON.stringify({error:{code:'outage'}}),{status:503,headers:{'content-type':'application/json'}}):Response.json({id:'root'});
+   return roots===1
+    ? Response.json({error:{code:'outage'}},{status:503,headers:{'Retry-After':'0'}})
+    : Response.json({id:'root'});
+  }
+  return new Response(null,{status:404});
+ };
+ const g=new PayrollGraph('token',http);
+ assert.equal(await g.read(['payroll'],'file.enc',100),null);
+ assert.equal(roots,2,'a transient 503 must retry the read-only root lookup once');
+ console.log('PASS: a transient root 503 is retried and recovers');
+}
+{
+ let roots=0;
+ const http=async url=>{
+  if(url.endsWith('/me/drive/special/approot')){
+   roots++;
+   return roots<=3
+    ? Response.json({error:{code:'outage'}},{status:503,headers:{'Retry-After':'0'}})
+    : Response.json({id:'root'});
   }
   return new Response(null,{status:404});
  };
  const g=new PayrollGraph('token',http);
  await assert.rejects(g.read(['payroll'],'file.enc',100),/HTTP 503/);
+ assert.equal(roots,3,'a persistent 503 must stop after two safe retries');
  assert.equal(await g.read(['payroll'],'file.enc',100),null);
- assert.equal(roots,2,'a failed shared lookup cannot poison the retry cache');
- console.log('PASS: failed root lookup is retried, not cached');
+ assert.equal(roots,4,'an exhausted failed root lookup must not poison the shared cache');
+ console.log('PASS: persistent root 503 fails after bounded retries; next lookup recovers');
 }
 class FakeGraph {
  files=new Map(); reads=new Map(); writes=new Map(); yearStarts=[]; activeYears=0;maxYears=0;

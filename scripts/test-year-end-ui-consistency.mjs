@@ -23,7 +23,10 @@ const originalButton=/<button[^>]*class="btn btn--soft btn--small"[^>]*id="yea-o
 assert.match(html, originalButton);
 assert.match(normal, /id="open-pdf"[^>]*><svg[^>]*><use href="#icon-external"><\/use><\/svg>原本を見る<\/button>/);
 assert.doesNotMatch(html, /yea-replace|yea-copy|yea-copy-raw/);
-assert.match(ui, /await repo\.deleteDocument\(id,year,r\.id\)/);
+assert.doesNotMatch(ui, /await repo\.deleteDocument\(id,year,r\.id\)/);
+assert.match(ui, /pendingDeletions\.set\(r\.id,r\.revision\)/);
+assert.match(ui, /pendingDeletions\.delete\(record\.id\)/);
+assert.match(ui, /repo\.saveDocumentsBatch\(id,year,/);
 assert.match(ui, /remove\.append\(uploadIcon\('close'\)\)/);
 assert.match(ui, /fileQueue=fileQueue\.filter\(x=>x!==item\)/);
 

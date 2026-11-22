@@ -2,6 +2,8 @@
  * neither passphrases nor keys nor salary data ever enter this channel. */
 const GLOBAL_LOCK_EPOCH = 'payroll-global-vault-lock-epoch-v1';
 const TAB_UNLOCK_EPOCH = 'payroll-tab-unlock-lock-epoch-v1';
+// Stores permission only, not the key. A manual lock revokes permission across restarts.
+const PERSISTENT_AUTO_EPOCH = 'payroll-browser-auto-unlock-epoch-v1';
 const CHANNEL_NAME = 'payroll-global-vault-lock-v1';
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -32,8 +34,9 @@ function defaultEnvironment():TabLockEnvironment {
 function get(store:Store|null,key:string):string {
  try{return store?.getItem(key)??'';}catch{return '';}
 }
-function put(store:Store|null,key:string,value:string):void {
- try {store?.setItem(key,value);}catch{}
+function put(store:Store|null,key:string,value:string):boolean {
+ if(!store)return false;
+ try {store.setItem(key,value);return true;}catch{return false;}
 }
 function drop(store:Store|null,key:string):void {
  try {store?.removeItem(key);}catch{}
@@ -72,6 +75,14 @@ export function createTabLockCoordinator(onRemoteLock:()=>void, env:TabLockEnvir
   check,
   /** Capture before an awaited unlock; check again before accepting its result. */
   epoch():string {check();return observed;},
+  canAutoResumePersistent():boolean {
+   return check()&&get(env.local,PERSISTENT_AUTO_EPOCH)===(observed||'initial');
+  },
+  permitPersistentAutoResume(startEpoch:string):boolean {
+   if(!check()||observed!==startEpoch)return false;
+   return put(env.local,PERSISTENT_AUTO_EPOCH,observed||'initial');
+  },
+  suspendPersistentAutoResume():void {drop(env.local,PERSISTENT_AUTO_EPOCH);},
   canResume():boolean {
    if(!check())return false;
    const epoch=get(env.local,GLOBAL_LOCK_EPOCH);
@@ -89,6 +100,8 @@ export function createTabLockCoordinator(onRemoteLock:()=>void, env:TabLockEnvir
    observed=epoch;locked=!keepCurrent;
    if(keepCurrent)put(env.tab,TAB_UNLOCK_EPOCH,epoch);
    else drop(env.tab,TAB_UNLOCK_EPOCH);
+   // Any lock or account/cryptographic generation switch revokes automatic use.
+   drop(env.local,PERSISTENT_AUTO_EPOCH);
    put(env.local,GLOBAL_LOCK_EPOCH,epoch);
    try{env.channel?.postMessage({type:'lock',epoch});}catch{}
   },

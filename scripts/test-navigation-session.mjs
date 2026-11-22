@@ -123,7 +123,7 @@ for(const id of ['backup-cloud-status','backup-cloud-login','backup-cloud-client
  assert.equal((html.match(new RegExp(`id="${id}"`,'g'))??[]).length,1,'missing or duplicate id: '+id);
  assert.ok(backup.includes(id),'event handler missing: '+id);
 }
-assert.match(auth,/const redirectUri=\(\)=>new URL\('\.\/',import\.meta\.url\)\.href/,'all routes use one OAuth redirect');
+assert.match(auth,/const redirectUri=\(\)=>new URL\('\.\/auth\/redirect\.html',import\.meta\.url\)\.href/,'MSAL v5 uses a dedicated redirect bridge');
 assert.match(backup,/cloudConnectionState\(\)/,'Microsoft account status without forced unlock');
 assert.match(auth,/sessionScope\(clientId\(\),user\)/,'account-scoped keys');
 assert.match(home,/event\.persisted && \(dashboardMutationEpoch!==mutationEpoch\(\)/,'no automatic full fetch on unchanged back navigation');

@@ -1,6 +1,7 @@
 import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
+import { capturePdfHandoffAuthorization } from './cloud/auth';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
 import { deleteRecord, getRecord, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import {PayrollPartialSuccessError} from './storage/operationError';
@@ -288,7 +289,7 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     const handoffPdf = () => preparePdfHandoff(link, record.id, async () => ({
       fileName: record.fileName,
       pdf: await getOriginalForCurrentView(record.id, recordSignature(record)),
-    }));
+    }), capturePdfHandoffAuthorization());
     link.addEventListener('click', event => { if (!event.defaultPrevented) handoffPdf(); });
     link.addEventListener('auxclick', event => { if (event.button === 1 && !event.defaultPrevented) handoffPdf(); });
     // The PDF name already conveys its period/type. Keep only useful figures below it.

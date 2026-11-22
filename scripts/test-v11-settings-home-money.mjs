@@ -22,11 +22,11 @@ for(const id of ['settings-finance-income-title','settings-orphan-title']){
  assert.ok(node>=0 && node<next && next<action,`${id}: heading, description, then action`);
 }
 assert.doesNotMatch(settings,/class="settings-detail-head"/);
-assert.equal((settings.match(/class="settings-details-column/g)||[]).length,3);
+assert.equal((settings.match(/class="settings-details-column/g)||[]).length,4);
 for(const id of ['payroll-income-publish','orphan-year-check','orphan-year-recover','legacy-cleanup-check','migrate-legacy-cloud','legacy-cleanup-delete']) {
  assert.equal((settings.match(new RegExp(`id="${id}"`,'g'))||[]).length,1,id);
 }
-assert.match(vault,/grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+assert.match(vault,/grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
 assert.match(vault,/min-height:\s*40px/);
 assert.match(vault,/@media \(max-width: 850px\)/);
-console.log('PASS: financial totals restored without repetitive metadata; 3 settings columns share hierarchy and actions');
+console.log('PASS: financial totals restored without repetitive metadata; 4 settings cells share hierarchy and actions');

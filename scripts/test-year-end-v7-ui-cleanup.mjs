@@ -13,6 +13,6 @@ assert.doesNotMatch(html, /賞与は必要な場合のみ入力してくださ�
 assert.doesNotMatch(css, /\.yea-month\[data-state="actual"\] \.yea-month__head::after/);
 assert.doesNotMatch(ts, /amount\.title='確定済み給与/);
 assert.doesNotMatch(css, /cursor:not-allowed/);
-assert.match(css, /:is\(\.yea-upload-panel,\.yea-forecast-accordion\)\[open\]>\.yea-upload-summary \.yea-upload-chevron\{transform:rotate\(45deg\)\}/);
+assert.match(css, /\.yea-accordion\[open\]>\.yea-upload-summary \.yea-upload-chevron\{transform:rotate\(45deg\)\}/);
 assert.match(css, /\.yea-upload-chevron\{[^}]*transform:rotate\(-45deg\)/);
-console.log('PASS: placeholders, lean month cards, neutral disabled cursors and chevrons for BOTH accordions');
+console.log('PASS: placeholders, lean month cards, neutral disabled cursors and chevrons for ALL accordions');

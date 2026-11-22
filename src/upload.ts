@@ -92,6 +92,9 @@ const analysisIssuesCount = $<HTMLElement>("analysis-issues-count");
 const saveButton = $<HTMLButtonElement>("save-all");
 const saveButtonLabel = $<HTMLSpanElement>("save-all-label");
 const saveStatus = $<HTMLElement>("save-status");
+const uploadGuide = $<HTMLParagraphElement>("upload-guide");
+const workspace = document.querySelector<HTMLElement>(".workspace")!;
+const saveBar = document.querySelector<HTMLElement>(".save-bar")!;
 const saveFeedback = $<HTMLElement>("save-feedback");
 const saveStage = $<HTMLElement>("save-stage");
 const saveElapsed = $<HTMLElement>("save-elapsed");
@@ -252,8 +255,8 @@ function statusLabel(entry: Entry): { label: string; variant: string } {
       ? { label: "確認済み", variant: "confirmed" }
       : { label: "要確認", variant: "warning" };
     case "duplicate": return { label: "要確認", variant: "warning" };
-    // 読み取り不能PDFは「要確認」と表示するが、保存自体は許可しない。
-    case "error": return { label: "要確認", variant: "warning" };
+    // 解析不能で保存不可。入力の手動確認で解消できる「要確認」と分ける。
+    case "error": return { label: "読み取り失敗", variant: "error" };
   }
 }
 function renderFileList(): void {
@@ -765,10 +768,15 @@ function updateSaveState(): void {
   // ボタン名を切り替えず、確認済みは左側のステータスと直下のメッセージで示す。
   saveButton.disabled = saving || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0;
   saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
+  const isEmpty=entries.length===0;
+  workspace.classList.toggle('is-empty',isEmpty);
+  saveBar.classList.toggle('is-empty',isEmpty&&!saving);
+  saveStatus.hidden=isEmpty&&!saving;
+  uploadGuide.textContent=isEmpty?'PDFを追加してください。':saving?'OneDriveへ保存しています…':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
   if (saving) {
     saveStatus.textContent = `${entries.length}件のPDFと明細を保存しています…`;
   } else if (!entries.length) {
-    saveStatus.textContent = "PDFを追加すると、ここからまとめて保存できます。";
+    saveStatus.textContent = "";
   } else if (pending) {
     saveStatus.textContent = `PDFの解析完了後に保存できます（全${entries.length}件）。`;
   } else if (badPdf) {

@@ -17,6 +17,7 @@ assert.doesNotMatch(edit,/入力情報とPDF原本が削除されます|件を�
 assert.match(vault,/async remove\(id:number\):Promise<void>\s*\{/);
 assert.match(vault,/PDF原本は事故時の復元と監査のためOneDriveに保持/);
 assert.match(readme,/OneDrive暗号化給与明細管理/);
-assert.match(readme,/旧DBを削除.*OneDriveとの照合なし/);
+assert.match(readme,/旧DBを削除.*OneDriveにある明細と暗号化PDF原本を全件照合/);
+assert.doesNotMatch(readme,/旧DBの削除のみならOneDrive接続は必要ありません|OneDriveとの照合なしで実行できます/);
 assert.doesNotMatch(readme,/ブラウザのIndexedDBへ保存します|外部APIに送信しません|単一のIndexedDBトランザクション|サーバーへ自動保存しません|IndexedDB全件置換|（\*\*削除しない\*\*）/);
 console.log('PASS: 削除確認・元PDF保持・OneDrive READMEの整合性');

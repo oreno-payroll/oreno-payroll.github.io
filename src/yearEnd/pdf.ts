@@ -26,9 +26,9 @@ function documentName(cells:PdfTextCell[]):string|null {
  }
  return found.size===1?[...found][0]:null;
 }
-export async function parseAssistedPdf(file:File):Promise<DraftDocument>{
+export async function parseAssistedPdf(file:File,existingBytes?:ArrayBuffer):Promise<DraftDocument>{
  if(file.size<5||file.size>MAX_BYTES)throw new Error('PDFは1件25MB以内にしてください。');
- const bytes=await file.arrayBuffer();
+ const bytes=existingBytes??await file.arrayBuffer();
  if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw new Error('PDF形式ではありません。');
  GlobalWorkerOptions.workerSrc=new URL('./pdf.worker.min.mjs',import.meta.url).href;
  const task=getDocument({data:new Uint8Array(bytes),cMapUrl:new URL('./cmaps/',import.meta.url).href,cMapPacked:true,

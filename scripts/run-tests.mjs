@@ -6,6 +6,7 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = [
   ['scripts/test-ci-security-gates.mjs', true],
+  ['scripts/test-payroll-ui-clarity.mjs', true],
   ['scripts/test-cross-tab-lock.mjs', true],
   ['scripts/test-year-end-backup.mjs', true],
   ['scripts/test-year-end-restore-resume.mjs', true],
@@ -31,6 +32,7 @@ const tests = [
   ['scripts/test-pdf-view-service-worker.mjs', true],
   ['scripts/test-viewer-flow.mjs', true],
   ['scripts/test-pdf-oneclick.mjs', true],
+  ['scripts/test-pdf-handoff-lock.mjs', true],
   ['scripts/test-year-end-assist.mjs', true],
   ['scripts/test-year-end-audit-remediation.mjs', true],
   ['scripts/test-year-end-memo-security.mjs', true],
@@ -47,6 +49,9 @@ const tests = [
   ['scripts/test-v10-yearend-list.mjs', true],
   ['scripts/test-v12-yearend-bottom-alignment.mjs', true],
   ['scripts/test-v11-settings-home-money.mjs', true],
+  ['scripts/test-year-end-bulk-responsiveness.mjs', true],
+  ['scripts/test-year-end-zip-taxable-copy.mjs', true],
+  ['scripts/test-year-end-staged-deletions.mjs', true],
   ['scripts/test-year-end-v5-batch.mjs', true],
   ['scripts/test-year-end-bonus-removal.mjs', true],
   ['scripts/test-cloud-core.mjs', true],
@@ -59,6 +64,12 @@ const tests = [
   ['scripts/test-ui-flow-footer.mjs', true],
   ['scripts/test-cloud-auth-form.mjs', true],
   ['scripts/test-cloud-tab-unlock.mjs', true],
+  ['scripts/test-msal-auth-resilience.mjs', true],
+  ['scripts/test-msal-v5-bridge.mjs', true],
+  ['scripts/test-frame-guard.mjs', true],
+  ['scripts/test-browser-remembered-key.mjs', true],
+  ['scripts/test-signout-security.mjs', true],
+  ['scripts/test-readme-and-unique-settings.mjs', true],
   ['scripts/test-cloud-upload-ux.mjs', true],
   ['scripts/test-cloud-batch.mjs', true],
   ['scripts/test-cloud-startup.mjs', true],
@@ -66,6 +77,8 @@ const tests = [
   ['scripts/test-key-rotation-backup.mjs', true],
   ['scripts/test-readonly-diagnostics.mjs', true],
   ['scripts/test-graph-read-retry.mjs', true],
+  ['scripts/test-graph-transient-retry.mjs', true],
+  ['scripts/test-detached-originals.mjs', true],
   ['scripts/test-folder-metadata-minimal.mjs', true],
   ['scripts/test-backup-layout.mjs', true],
   ['scripts/test-cleanup-guard.mjs', true],
@@ -82,7 +95,7 @@ for (const [relative, required] of tests) {
     continue;
   }
   console.log(`\n▶ ${relative}`);
-  const result = spawnSync(process.execPath, ['--experimental-strip-types', target], { cwd: root, stdio: 'inherit' });
+  const result = spawnSync(process.execPath, ['--experimental-transform-types', target], { cwd: root, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status || 1);
 }

@@ -21,13 +21,13 @@ assert.doesNotMatch(yeCss,/\.yea-file-month-heading/);
 assert.match(home,/periodMode==='calendar' \? record\.form\.paymentDate\.slice\(0,7\) : record\.form\.targetMonth/);
 assert.doesNotMatch(home,/statement-month-heading/);
 assert.doesNotMatch(homeCss,/\.statement-month-heading/);
-// Exactly one advanced settings panel contains the three independent operations.
+// Exactly one advanced settings panel contains the four independent operations.
 assert.match(settings,/<h2 id="settings-details-title">詳細設定<\/h2>/);
-assert.equal((settings.match(/class="settings-details-column/g)??[]).length,3);
+assert.equal((settings.match(/class="settings-details-column/g)??[]).length,4);
 for (const id of ['payroll-income-publish','orphan-year-check','orphan-year-recover','legacy-cleanup-delete','legacy-cleanup-check','migrate-legacy-cloud']) {
  assert.equal((settings.match(new RegExp(`id="${id}"`,'g'))??[]).length,1,id);
 }
-assert.match(settingsCss,/grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+assert.match(settingsCss,/grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 assert.match(settingsCss,/@media\s*\(max-width:\s*850px\)/);
 // Mobile forecasts must not squeeze three months into a row; confirmed month label remains legible.
 assert.match(yeCss,/@media\(max-width:680px\)/);
@@ -51,4 +51,4 @@ assert.match(toast,/if\(kind!=='loading'\)timer=setTimeout/);
 assert.match(read('public/view/index.html'),/class="app-status" id="pdf-status"/);
 assert.match(read('public/upload/index.html'),/class="app-status" id="toast"/);
 assert.match(read('public/year-end-assist/index.html'),/class="app-status yea-status" id="yea-status"/);
-console.log('PASS: chronological year-end rows without extra headings, three settings columns, mobile 2-column forecast, label contrast, borderless save areas, unified operation card on six screens');
+console.log('PASS: chronological year-end rows without extra headings, four settings cells, mobile 2-column forecast, label contrast, borderless save areas, unified operation card on six screens');

@@ -30,6 +30,29 @@ assert.equal(merged.form.gross,'150');assert.equal(merged.form.net,'160');
 const clash={...a,records:[{...record(1,100),form:{...record(1,100).form,gross:'900'}}]};
 assert.throws(()=>orig.mergeAnnual(a,changeA,clash),/別端末/);
 console.log('PASS: Payroll専用暗号形式、AAD、IV、改ざん検出、ID単位マージ、同一フィールド衝突');
+// Index corruption, invalid salt and legitimate key rotation are deliberately
+// indistinguishable to a browser remembered key. Do not delete it on failed reads.
+{
+ const rememberedSalt=c.createSalt();
+ const rememberedKey=await c.deriveKey('browser-key-preservation-test',rememberedSalt);
+ const indexText=await c.encryptJson('index',{format:'payroll-index-v1',years:[],incomeYears:[]},rememberedKey,rememberedSalt);
+ let remote=indexText;
+ const graph={async read(parts,name){assert.deepEqual(parts,['payroll']);assert.equal(name,'index.enc');return {id:'index',etag:'e',text:remote,size:remote.length};}};
+ const candidate=new orig.PayrollVault(graph);
+ await candidate.unlockWithKey(rememberedKey,rememberedSalt);
+ const wrongSalt=c.createSalt();
+ remote=await c.encryptJson('index',{format:'payroll-index-v1',years:[],incomeYears:[]},rememberedKey,wrongSalt);
+ await assert.rejects(candidate.unlockWithKey(rememberedKey,rememberedSalt),/記憶鍵は削除していません/,'salt mismatch is inconclusive');
+ const tampered=JSON.parse(indexText);
+ tampered.data=(tampered.data[0]==='A'?'B':'A')+tampered.data.slice(1);
+ remote=JSON.stringify(tampered);
+ await assert.rejects(candidate.unlockWithKey(rememberedKey,rememberedSalt),/記憶鍵は削除していません/,'ciphertext corruption cannot revoke a saved key');
+ remote=indexText;
+ await candidate.unlockWithKey(rememberedKey,rememberedSalt);
+ assert.equal(candidate.isUnlocked(),true,'repaired index can reopen with original key');
+}
+console.log('PASS: corrupt index and salt changes preserve the recovery key; repaired index reopens');
+
 
 // OneDrive Personal の署名付きダウンロードURLを全画面のCSPで許可する。
 // Graphから返される実ファイル配信先は graph.microsoft.com とは限らない。

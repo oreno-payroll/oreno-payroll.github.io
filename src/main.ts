@@ -13,6 +13,7 @@ import { createSidePdfZip } from './export/sidePdfs';
 import { calculateAnnualForecast, type MonthEstimate, type AnnualForecast } from './forecast/annualForecast';
 import { fiscalYearOfTargetMonth } from './forecast/payrollCalendar';
 import { calendarYearOfPaymentDate, calculateCalendarForecast, type CalendarForecast } from './forecast/calendarForecast';
+import { monthlySalaryRegistration } from './forecast/monthlyRegistration';
 
 type Job = 'main' | 'side';
 type PeriodMode = 'fiscal' | 'calendar';
@@ -35,6 +36,9 @@ const forecastPanel = required<HTMLElement>('#forecast-panel');
 const forecastStatus = required<HTMLElement>('#forecast-status');
 const forecastDetails = required<HTMLElement>('#forecast-details');
 const forecastHeading = required<HTMLElement>('#forecast-heading');
+const registrationPanel = required<HTMLElement>('#monthly-registration');
+const registrationGrid = required<HTMLElement>('#registration-grid');
+const registrationPeriod = required<HTMLElement>('#registration-period');
 const yen = (amount: number): string => `${amount.toLocaleString('ja-JP')}円`;
 // 編集ページと相互に引き継ぐ。旧リンク ?fy=2025 にも後方互換性を残す。
 const searchParams = new URLSearchParams(window.location.search);
@@ -143,7 +147,7 @@ function updateYearOptions(): void {
   forecastLabel.textContent = periodMode === 'fiscal' ? '3月まで見込み' : '12月まで見込み';
   forecastToggle.title = periodMode === 'fiscal'
     ? '対象月基準で3月までの未登録給与と本業賞与を概算します。'
-    : '支給日基準で、最後の実績支給月の翌月から12月までを概算します。';
+    : '支給日基準で、最後の実績支給月の翌月と当月の遅い方から12月まで概算します。過去月の未登録給与は補完しません。';
   forecastToggle.closest('label')?.setAttribute('title', forecastToggle.title);
   fiscalModeButton.setAttribute('aria-pressed', String(periodMode === 'fiscal'));
   calendarModeButton.setAttribute('aria-pressed', String(periodMode === 'calendar'));
@@ -159,7 +163,7 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   explanation.className = 'forecast-note';
   explanation.textContent = periodMode === 'fiscal'
     ? '通常給与は未登録対象月を直近最大3件の中央値で推計。立替経費は翌月以降に繰り越しません。本業の未登録賞与（8月・翌2月）は最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含みません。副業賞与の見込みは加算しません。'
-    : '通常給与は、勤務先ごとに最後の実績支給月の翌月から12月までを直近最大3件の中央値で推計します。過去の未登録給与月は補完しません。立替経費・年末調整の還付や追徴を繰り越しません。本業の未登録賞与（2月・8月）は過去月も含め、最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含めず、副業賞与の見込みは加算しません。';
+    : '通常給与は、勤務先ごとに最後の実績支給月の翌月と現在月のうち遅い方から12月までを直近最大3件の中央値で推計します。現在月より前の未登録給与月は補完しません。立替経費・年末調整の還付や追徴を繰り越しません。本業の未登録賞与（2月・8月）は過去月も含め、最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含めず、副業賞与の見込みは加算しません。';
   forecastDetails.append(explanation);
   if (estimatedCount) {
     const deltaLine = document.createElement('p');
@@ -390,6 +394,33 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     list.append(moreItem);
   }
 }
+/** 登録状況は保存済みの通常給与だけで判定し、見込みや賞与を混ぜない。 */
+function renderMonthlyRegistration(year: number, isCalendar: boolean): void {
+  const months = monthlySalaryRegistration(saved, year, isCalendar ? 'calendar' : 'fiscal');
+  registrationPeriod.textContent = isCalendar
+    ? `${year}年1月〜12月・支給日基準`
+    : `${year}年4月〜${year + 1}年3月・給与対象年月基準`;
+  const cards: HTMLElement[] = [];
+  for (const month of months) {
+    const card = document.createElement('div');
+    card.className = 'registration-month';
+    const heading = document.createElement('strong');
+    heading.className = 'registration-month__heading';
+    heading.textContent = `${month.month}月`;
+    card.append(heading);
+    for (const [job, label] of [['main', '本業'], ['side', '副業']] as const) {
+      const exists = month[job];
+      const status = document.createElement('span');
+      status.className = `registration-month__status ${exists ? 'is-registered' : 'is-missing'}`;
+      status.textContent = `${label}：${exists ? '登録済み' : '未登録'}`;
+      card.append(status);
+    }
+    cards.push(card);
+  }
+  registrationGrid.replaceChildren(...cards);
+  registrationPanel.hidden = false;
+}
+
 function render(): void {
   const year = Number(yearSelect.value);
   const isCalendar = periodMode === 'calendar';
@@ -397,6 +428,7 @@ function render(): void {
     ? `${year}年1月〜12月 ・ 支給日基準`
     : `${year}年4月〜${year + 1}年3月 ・ 給与対象年月基準`;
   const yearRecords = selectedPeriodRecords();
+  renderMonthlyRegistration(year, isCalendar);
   const main = yearRecords.filter(item => item.form.job === 'main');
   const side = yearRecords.filter(item => item.form.job === 'side');
   sideZipButton.disabled = exportingSideZip || side.length === 0;
@@ -445,6 +477,7 @@ let dashboardLoading=false;
 async function refreshDashboard(forceFresh=false): Promise<void> {
   if(dashboardLoading)return;
   dashboardLoading=true;
+  registrationPanel.hidden = true;
   appStatus.loading('明細データを読み込んでいます…');
   const refreshButton=document.querySelector<HTMLButtonElement>('#payroll-refresh-data');
   if(refreshButton)refreshButton.disabled=true;

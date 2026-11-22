@@ -20,7 +20,7 @@ for (const value of [mobile, fixed, phone]) includes(value, '日本の電話番�
 includes(secret, 'ハードコードされた認証情報');
 includes(key, '秘密鍵');
 // 全ページでJavaScriptの動的評価を禁止。PDF.js向けのWebAssemblyのみ別途許可。
-for (const relative of ['public/index.html', 'public/upload/index.html', 'public/backup/index.html', 'public/edit/index.html', 'public/view/index.html']) {
+for (const relative of ['public/index.html', 'public/upload/index.html', 'public/backup/index.html', 'public/edit/index.html', 'public/view/index.html', 'public/year-end-assist/index.html']) {
   const html = fs.readFileSync(path.join(root, relative), 'utf8');
   assert.match(html, /script-src 'self'/);
   assert.doesNotMatch(html, /(?<![\w-])'unsafe-eval'/, 'JavaScript unsafe-eval must be disabled');
@@ -74,6 +74,8 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'payroll-audit-test-'));
 try {
  const required=[
   'scripts/audit-publish.mjs','scripts/audit-rules.mjs','scripts/test-audit-fixes.mjs',
+  'scripts/audit-ci-workflow.mjs','scripts/audit-dist.mjs','scripts/install-git-hooks.sh',
+  '.githooks/pre-commit','.githooks/pre-push',
   'scripts/msal-entry.mjs','scripts/msal-redirect-bridge.mjs','scripts/audit-msal.mjs',
   'public/auth/redirect.html','public/frame-guard.js',
   'public/view/index.html','public/view/pdf-sw.js','src/view.ts','src/export/sidePdfs.ts',
@@ -84,7 +86,7 @@ try {
   fs.copyFileSync(path.join(root,relative),path.join(temp,relative));
  }
  const git=(...args)=>execFileSync('git',args,{cwd:temp,stdio:'pipe'});
- git('init','-q');git('add','--','scripts','public','src');
+ git('init','-q');git('add','--','scripts','public','src','.githooks');
  const audit=(...args)=>spawnSync(process.execPath,['scripts/audit-publish.mjs',...args],{cwd:temp,encoding:'utf8'});
  assert.equal(audit('--staged').status,0,'all required files must be tracked');
  fs.unlinkSync(path.join(temp,'public/frame-guard.js'));

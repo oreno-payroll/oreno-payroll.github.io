@@ -1,6 +1,7 @@
 /**
  * 暦年（1〜12月・支給日基準）の見込み。
- * 現在の暦年について、勤務先別の最後の給与支給月の翌月から12月まで補完する。
+ * 現在の暦年について、勤務先別の最後の給与支給月の翌月と現在月の遅い方から12月まで推計する。
+ * 現在月より前の未登録支給月には見込みを遡及加算しない。
  * 保存レコードの追加・更新は一切行わない。
  */
 import { monthIndex } from './payrollCalendar';
@@ -45,7 +46,8 @@ export function calculateCalendarForecast(
     const latest = actualPaidMonths.size ? Math.max(...actualPaidMonths) : start - 1;
     const pendingMonths: string[] = [];
     if (applicable) {
-      for (let index = Math.max(start, latest + 1); index <= end; index++) {
+      // 登録漏れの過去月を推計収入で埋めず、当月以降だけを対象にする。
+      for (let index = Math.max(start, latest + 1, todayMonth); index <= end; index++) {
         if (!actualPaidMonths.has(index)) pendingMonths.push(monthString(index));
       }
     }

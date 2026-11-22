@@ -366,3 +366,18 @@
   .header-actions a[href*="upload"] span{display:none}
   .header-actions a[href*="upload"] .icon{display:block;width:17px;height:17px}
 }
+
+/* 月別登録状況: 暗号化済みの給与メタデータだけから読み取り専用で表示。 */
+.registration-card { padding: 22px 26px 24px; margin-bottom: 18px; }
+.registration-card__heading { display:flex; justify-content:space-between; align-items:flex-end; gap:10px 16px; flex-wrap:wrap; margin-bottom:14px; }
+.registration-card__heading h2 { font-size:17px; font-weight:800; margin:0; }
+.registration-card__period { margin:4px 0 0; font-size:11px; color:var(--color-muted); }
+.registration-card__note { font-size:10px; color:var(--color-muted); }
+.registration-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; }
+.registration-month { min-width:0; display:flex; flex-direction:column; gap:5px; padding:10px 11px; border:1px solid var(--color-border); border-radius:10px; background:var(--color-surface); }
+.registration-month__heading { font-size:12px; font-weight:800; color:var(--color-text); }
+.registration-month__status { font-size:10px; line-height:1.5; font-weight:650; white-space:nowrap; }
+.registration-month__status.is-registered { color:var(--color-success); }
+.registration-month__status.is-missing { color:var(--color-muted); }
+@media(max-width:950px) { .registration-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+@media(max-width:640px) { .registration-card { padding:18px 17px; } .registration-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; } .registration-month { padding:8px 7px; } .registration-month__status { font-size:9px; } }

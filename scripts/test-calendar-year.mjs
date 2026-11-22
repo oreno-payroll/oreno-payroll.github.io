@@ -92,6 +92,17 @@ try {
     ], 2026, today);
     assert.deepEqual(plan.jobs.main.pendingMonths, ['2026-11','2026-12']);
   });
+  test('11月時点で8月が最後なら9・10月を遡及予測せず11・12月だけ推計する', () => {
+    const plan = calculateCalendarForecast([salary('main','2026-08-31','2026-07')], 2026, today);
+    assert.deepEqual(plan.jobs.main.pendingMonths, ['2026-11','2026-12']);
+    assert.deepEqual(plan.jobs.main.estimates.map(item => item.month), ['2026-11','2026-12']);
+    assert.ok(!plan.jobs.main.pendingMonths.includes('2026-09'));
+    assert.ok(!plan.jobs.main.pendingMonths.includes('2026-10'));
+  });
+  test('当月に通常給与が登録済みなら翌月以降だけを推計する', () => {
+    const plan = calculateCalendarForecast([salary('main','2026-11-12','2026-10')], 2026, today);
+    assert.deepEqual(plan.jobs.main.pendingMonths, ['2026-12']);
+  });
   test('1月時点では12月まで予測し、本業2月・8月賞与のみ追加する', () => {
     const plan = calculateCalendarForecast([salary('main','2025-12-26','2025-11')], 2026, new Date(2026,0,10));
     assert.equal(plan.jobs.main.estimates.length, 12);

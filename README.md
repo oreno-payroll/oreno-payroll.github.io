@@ -145,6 +145,28 @@ python3 -m http.server 5000 --directory dist
 - GitHub Pagesはアプリ側でカスタムの`Content-Security-Policy: frame-ancestors 'none'`や`X-Frame-Options: DENY`をHTTPレスポンスに設定できません。アプリ画面は起動前の`frame-guard.js`と保管庫解除時の埋め込み拒否で**補助的に**防御しますが、これはHTTPヘッダーと同等の保護ではありません。完全なフレーム制限を求める場合はヘッダーを制御できるホスティングへ移行し、通常画面は`frame-ancestors 'none'`、**MSALのリダイレクトブリッジページはサイレント認証用に別ポリシー**としてください。ブリッジにCOOPヘッダーを付けないでください。
 - npmの依存更新時は`package-lock.json`までコミットし、`npm ci`で再現可能なビルドにします。MSALの未管理・手動配置JSを復活させないでください。`scripts/audit-msal.mjs --built`はビルド出力も検査します。
 
+### 公開前のローカル防御と定期監査（導入が必要）
+
+**公開リポジトリではpush後のCIは情報漏えいを取り消せません。** 初期設定として、まずMacの
+`~/.config/payroll/private-terms.txt` に、リポジトリへ含めてはならない実名、住所、口座識別子などを1行1件で記入してください。このファイルは必ずプロジェクト外へ置き、Gitへ追加しないでください。
+
+Gitleaksを導入後、`bash scripts/install-git-hooks.sh`を一度実行します。Gitの`core.hooksPath`を
+`.githooks`へ設定し、コミット前は**実際のステージング内容**を、push前はGit履歴、依存、テスト、ビルド成果物を検査します。エラー時はコミット・pushを中断します。 `git -c core.hooksPath=...` や `--no-verify` 等でローカルフックは迂回可能なので、GitHub側でもmainのルールセットによる**直接push制限と必須ステータスチェック**を設定してください。
+
+GitHub Actionsには同じ辞書を公開ファイルとして配置せず、リポジトリのActions Secret `PAYROLL_PRIVATE_TERMS_B64` としてBase64で登録します。Macで `gh` が使える場合は、次のように秘密の値を表示せず登録できます。
+
+```bash
+base64 < "$HOME/.config/payroll/private-terms.txt" | tr -d '\n' | gh secret set PAYROLL_PRIVATE_TERMS_B64 --repo oreno-payroll/oreno-payroll.github.io
+```
+
+GitHubウェブ画面から設定する場合は Repository Settings → Secrets and variables → Actions へ。**このSecretが未設定・空・不正ならCIは失敗し、デプロイしません。** 週1回の定期CI（UTC月曜00:19、日本時間月曜09:19）はnpm依存・秘密情報・全テストを再検査し、Pagesへの再デプロイは行いません。
+
+`scripts/audit-dist.mjs` は `dist/` の全ファイルを公開ソースとnpmリソースからの厳密な許可リストに照合し、意図しないファイル、改変されたコピー、CSP欠落、生成JSの再ビルド不一致、既知形式の秘密情報と個別禁止語句を検出します。専用検査 `scripts/audit-ci-workflow.mjs` は、レビュー済みのワークフロー構造と実行ステップ、SHA固定、検査順序を確認します。
+
+Gitフック・パターン検査・Gitleaks・辞書でも任意の個人情報を確実には検知できません。コミット前の最終目視、ブランチ保護、公開済み情報の失効・削除対応は引き続き必要です。またPlaywright実機E2E、実Microsoft/OneDrive接続試験、TypeScript実装の網羅的なコードカバレッジ・ミューテーション検査は現状の自動検証対象外です。
+
+**旧検証スクリプトの整理：** IndexedDBの旧永続保存方式、PDF Service Workerの旧挙動、旧URL形式に依存する6本を廃止。成果物の機能確認に使える`verify-three-features.mjs`と`verify-calendar-feature.mjs`は現行仕様へ更新し、`npm test`へ組み込みました。
+
 ### セキュリティ検査と制限
 
 - ホーム・アップロード・設定を含む全画面のCSPでJavaScriptの `unsafe-eval` を許可しません。使用中のPDF.js 6では旧 `isEvalSupported` オプションは存在しないため設定しません。PDF用WebAssemblyのため `wasm-unsafe-eval` は維持します。

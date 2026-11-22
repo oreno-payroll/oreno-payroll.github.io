@@ -28,10 +28,15 @@ const required = [
   'src/export/sidePdfs.ts',
   'scripts/audit-publish.mjs',
   'scripts/test-audit-fixes.mjs',
+  'scripts/audit-ci-workflow.mjs',
+  'scripts/audit-dist.mjs',
+  'scripts/install-git-hooks.sh',
+  '.githooks/pre-commit',
+  '.githooks/pre-push',
 ];
 const allowed = (file) => [
   '.gitignore', '.gitleaksignore', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json',
-  '.github/workflows/deploy.yml',
+  '.github/workflows/deploy.yml', '.githooks/pre-commit', '.githooks/pre-push',
 ].includes(file)
   || /^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.tsx?$/.test(file)
   || /^public\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:html|css)$/.test(file)
@@ -42,6 +47,17 @@ const allowed = (file) => [
   || file === 'public/frame-guard.js'
   || /^scripts\/[a-zA-Z0-9_-]+\.(?:mjs|js|cjs|sh)$/.test(file);
 const problems = [];
+const indexEntries = execFileSync('git',['ls-files','--stage','-z'],{cwd:root})
+  .toString('utf8').split('\0').filter(Boolean);
+for (const row of indexEntries) {
+  const match=/^(\d{6}) [a-f0-9]{40,64} (\d)\t(.+)$/.exec(row);
+  if(!match){problems.push('Gitインデックスの形式が不正です');continue;}
+  const [,mode,stage,file]=match;
+  if(stage!=='0'||!['100644','100755'].includes(mode))
+    problems.push(`Gitへ特殊ファイル・未解決マージを追加できません: ${file}`);
+  if(mode==='100755' && !(/^\.githooks\/(?:pre-commit|pre-push)$/.test(file)||/^scripts\/[^/]+\.sh$/.test(file)))
+    problems.push(`実行可能なファイルが許可リスト外です: ${file}`);
+}
 const staged = process.argv.includes('--staged');
 // パッチ適用時限定。未追跡の指定アセットも内容・ハッシュを検査する。
 // 通常実行および--stagedではGit登録を必須とする。CIの審査は緩めない。

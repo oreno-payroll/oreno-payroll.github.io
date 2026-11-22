@@ -1,0 +1,23 @@
+/** 月別登録状況・暦年推計・診断UIの静的契約。 */
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const read = p => readFileSync(new URL('../'+p,import.meta.url),'utf8');
+const html=read('public/index.html'), main=read('src/main.ts');
+const forecast=read('src/forecast/calendarForecast.ts');
+const upload=read('public/upload/index.html'), style=read('public/styles/dashboard.css');
+assert.match(html,/id="monthly-registration"[^>]*hidden/,'before loading registration overview is hidden');
+assert.match(html,/id="registration-grid"/);
+assert.match(main,/renderMonthlyRegistration\(year, isCalendar\)/);
+assert.match(main,/monthlySalaryRegistration\(saved, year, isCalendar \? 'calendar' : 'fiscal'\)/);
+assert.match(main,/registrationPanel\.hidden = true/,'hide stale registration during remote load');
+assert.match(main,/registrationGrid\.replaceChildren\(\.\.\.cards\)/,'re-render fully on mode/year changes');
+assert.match(forecast,/Math\.max\(start, latest \+ 1, todayMonth\)/,'do not backfill completed months');
+assert.match(main,/現在月より前の未登録給与月は補完しません/);
+assert.match(style,/\.registration-grid/);
+assert.equal((upload.match(/id="diagnostic-button"/g)||[]).length,1);
+const actions=upload.match(/<div class="selected-file__actions">([\s\S]*?)<\/div>/)?.[1]??'';
+assert.doesNotMatch(actions,/diagnostic-button/,'ordinary PDF actions must not include diagnostics');
+const details=upload.match(/<details class="upload-troubleshooting">([\s\S]*?)<\/details>/)?.[1]??'';
+assert.match(details,/id="diagnostic-button"/,'diagnostic stays accessible inside collapsed troubleshooting');
+assert.match(details,/個人情報/,'troubleshooting warns about privacy');
+console.log('PASS: 12-month salary registration grid, no retrospective calendar salary forecasts, diagnostic separated');

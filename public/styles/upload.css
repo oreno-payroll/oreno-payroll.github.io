@@ -127,7 +127,7 @@
   .review-panel { padding: 20px 17px; }
   .selected-file { flex-wrap: wrap; }
   .selected-file__name-wrap { flex-basis: calc(100% - 55px); }
-  .selected-file__actions { flex-basis: 100%; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .selected-file__actions { flex-basis: 100%; display: grid; grid-template-columns: minmax(0,1fr); }
   .selected-file__actions .btn { width: 100%; min-width: 0; }
   .review-actions .btn { width: 100%; }
   .form-grid { gap: 13px 9px; }
@@ -416,3 +416,10 @@
 .save-duplicates__list li strong{font-size:11px;color:var(--color-text);overflow-wrap:anywhere}
 .save-duplicates__list li span{overflow-wrap:anywhere}
 .save-duplicates__home{font-size:12px;font-weight:750;justify-self:start;text-decoration:underline;text-underline-offset:3px}
+
+/* 解析診断は通常のPDF閲覧操作から分け、必要なときだけ展開する。 */
+.upload-troubleshooting { margin:0 0 20px; border:1px solid var(--color-border); border-radius:10px; padding:10px 13px; color:var(--color-muted); }
+.upload-troubleshooting > summary { cursor:pointer; font-size:11px; font-weight:750; }
+.upload-troubleshooting > summary:focus-visible { outline:2px solid var(--color-primary); outline-offset:3px; }
+.upload-troubleshooting > p { margin:12px 0 9px; font-size:10px; line-height:1.7; }
+.upload-troubleshooting > .btn { margin-bottom:2px; }

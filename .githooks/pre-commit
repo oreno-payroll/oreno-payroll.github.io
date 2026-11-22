@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+echo '[Payroll] pre-commit: staging source and privacy audit'
+node scripts/audit-publish.mjs --staged
+node scripts/audit-private-data.mjs --staged --no-history --no-gitleaks --require-private-terms
+node scripts/audit-ci-workflow.mjs --staged
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo 'NG: Gitleaks が必要です。brew install gitleaks' >&2
+  exit 1
+fi
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+git checkout-index --all --prefix="${tmp}/"
+gitleaks dir "$tmp" --redact --no-banner
+echo '[Payroll] pre-commit: PASS'

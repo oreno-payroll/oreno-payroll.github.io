@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+echo '[Payroll] pre-push: full security gate'
+# All pushed heads must be this checked-out commit, never an uninspected ref.
+head="$(git rev-parse HEAD)"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_ref:-}" ] || continue
+  if [ "$local_sha" != "$head" ]; then
+    echo "NG: push対象が検証中のHEADと違います: $local_ref" >&2
+    exit 1
+  fi
+done
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo 'NG: push前に未コミットのソース変更があります。' >&2; exit 1
+fi
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo 'NG: Gitleaks が必要です。brew install gitleaks' >&2; exit 1
+fi
+node scripts/audit-publish.mjs
+node scripts/audit-private-data.mjs --strict-gitleaks --require-private-terms --skip-current-author
+node scripts/audit-ci-workflow.mjs
+npm ci
+npm run build
+node scripts/audit-dist.mjs --require-private-terms
+npm test
+npm audit --audit-level=high
+gitleaks git --log-opts=--all --redact --no-banner .
+echo '[Payroll] pre-push: PASS'

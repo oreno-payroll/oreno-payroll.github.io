@@ -6,6 +6,7 @@ import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = [
   ['scripts/test-ci-security-gates.mjs', true],
+  ['scripts/test-security-pipeline.mjs', true],
   ['scripts/test-payroll-ui-clarity.mjs', true],
   ['scripts/test-cross-tab-lock.mjs', true],
   ['scripts/test-year-end-backup.mjs', true],
@@ -26,6 +27,8 @@ const tests = [
   ['scripts/test-audit-fixes.mjs', false],
   ['scripts/test-bonus-latest.mjs', true],
   ['scripts/test-calendar-year.mjs', true],
+  ['scripts/test-home-registration-status.mjs', true],
+  ['scripts/test-monthly-registration.mjs', true],
   ['scripts/test-side-zip.mjs', true],
   ['scripts/test-target-year.mjs', true],
   ['scripts/test-lazy-pdfs.mjs', true],
@@ -86,6 +89,8 @@ const tests = [
   ['scripts/test-legacy-cloud-predelete.mjs', true],
   ['scripts/test-cleanup-finance-compat.mjs', true],
   ['scripts/test-income-publication-v132.mjs', true],
+  ['scripts/verify-three-features.mjs', true],
+  ['scripts/verify-calendar-feature.mjs', true],
 ];
 for (const [relative, required] of tests) {
   const target = path.join(root, relative);

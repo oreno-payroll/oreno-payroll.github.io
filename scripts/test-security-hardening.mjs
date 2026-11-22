@@ -12,7 +12,7 @@ assert.doesNotMatch(session,/export function rememberTabUnlock|export async func
 assert.doesNotMatch(auth,/このタブで保持（最長2時間）|rememberTabUnlock|restoredTabUnlock/);
 assert.match(auth,/このブラウザを記憶する/);
 assert.doesNotMatch(docs,/このタブで保持（最長2時間）.*保持します/);
-for(const p of ['public/index.html','public/upload/index.html','public/backup/index.html','public/edit/index.html','public/view/index.html']) {
+for(const p of ['public/index.html','public/upload/index.html','public/backup/index.html','public/edit/index.html','public/view/index.html','public/year-end-assist/index.html']) {
  const html=file(p);
  const csp=html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
  assert.ok(csp,p+' needs a CSP');

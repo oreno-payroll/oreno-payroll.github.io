@@ -18,7 +18,9 @@ for (const page of pages) {
   assert.match(html, /theme-icon--sun/, `${page}: sun icon`);
   assert.match(html, /<script src="(?:\.\.\/|\.\/)theme\.js"><\/script>/, `${page}: local external script`);
   assert.match(html, /<link rel="stylesheet" href="(?:\.\.\/|\.\/)styles\/theme\.css">/, `${page}: common palette`);
-  assert.ok(html.indexOf('Content-Security-Policy') < html.indexOf('theme.js'), `${page}: CSP enforced before script`);
+  const cspAt = html.indexOf('Content-Security-Policy');
+  const themeAt = html.indexOf('theme.js');
+  assert.ok(cspAt >= 0 && themeAt >= 0 && cspAt < themeAt, `${page}: CSP must exist before script`);
   assert.ok(html.indexOf('theme.js') < html.indexOf('style.css'), `${page}: theme selected before CSS paints`);
   assert.ok(html.indexOf('theme.css') > html.indexOf('style.css'), `${page}: dark rules override base CSS`);
   assert.ok(html.indexOf('theme.css') < html.indexOf('</head>'), `${page}: palette loaded in head`);

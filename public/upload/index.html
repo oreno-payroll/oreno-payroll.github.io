@@ -114,7 +114,6 @@
               <div class="selected-file__name-wrap"><strong id="selected-name"></strong><span id="selected-meta"></span></div>
               <div class="selected-file__actions">
                 <button class="btn btn--soft btn--small" id="open-pdf" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>原本を見る</button>
-                <button class="btn btn--secondary btn--small" type="button" id="diagnostic-button">座標診断を開く</button>
               </div>
             </div>
             <div class="read-result" id="read-result" role="status" aria-live="polite"></div>
@@ -124,6 +123,12 @@
               <ul id="analysis-issues-list"></ul>
               <p>検出されなかった項目は空欄のままです。原本で確認して、必要に応じて入力してください。</p>
             </section>
+
+            <details class="upload-troubleshooting">
+              <summary>詳細・トラブルシューティング</summary>
+              <p>PDFの文字認識や座標が合わない場合の診断機能です。個人情報を含む可能性があるため、共有にはマスク済みの診断結果を使用してください。</p>
+              <button class="btn btn--secondary btn--small" type="button" id="diagnostic-button">座標診断を開く</button>
+            </details>
 
             <form id="review-form" novalidate>
               <section class="form-section">

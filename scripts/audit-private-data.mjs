@@ -11,8 +11,24 @@ if(staged&&working)throw new Error('ステージ済みと作業ファイルは�
 const git=a=>execFileSync('git',a,{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024});
 const splitZ=s=>s.split('\0').filter(Boolean);
 const privateFile=process.env.PAYROLL_PRIVATE_TERMS_FILE||path.join(os.homedir(),'.config/payroll/private-terms.txt');
-const privateTerms=existsSync(privateFile)?readFileSync(privateFile,'utf8').split(/\r?\n/).map(s=>s.trim()).filter(s=>s.length>=3&&!s.startsWith('#')):[];
+// CI supplies a repository secret, local hooks use a private file outside Git.
+// Never log dictionary entries. A missing dictionary fails closed when required.
+const encoded=process.env.PAYROLL_PRIVATE_TERMS_B64;
+let dictionary='';
+let dictionaryError='';
+if(encoded!==undefined){
+  if(!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length%4!==0){
+    dictionaryError='個別禁止語句のCI Secretが空、またはBase64形式ではありません。';
+  }else{
+    const decoded=Buffer.from(encoded,'base64');
+    if(decoded.toString('base64')!==encoded)dictionaryError='個別禁止語句のBase64を検証できません。';
+    else dictionary=decoded.toString('utf8');
+  }
+}else if(existsSync(privateFile))dictionary=readFileSync(privateFile,'utf8');
+const privateTerms=dictionary.split(/\r?\n/).map(s=>s.trim()).filter(s=>s.length>=3&&!s.startsWith('#'));
 const problems=[],notices=[];
+if(dictionaryError)problems.push(dictionaryError);
+if(flags.has('--require-private-terms')&&!privateTerms.length)problems.push('個別禁止語句が未設定です。~/.config/payroll/private-terms.txt またはCI Secret PAYROLL_PRIVATE_TERMS_B64 を登録してください。');
 const patterns=[
  ['口座番号らしい記載',/(?:口座(?:番号)?|振込先(?:口座)?|bank\s*account)\s*[：:=]\s*["']?\s*\d[\d\s-]{5,}\d/iu],
  ['従業員番号らしい記載',/(?:社員番号|従業員番号|employee\s*id)\s*[：:=]\s*["']?\s*[A-Z0-9-]{5,}/iu],

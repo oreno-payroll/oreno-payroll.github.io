@@ -58,7 +58,7 @@ console.log('PASS: corrupt index and salt changes preserve the recovery key; rep
 // Graphから返される実ファイル配信先は graph.microsoft.com とは限らない。
 for (const page of [
   'public/index.html', 'public/upload/index.html', 'public/edit/index.html',
-  'public/view/index.html', 'public/backup/index.html',
+  'public/view/index.html', 'public/backup/index.html', 'public/year-end-assist/index.html',
 ]) {
   const html = readFileSync(new URL('../' + page, import.meta.url), 'utf8');
   const csp = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i)?.[1];

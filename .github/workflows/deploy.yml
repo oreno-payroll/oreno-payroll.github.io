@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '19 0 * * 1'
 
 permissions:
   contents: read
@@ -24,13 +26,13 @@ jobs:
 
     steps:
       - name: Checkout complete Git history for secret audits
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           cache: npm
@@ -54,13 +56,18 @@ jobs:
           "$RUNNER_TEMP/gitleaks-bin/gitleaks" version
 
       - name: Supplemental private-data audit (tracked files and Git author history)
-        run: node scripts/audit-private-data.mjs --strict-gitleaks --skip-current-author
+        run: node scripts/audit-private-data.mjs --strict-gitleaks --skip-current-author --require-private-terms
+        env:
+          PAYROLL_PRIVATE_TERMS_B64: ${{ secrets.PAYROLL_PRIVATE_TERMS_B64 }}
 
       - name: Full Git history Gitleaks audit (deployment gate)
         run: gitleaks git --log-opts=--all --redact --no-banner .
 
       - name: Verify audited MSAL npm lockfile and redirect bridge source
         run: node scripts/audit-msal.mjs
+
+      - name: Audit workflow security shape
+        run: node scripts/audit-ci-workflow.mjs
 
       - name: Install dependencies
         run: npm ci
@@ -74,17 +81,25 @@ jobs:
       - name: Verify generated MSAL bundle and redirect bridge
         run: node scripts/audit-msal.mjs --built
 
+      - name: Audit complete Pages distribution
+        run: node scripts/audit-dist.mjs --require-private-terms
+        env:
+          PAYROLL_PRIVATE_TERMS_B64: ${{ secrets.PAYROLL_PRIVATE_TERMS_B64 }}
+
       - name: Regression tests
         run: npm test
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        if: github.event_name != 'schedule'
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'schedule'
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: dist
 
       - name: Deploy to Pages
+        if: github.event_name != 'schedule'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

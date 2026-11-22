@@ -67,3 +67,9 @@
 
 # SharedWorkerは復号鍵をメモリだけで受け渡すための監査済みのソース。
 !/public/payroll-cloud-session.js
+
+# Reviewed Git hook sources. Installation changes only local .git/config.
+!/.githooks/
+/.githooks/**
+!/.githooks/pre-commit
+!/.githooks/pre-push

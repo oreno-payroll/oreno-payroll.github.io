@@ -116,7 +116,7 @@ try {
   });
   test('直近給与がない場合に架空の額面を作らない', () => {
     const plan = calculateCalendarForecast([salary('side','2026-01-30','2026-01')], 2026, today);
-    assert.equal(plan.jobs.side.pendingMonths.length, 11);
+    assert.deepEqual(plan.jobs.side.pendingMonths, ['2026-11', '2026-12']);
     assert.equal(plan.jobs.side.estimates.length, 0);
     assert.match(plan.jobs.side.reason ?? '', /直近6か月/);
   });

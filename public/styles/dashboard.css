@@ -381,3 +381,17 @@
 .registration-month__status.is-missing { color:var(--color-muted); }
 @media(max-width:950px) { .registration-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 @media(max-width:640px) { .registration-card { padding:18px 17px; } .registration-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; } .registration-month { padding:8px 7px; } .registration-month__status { font-size:9px; } }
+
+
+/* Monthly registration: native details accordion, no saved user data. */
+.registration-card{padding:0}
+.registration-card__heading{margin:0;padding:20px 26px;align-items:center;cursor:pointer;list-style:none;user-select:none}
+.registration-card__heading::-webkit-details-marker{display:none}
+.registration-card__heading::marker{content:''}
+.registration-card__heading:focus-visible{outline:2px solid var(--color-primary);outline-offset:-3px}
+.registration-card__chevron{display:block;flex:none;width:9px;height:9px;border-right:2px solid var(--color-muted);border-bottom:2px solid var(--color-muted);transform:rotate(-45deg);transition:transform .15s}
+.registration-card[open] .registration-card__chevron{transform:rotate(45deg)}
+.registration-card[open]>.registration-card__heading{border-bottom:1px solid var(--color-border)}
+.registration-card .registration-grid{padding:15px 26px 23px}
+@media(max-width:640px){.registration-card{padding:0}.registration-card__heading{padding:15px 17px}.registration-card .registration-grid{padding:12px 17px 17px}.registration-card__note{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.registration-card__chevron{transition:none}}

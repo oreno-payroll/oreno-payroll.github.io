@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 const root=fileURLToPath(new URL('../',import.meta.url));
-export const REVIEWED_WORKFLOW_SHA256='f99795dad9d8b04e2e2c038b196bc5cc899228d63941e64f7ad09fca942acd43';
+export const REVIEWED_WORKFLOW_SHA256='11c740e58b64437e0e780801c4fd7a0d0566e4649930db51cdf0b68a834c51d7';
 export const REQUIRED_STATUS_CHECK='security';
 const sha256=source=>createHash('sha256').update(source,'utf8').digest('hex');
 
@@ -28,6 +28,8 @@ export function auditWorkflow(source){
     ['complete secret history scanner',/run: gitleaks git --log-opts=--all --redact --no-banner \./],
     ['npm vulnerability scanner',/run: npm audit --audit-level=high/],
     ['complete regression tests',/run: npm test/],
+    ['Chromium installation',/run: npx playwright install --with-deps chromium/],
+    ['headless E2E gate',/run: npm run test:e2e/],
     ['distribution integrity audit',/run: node scripts\/audit-dist\.mjs --require-private-terms/],
     ['deploy depends on security',/^  deploy:\n    needs: security\n    if: \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\) && github\.ref == 'refs\/heads\/main'$/m],
     ['secrets only read in security',/^  security:[\s\S]*?PAYROLL_PRIVATE_TERMS_B64: \$\{\{ secrets\.PAYROLL_PRIVATE_TERMS_B64 \}\}/m],

@@ -249,3 +249,11 @@
 .settings-page .settings-detached-originals .settings-action-row .btn{width:auto;min-height:40px;padding:9px 12px}
 .settings-page .settings-detached-originals .vault-status{margin:0}
 @media(max-width:600px){.settings-page .settings-detached-originals{padding:20px}.settings-page .settings-detached-originals .settings-action-row{display:grid;grid-template-columns:1fr}.settings-page .settings-detached-originals .settings-action-row .btn{width:100%}}
+
+
+/* Match full-width mobile settings buttons for the Microsoft account controls. */
+@media(max-width:480px){
+ .settings-page .settings-connection-account{justify-items:stretch}
+ .settings-page .settings-connection-account>.settings-action-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);justify-content:stretch}
+ .settings-page .settings-connection-account>.settings-action-row>.btn{width:100%;min-width:0;white-space:normal;justify-content:center}
+}

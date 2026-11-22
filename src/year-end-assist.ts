@@ -125,11 +125,52 @@ function proposedForecastChanged():boolean{
 function updateForecastSaveState(){
  commit.disabled=busy||!selected||!data||!(forecastDirty||bonusDirty||proposedForecastChanged());
  forecastState.textContent=forecastDirty||bonusDirty?'未保存の変更があります。':'';
+ updateUnsavedForecastPreview();
  for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
   input.disabled=busy||!data;
  }
  bonusMonthInput.disabled=busy||!data;
  bonusValueInput.disabled=busy||!data;
+}
+/** Read-only arithmetic: never publish unsaved figures as the annual taxable total. */
+function updateUnsavedForecastPreview():void {
+ const salaryNote=$<HTMLElement>('yea-draft-forecast');
+ const annualNote=$<HTMLElement>('yea-draft-annual');
+ salaryNote.hidden=true;annualNote.hidden=true;
+ if(!data||busy)return;
+ const saved=calculateYear(data);
+ let proposedSalary=0;
+ let valid=true;
+ for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
+  const raw=input.value.trim();
+  if(!raw)continue;
+  const amount=parseYen(raw);
+  if(amount===null){valid=false;break;}
+  proposedSalary+=amount;
+ }
+ const bonuses=new Map<string,number>(data.bonusEstimates.map(e=>[e.month,e.amount]));
+ if(bonusDirty){
+  if(bonusClearedMonth)bonuses.delete(bonusClearedMonth);
+  const month=bonusMonthInput.value,raw=bonusValueInput.value.trim();
+  if(month){
+   if(!month.startsWith(String(activeYear)+'-')||data.documents.some(d=>d.kind==='bonus'&&monthOf(d.paymentDate)===month))valid=false;
+   else if(raw){
+    const amount=parseYen(raw);
+    if(amount===null)valid=false;
+    else bonuses.set(month,amount);
+   }else if(bonuses.has(month))bonuses.delete(month);
+  }else if(raw)valid=false;
+ }
+ if(!valid){
+  salaryNote.textContent='試算額を確認できません。入力内容を確認してください。';
+  salaryNote.hidden=false;
+  return;
+ }
+ const proposedForecast=proposedSalary+[...bonuses.values()].reduce((sum,n)=>sum+n,0);
+ if(proposedForecast===saved.forecast)return;
+ salaryNote.textContent=`未保存の試算：${yen(proposedForecast)}`;
+ annualNote.textContent=`保存すると ${yen(saved.actual+proposedForecast)}（現在の年間合計には未反映）`;
+ salaryNote.hidden=false;annualNote.hidden=false;
 }
 function markForecastDirty(){forecastDirty=true;setLocalError(forecastError);updateForecastSaveState();}
 function updateBonusSaveState(){updateForecastSaveState();}
@@ -368,7 +409,7 @@ function syncForecastAmounts(methodChanged=false){
    const preview=forecastPreview({...data,noPaymentMonths:[]},method,months,{});
    calculated=new Map(preview.estimated.map(e=>[e.month,e.amount]));
   }catch{
-   if(methodChanged)setLocalError(forecastError,'確定給与がないため推定できません。手動入力してください。');
+   setLocalError(forecastError,'確定給与がないため自動計算できません。手動入力を選択してください。');
   }
  }
  for(const input of fields){
@@ -807,8 +848,8 @@ function bind(){
  window.addEventListener('beforeunload',event=>{if(memoDirty||pendingEdits()||forecastDirty||bonusDirty){event.preventDefault();event.returnValue='';}});
  methodChoices.addEventListener('change',event=>{
   if(!(event.target instanceof HTMLInputElement)||event.target.type!=='radio')return;
-  syncForecastAmounts(true);
   markForecastDirty();
+  syncForecastAmounts(true);
  });
  commit.addEventListener('click',saveForecast);
  const queuePdfFiles=(files:File[])=>{

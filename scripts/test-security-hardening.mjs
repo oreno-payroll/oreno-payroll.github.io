@@ -30,4 +30,13 @@ for(const p of ['src/upload.ts','src/pdf/diagnostic.ts','src/storage/pdfIntegrit
 const scanner=file('scripts/audit-history.sh');
 assert.match(scanner,/gitleaks git --redact --log-opts="--all"/);
 assert.doesNotMatch(scanner,/--report-path/);
-console.log('PASS: removed recoverable tab keys, old-cache invalidation, strict CSP, PDF.js 6 API, redacted local history scan');
+// ファイルのMIMEは端末/ブラウザ側が提供する値であり、信頼できない。
+// 誤った text/html として別タブで実行されないよう、PDFプレビューの型を固定する。
+const upload=file('src/upload.ts');
+assert.match(upload,/URL\.createObjectURL\(new Blob\(\[entry\.file\],\s*\{\s*type:\s*["']application\/pdf["']\s*\}\)\)/,
+  'PDF preview must use an explicitly typed PDF Blob');
+assert.doesNotMatch(upload,/URL\.createObjectURL\(entry\.file\)/,
+  'Untrusted File.type must not decide preview content type');
+const mislabeledPdf=new File([new Uint8Array([37,80,68,70])],'sample.pdf',{type:'text/html'});
+assert.equal(new Blob([mislabeledPdf],{type:'application/pdf'}).type,'application/pdf');
+console.log('PASS: removed recoverable tab keys, strict CSP, and PDF preview MIME-type hardening');

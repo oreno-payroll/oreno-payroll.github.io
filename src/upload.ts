@@ -715,7 +715,11 @@ reviewForm.addEventListener("submit", event => event.preventDefault());
 $("open-pdf").addEventListener("click", () => {
   const entry = selectedEntry();
   if (!entry) return;
-  if (!entry.previewUrl) entry.previewUrl = URL.createObjectURL(entry.file);
+  if (!entry.previewUrl) {
+    // File.type はアップロード元が指定できるため、PDFプレビュー時はMIMEを固定する。
+    // 「.pdf」なのに text/html のFileでも、HTMLとして開かないようにする。
+    entry.previewUrl = URL.createObjectURL(new Blob([entry.file], { type: "application/pdf" }));
+  }
   const a = document.createElement("a");
   a.href = entry.previewUrl;
   a.target = "_blank";

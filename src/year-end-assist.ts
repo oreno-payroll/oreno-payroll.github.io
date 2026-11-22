@@ -3,6 +3,7 @@ import { createAppStatus } from './ui/appStatus';
 import {YearEndRepository} from './yearEnd/repository';
 import {parseAssistedPdf} from './yearEnd/pdf';
 import {openYearEndPdf} from './pdf/yearEndHandoff';
+import {asVerifiedPdfBlob} from './pdf/safePdf';
 import {yearEndPdfName,yearEndVisiblePdfName} from './storage/fileNaming';
 import {createYearEndPdfZip} from './yearEnd/pdfExport';
 import {calculateYear,monthOf,parseYen,yearMonth,validYear,validDate,forecastPreview,bonusEstimatePreview,documentAmountWarnings,inconsistentDetectedNames,normalizeDetectedName,
@@ -120,10 +121,48 @@ function proposedForecastChanged():boolean{
  const proposal=months.filter(x=>x.value.trim()).map(x=>({month:x.dataset.override!,amount:parseYen(x.value)}));
  if(proposal.length!==data.estimates.length)return true;
  const method=selectedMethod();
- return proposal.some(e=>!data!.estimates.some(old=>old.month===e.month&&old.amount===e.amount&&old.method===method));
+ return proposal.some(e=>!data!.estimates.some(old=>old.month===e.month&&old.amount===e.amount&&(!forecastDirty||old.method===method)));
+}
+function salaryUpdateRequested():boolean{
+ // A bonus-only edit must never rebuild salary estimates merely because the
+ // unedited auto-preview differs from a stored manual/latest mixed-year entry.
+ return forecastDirty||(!bonusDirty&&proposedForecastChanged());
+}
+/** One validation contract for live button state and the save handler.
+ * Keep per-month errors visible and reject number-input badInput/overflow. */
+function validateForecastEditor():boolean{
+ if(!data)return true;
+ let salaryMessage='';
+ for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
+  const raw=input.value.trim();
+  const invalid=input.validity.badInput||!input.validity.valid||(raw!==''&&parseYen(raw)===null);
+  input.setAttribute('aria-invalid',String(invalid));
+  const monthError=input.closest('.yea-month')?.querySelector<HTMLElement>('[data-month-error]');
+  if(monthError){monthError.hidden=!invalid;monthError.textContent=invalid?'0円以上の整数を入力してください。':'';}
+  if(invalid&&!salaryMessage)salaryMessage=`${Number(input.dataset.override?.slice(5))}月の給与見込み額が不正です。`;
+ }
+ if(salaryMessage)setLocalError(forecastError,salaryMessage);
+ else if(!busy&&forecastError.textContent?.includes('給与見込み額が不正です'))setLocalError(forecastError);
+ let bonusMessage='';
+ if(bonusDirty){
+  const month=bonusMonthInput.value,raw=bonusValueInput.value.trim();
+  if(bonusValueInput.validity.badInput||!bonusValueInput.validity.valid||(raw!==''&&parseYen(raw)===null))
+   bonusMessage='賞与の見込み額は0円以上の整数で入力してください。';
+  else if(month&&(!month.startsWith(String(activeYear)+'-')||data.documents.some(d=>d.kind==='bonus'&&monthOf(d.paymentDate)===month)))
+   bonusMessage='賞与見込みの支給月が不正、または登録済みです。';
+  else if(month&&!raw&&!data.bonusEstimates.some(e=>e.month===month))
+   bonusMessage='賞与の見込み額を入力してください。';
+  else if(!month&&raw)bonusMessage='賞与の支給予定月を選択してください。';
+ }
+ bonusValueInput.setAttribute('aria-invalid',String(Boolean(bonusMessage)));
+ bonusMonthInput.setAttribute('aria-invalid',String(Boolean(bonusMessage)));
+ if(bonusMessage)setLocalError(bonusError,bonusMessage);
+ else if(bonusError.textContent?.includes('見込み額')||bonusError.textContent?.includes('支給予定月')||bonusError.textContent?.includes('支給月が不正'))setLocalError(bonusError);
+ return !salaryMessage&&!bonusMessage;
 }
 function updateForecastSaveState(){
- commit.disabled=busy||!selected||!data||!(forecastDirty||bonusDirty||proposedForecastChanged());
+ const valid=validateForecastEditor();
+ commit.disabled=busy||!selected||!data||!(salaryUpdateRequested()||bonusDirty)||!valid;
  forecastState.textContent=forecastDirty||bonusDirty?'未保存の変更があります。':'';
  updateUnsavedForecastPreview();
  for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
@@ -139,10 +178,12 @@ function updateUnsavedForecastPreview():void {
  salaryNote.hidden=true;annualNote.hidden=true;
  if(!data||busy)return;
  const saved=calculateYear(data);
- let proposedSalary=0;
+ const salaryDraft=salaryUpdateRequested();
+ let proposedSalary=salaryDraft?0:saved.salaryForecast;
  let valid=true;
  for(const input of Array.from(estimateMonths.querySelectorAll<HTMLInputElement>('input[data-override]'))){
   const raw=input.value.trim();
+  if(!salaryDraft)continue;
   if(!raw)continue;
   const amount=parseYen(raw);
   if(amount===null){valid=false;break;}
@@ -167,9 +208,9 @@ function updateUnsavedForecastPreview():void {
   return;
  }
  const proposedForecast=proposedSalary+[...bonuses.values()].reduce((sum,n)=>sum+n,0);
- if(proposedForecast===saved.forecast)return;
- salaryNote.textContent=`未保存の試算：${yen(proposedForecast)}`;
- annualNote.textContent=`保存すると ${yen(saved.actual+proposedForecast)}（現在の年間合計には未反映）`;
+ if(proposedForecast===saved.forecast&&!salaryDraft&&!bonusDirty)return;
+ salaryNote.textContent=`未保存の試算：${yen(proposedForecast)}${proposedForecast===saved.forecast?'（月別内訳・計算根拠に変更あり）':''}`;
+ annualNote.textContent=proposedForecast===saved.forecast?'年間合計は同額ですが、月別内訳・計算根拠は未保存です。':`保存すると ${yen(saved.actual+proposedForecast)}（現在の年間合計には未反映）`;
  salaryNote.hidden=false;annualNote.hidden=false;
 }
 function markForecastDirty(){forecastDirty=true;setLocalError(forecastError);updateForecastSaveState();}
@@ -419,7 +460,7 @@ function syncForecastAmounts(methodChanged=false){
   const existing=data.estimates.find(e=>e.month===month);
   const oldZero=data.noPaymentMonths.includes(month);
   if(method==='manual')input.value=methodChanged?'':(oldZero?'0':existing?String(existing.amount):'');
-  else if(calculated.has(month))input.value=!methodChanged&&oldZero?'0':!methodChanged&&existing?.method===method?String(existing.amount):String(calculated.get(month)!);
+  else if(calculated.has(month))input.value=!methodChanged&&oldZero?'0':!methodChanged&&existing?String(existing.amount):String(calculated.get(month)!);
   else input.value='';
   input.placeholder=method==='manual'?'金額を入力':'推定できません';
  }
@@ -446,8 +487,10 @@ function renderEstimateMonths(){
    input.value=oldNoPay?'0':existing?String(existing.amount):'';
    input.dataset.userEdited='false';
    input.setAttribute('aria-label',`${m}月の給与見込み額`);
-   input.addEventListener('input',()=>{input.dataset.userEdited='true';markForecastDirty();});
-   card.append(input);
+    const monthError=el('span','yea-month__error');monthError.dataset.monthError='';monthError.hidden=true;
+    monthError.id=`yea-month-error-${m}`;input.setAttribute('aria-describedby',monthError.id);
+    input.addEventListener('input',()=>{input.dataset.userEdited='true';markForecastDirty();});
+    card.append(input,monthError);
   }
   estimateMonths.append(card);
  }
@@ -466,18 +509,21 @@ function forecastSelection():{months:string[];overrides:Record<string,number>}{
 function saveForecast(){
  if(!selected||!data||busy||commit.disabled)return;
  try{
-  const {months,overrides}=forecastSelection(),method=selectedMethod();
+   if(!validateForecastEditor())return;
+   const salaryUpdate=salaryUpdateRequested();
+   const {months,overrides}=salaryUpdate?forecastSelection():{months:[] as string[],overrides:{} as Record<string,number>};
+   const method=selectedMethod();
   const bonusChange=bonusDirty?requestedBonusChange():undefined;
   const clean={...data,noPaymentMonths:[]};
-  const snapshot=months.length?forecastPreview(clean,method,months,overrides):null;
+   const snapshot=salaryUpdate&&months.length?forecastPreview(clean,method,months,overrides):null;
   if(bonusChange&&'amount' in bonusChange)bonusEstimatePreview(clean,bonusChange.month,bonusChange.amount);
   const id=selected,year=activeYear;
   setLocalError(forecastError);setLocalError(bonusError);
   const oldEstimates=data.estimates,oldNoPay=data.noPaymentMonths,oldBonus=data.bonusEstimates;
   const previousInput=captureForecastInput();
   void action('給与・賞与の見込みを保存中',async()=>{
-   await repo.replaceIncomeForecasts(id,year,method,months,overrides,oldEstimates,oldNoPay,snapshot?.references??[],oldBonus,
-    bonusChange);
+    await repo.replaceIncomeForecasts(id,year,method,months,overrides,oldEstimates,oldNoPay,snapshot?.references??[],oldBonus,
+     bonusChange,salaryUpdate);
    forecastDirty=false;bonusDirty=false;
    const refreshed=await repo.year(id,year);
    data=refreshed;renderYear();
@@ -493,7 +539,7 @@ function saveForecast(){
 function openBlobPdf(blob:Blob,displayedName?:string){
  try{
   const id=crypto.randomUUID();
-  openYearEndPdf(id,async()=>({pdf:blob,fileName:displayedName??(blob instanceof File?blob.name:'確認用原本.pdf')}));
+  openYearEndPdf(id,async()=>({pdf:await asVerifiedPdfBlob(blob),fileName:displayedName??(blob instanceof File?blob.name:'確認用原本.pdf')}));
  }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。',true);}
 }
 function openStoredPdf(id:string){
@@ -501,7 +547,7 @@ function openStoredPdf(id:string){
  const person=selected,year=activeYear;
  const record=data?.documents.find(row=>row.id===id);
  try{
-  openYearEndPdf(id,async()=>({pdf:await repo.original(person,year,id),fileName:record?yearEndVisiblePdfName(record.kind,record.paymentDate,record.fileName):'給与明細原本.pdf'}));
+  openYearEndPdf(id,async()=>({pdf:await asVerifiedPdfBlob(await repo.original(person,year,id)),fileName:record?yearEndVisiblePdfName(record.kind,record.paymentDate,record.fileName):'給与明細原本.pdf'}));
  }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。',true);}
 }
 const selectedQueueItem=():QueueItem|undefined=>fileQueue.find(x=>x.id===activeDraft);

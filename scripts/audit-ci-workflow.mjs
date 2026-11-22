@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 const root=fileURLToPath(new URL('../',import.meta.url));
-export const REVIEWED_WORKFLOW_SHA256='11c740e58b64437e0e780801c4fd7a0d0566e4649930db51cdf0b68a834c51d7';
+export const REVIEWED_WORKFLOW_SHA256='9f5b7132332867479f99f0e0657277802bce12b990484953253a30c4d7fca939';
 export const REQUIRED_STATUS_CHECK='security';
 const sha256=source=>createHash('sha256').update(source,'utf8').digest('hex');
 
@@ -38,6 +38,12 @@ export function auditWorkflow(source){
   }
   if((source.match(/^  security:$/gm)||[]).length!==1)errors.push('exactly one required security job expected');
   if((source.match(/^  deploy:$/gm)||[]).length!==1)errors.push('exactly one deployment job expected');
+  if((source.match(/^        run: node scripts\/audit-dist\.mjs --require-private-terms$/gm)||[]).length!==2)
+    errors.push('both pre-test and final post-E2E distribution audits are mandatory');
+  const e2e=source.indexOf('      - name: Headless Chromium end-to-end regression tests');
+  const finalAudit=source.indexOf('      - name: Re-audit Pages distribution immediately before artifact upload');
+  const upload=source.indexOf('      - name: Upload exactly the audited Pages build');
+  if(e2e<0||finalAudit<=e2e||upload<=finalAudit)errors.push('final Pages integrity audit must occur after E2E and before upload');
   // Pinned Actions and exact scripts are guaranteed by the complete SHA-256;
   // see scripts/test-security-pipeline.mjs for deliberate mutation tests.
   return errors;

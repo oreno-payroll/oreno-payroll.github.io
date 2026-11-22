@@ -233,3 +233,7 @@
 /* Provisional arithmetic is visible, never written to OneDrive without Save. */
 .yea-stat .yea-draft-preview{margin:0;font-size:11px;line-height:1.55;font-weight:650;color:var(--color-primary);overflow-wrap:anywhere}
 .yea-stat--total .yea-draft-preview{font-size:12px}
+
+/* Invalid monthly forecasts must be visible before Save, including mobile. */
+.yea-month .yea-month__error:not([hidden]){display:block;font-size:11px;line-height:1.35;color:var(--color-danger,#b42318);overflow-wrap:anywhere}
+.yea-month input[aria-invalid="true"],.yea-forecast-bonus input[aria-invalid="true"]{border-color:var(--color-danger,#b42318);outline-color:var(--color-danger,#b42318)}

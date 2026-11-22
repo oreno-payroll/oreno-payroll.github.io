@@ -167,6 +167,16 @@ Gitフック・パターン検査・Gitleaks・辞書でも任意の個人情報
 
 **旧検証スクリプトの整理：** IndexedDBの旧永続保存方式、PDF Service Workerの旧挙動、旧URL形式に依存する6本を廃止。成果物の機能確認に使える`verify-three-features.mjs`と`verify-calendar-feature.mjs`は現行仕様へ更新し、`npm test`へ組み込みました。
 
+### PR必須のCIとGitHub Pages公開手順
+
+- **普段の開発では`main`を直接変更しません。** `git switch main && git pull --ff-only` で更新後、`git switch -c feat/変更名` で作業します。コミット・`git push -u origin feat/変更名` は引き続きローカルフックを通し、`gh pr create --base main --fill` でPRを開きます。
+- `.github/workflows/deploy.yml`の`security`ジョブは、`pull_request`・`main`への`push`・手動実行・週次監査で常に実行します。PR時はGitHub生成の**mainとの仮マージコミット**を検査し、秘密情報・過去履歴・依存関係・ビルド・`dist/`・全回帰テストをPASSさせます。PRからGitHub Pagesのアップロードやデプロイは行いません。
+- `security`が失敗・未実施ならマージさせないよう、GitHub Settings → Rules → Rulesets → `protect main branch` で **Require a pull request before merging（承認0件）** と **Require status checks to pass（`security`、GitHub Actions発行元、Require branches to be up to date）** を有効化します。バイパス許可者は追加しません。**最初のPRの検証が済んでからルールを有効化**し、設定後はGitHubの画面から直接push拒否も確認します。
+- デプロイは`security`成功を必要とする別の`deploy`ジョブで行います。検査ジョブが生成した**同じ`dist/`アーティファクト**だけをPagesに配信し、デプロイジョブでは再ビルドしません。週次監査とPRでは公開しません。
+- ワークフロー全文の監査済みSHA-256を`scripts/audit-ci-workflow.mjs`に固定しています。CIの正当な変更でも明示的なレビューとハッシュの更新が必要です。`scripts/audit-pr-target.mjs`はPR仮マージの両親コミットを確認し、検査対象の一時Git参照を作ってGit履歴の検査漏れを防ぎます（公開リポジトリの履歴は書き換えません）。
+- Actions Secret `PAYROLL_PRIVATE_TERMS_B64`は必須。**フォークからのPRにはGitHubがこのSecretを渡さないため、検査は安全側に失敗**します。外部PRを受け付ける場合はSecretsを渡さず成立する検査体系を別途設計してください。`pull_request_target`は利用しません。
+- GitHubの管理者にはルールセットを変更する権限があるため、悪意ある管理者まで技術的に完全封鎖する構成ではありません。これは個人開発における誤操作や検査抜けを防止する仕組みです。
+
 ### セキュリティ検査と制限
 
 - ホーム・アップロード・設定を含む全画面のCSPでJavaScriptの `unsafe-eval` を許可しません。使用中のPDF.js 6では旧 `isEvalSupported` オプションは存在しないため設定しません。PDF用WebAssemblyのため `wasm-unsafe-eval` は維持します。

@@ -3,27 +3,25 @@ name: Deploy Payroll to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '19 0 * * 1'
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: payroll-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  security:
+    name: security
     runs-on: ubuntu-latest
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+    permissions:
+      contents: read
     steps:
       - name: Checkout complete Git history for secret audits
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -36,6 +34,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+
+      - name: Verify PR merge checkout and include it in Git history audits
+        run: node scripts/audit-pr-target.mjs
 
       - name: Audit published source and check PDF viewer files
         run: node scripts/audit-publish.mjs
@@ -89,17 +90,27 @@ jobs:
       - name: Regression tests
         run: npm test
 
-      - name: Configure Pages
-        if: github.event_name != 'schedule'
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-
-      - name: Upload Pages artifact
-        if: github.event_name != 'schedule'
+      - name: Upload exactly the audited Pages build
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: dist
 
+  deploy:
+    needs: security
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
       - name: Deploy to Pages
-        if: github.event_name != 'schedule'
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

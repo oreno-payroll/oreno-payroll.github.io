@@ -29,6 +29,7 @@ const required = [
   'scripts/audit-publish.mjs',
   'scripts/test-audit-fixes.mjs',
   'scripts/audit-ci-workflow.mjs',
+  'scripts/audit-pr-target.mjs',
   'scripts/audit-dist.mjs',
   'scripts/install-git-hooks.sh',
   '.githooks/pre-commit',

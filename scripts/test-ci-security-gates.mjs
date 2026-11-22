@@ -5,6 +5,12 @@ import {auditWorkflow} from './audit-ci-workflow.mjs';
 const workflow=readFileSync(new URL('../.github/workflows/deploy.yml',import.meta.url),'utf8');
 const privacy=readFileSync(new URL('./audit-private-data.mjs',import.meta.url),'utf8');
 assert.deepEqual(auditWorkflow(workflow),[],'CI command/step structure must be verifiably safe');
+assert.match(workflow,/^  pull_request:\n    branches: \[main\]$/m,'PRs must run security before merging');
+assert.match(workflow,/^  security:\n    name: security\n    runs-on: ubuntu-latest$/m,'required check context is security');
+assert.match(workflow,/^  deploy:\n    needs: security$/m,'Pages must depend on successful security job');
+assert.match(workflow,/node scripts\/audit-pr-target\.mjs/,'PR merge is checked, not just the branch tip');
+assert.doesNotMatch(workflow,/pull_request_target:/,'untrusted PRs must never use privileged pull_request_target');
+
 assert.match(workflow,/fetch-depth:\s*0/,'full history is required');
 assert.match(workflow,/persist-credentials:\s*false/,'checkout should not leave a credential in .git/config');
 // Freeze every external GitHub Action at its official 40-character commit SHA.
@@ -26,7 +32,7 @@ assert.match(workflow,/node scripts\/audit-private-data\.mjs --strict-gitleaks -
 assert.match(workflow,/gitleaks git --log-opts=--all --redact --no-banner \./);
 assert.match(workflow,/npm audit --audit-level=high/);
 const verify=workflow.indexOf('Full Git history Gitleaks audit');
-const upload=workflow.indexOf('Upload Pages artifact');
+const upload=workflow.indexOf('Upload exactly the audited Pages build');
 assert.ok(verify>0&&upload>verify,'Gitleaks must gate the upload/deployment');
 assert.doesNotMatch(workflow,/continue-on-error:\s*true/,'security checks must fail closed');
 assert.doesNotMatch(workflow,/\|\|\s*true/,'security checks must not be silenced');

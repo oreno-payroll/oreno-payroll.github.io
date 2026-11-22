@@ -74,7 +74,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'payroll-audit-test-'));
 try {
  const required=[
   'scripts/audit-publish.mjs','scripts/audit-rules.mjs','scripts/test-audit-fixes.mjs',
-  'scripts/audit-ci-workflow.mjs','scripts/audit-dist.mjs','scripts/install-git-hooks.sh',
+  'scripts/audit-ci-workflow.mjs','scripts/audit-pr-target.mjs','scripts/audit-dist.mjs','scripts/install-git-hooks.sh',
   '.githooks/pre-commit','.githooks/pre-push',
   'scripts/msal-entry.mjs','scripts/msal-redirect-bridge.mjs','scripts/audit-msal.mjs',
   'public/auth/redirect.html','public/frame-guard.js',

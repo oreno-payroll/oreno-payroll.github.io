@@ -119,9 +119,26 @@ export async function auditDist({root=project,requirePrivateTerms=false,verifyBu
     }
     const buildLabel=utf8(readFileSync(path.join(dist,'build-info.js')));
     const version=JSON.parse(readFileSync(path.join(root,'package.json'),'utf8')).version;
-    if(!buildLabel.includes("document.querySelectorAll('[data-build-version]')")||
-        !buildLabel.includes(`v${version}`)||buildLabel.length>1024)
-      problems.push('ビルド識別子に想定外のコードが含まれています');
+    // Unlike the old substring check, accept exactly the one statement emitted
+    // by build.mjs. A valid version substring cannot conceal extra JavaScript.
+    const prefix="document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ";
+    const suffix="; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n";
+    let approved=false;
+    if(buildLabel.startsWith(prefix)&&buildLabel.endsWith(suffix)&&buildLabel.length<=1024){
+      const literal=buildLabel.slice(prefix.length,-suffix.length);
+      try{
+        const label=JSON.parse(literal);
+        if(typeof label==='string' && literal===JSON.stringify(label) &&
+          /^v[^\n]+ · \d{4}[/.-]\d{1,2}[/.-]\d{1,2} \d{1,2}:\d{2}:\d{2} · (?:local|[0-9a-f]{7,40})$/.test(label) &&
+          label.startsWith(`v${version} · `)){
+          let head='local';
+          try{head=execFileSync('git',['rev-parse','--short','HEAD'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{}
+          approved=label.endsWith(` · ${head}`) &&
+            buildLabel===prefix+JSON.stringify(label)+suffix;
+        }
+      }catch{}
+    }
+    if(!approved)problems.push('ビルド識別子に想定外のコードが含まれています');
   }
   const dictionary=terms();
   if(requirePrivateTerms&&!dictionary.length)problems.push('個別禁止語句が未設定のためdist監査を完了できません');

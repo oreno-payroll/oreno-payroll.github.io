@@ -4,6 +4,7 @@ import {existsSync,readFileSync,mkdtempSync,rmSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
+import {scanGitHistoryTerms} from './audit-git-history-terms.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const flags=new Set(process.argv.slice(2));
 const staged=flags.has('--staged'),working=flags.has('--working');
@@ -51,12 +52,28 @@ const isPublicAuthor=(name,email)=>{
  return (noreply.test(email)&&handle.test(name))||(name==='GitHub'&&email===['noreply','github.com'].join('@'))||(name==='github-actions[bot]'&&noreply.test(email));
 };
 if(!flags.has('--no-history')){
+ // Root author metadata was knowingly published before the privacy gate existed.
+ // This exact root commit alone is grandfathered for author/committer *metadata*;
+ // its historical file blobs are still scanned with the private dictionary.
+ const reviewedRoot='14a8305d7982aea36b4f89215a0db95ebcb62adf';
+ const rootCommits=new Set(git(['rev-list','--max-parents=0','--all']).trim().split('\n'));
  const flagged=new Set();
  for(const row of git(['log','--all','--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00']).split('\n')){
   const [hash,an,ae,cn,ce]=row.split('\0');if(!/^[a-f0-9]{40}$/.test(hash??''))continue;
-  if(!isPublicAuthor(an,ae)||!isPublicAuthor(cn,ce))flagged.add(hash.slice(0,12));
+  if((!isPublicAuthor(an,ae)||!isPublicAuthor(cn,ce)) && !(hash===reviewedRoot&&rootCommits.has(hash)))flagged.add(hash.slice(0,12));
  }
  for(const sha of flagged)problems.push(`Git履歴の作者情報を要確認：${sha}（氏名・メール非表示）`);
+ // A removed file remains reachable from prior commits, so check its content.
+ // No blanket exception is made for the known root commit's file contents.
+ if(privateTerms.length){
+  try{
+    const result=scanGitHistoryTerms(root,privateTerms);
+    console.log(`[Git履歴の禁止語句監査] テキストblob ${result.scanned}件を検査しました。`);
+    problems.push(...result.findings);
+  }catch(error){
+    problems.push('Git履歴の過去ファイルを検査できませんでした（fail closed）。');
+  }
+ }
  if(!flags.has('--skip-current-author')){
   const match=/^(.*?) <(.*?)> \d+ [+-]\d{4}$/.exec(git(['var','GIT_AUTHOR_IDENT']).trim());
   if(match&&!isPublicAuthor(match[1],match[2]))problems.push('次回コミットの作者情報が公開用ハンドル名＋GitHub noreply形式ではありません（値は非表示）');

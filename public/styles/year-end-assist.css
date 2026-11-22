@@ -228,3 +228,8 @@
 .yea-taxable-table th:first-child{text-align:left}
 .yea-taxable-table__total{font-weight:800}
 @media(max-width:680px){.yea-file-tools{justify-content:flex-end}.yea-file-tools .btn{min-height:30px}}
+
+
+/* Provisional arithmetic is visible, never written to OneDrive without Save. */
+.yea-stat .yea-draft-preview{margin:0;font-size:11px;line-height:1.55;font-weight:650;color:var(--color-primary);overflow-wrap:anywhere}
+.yea-stat--total .yea-draft-preview{font-size:12px}

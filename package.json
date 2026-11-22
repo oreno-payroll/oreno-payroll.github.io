@@ -9,13 +9,15 @@
     "preview": "python3 -m http.server 5173 --directory dist",
     "clean:legacy": "node scripts/cleanup-legacy.mjs",
     "test": "node scripts/run-tests.mjs",
-    "audit:privacy": "node scripts/audit-private-data.mjs"
+    "audit:privacy": "node scripts/audit-private-data.mjs",
+    "test:e2e": "playwright test --config scripts/playwright-config.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@playwright/test": "1.65.1",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   },

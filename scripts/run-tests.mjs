@@ -30,6 +30,7 @@ const tests = [
   ['scripts/test-bonus-latest.mjs', true],
   ['scripts/test-calendar-year.mjs', true],
   ['scripts/test-home-registration-status.mjs', true],
+  ['scripts/test-payroll-ui-followup.mjs', true],
   ['scripts/test-monthly-registration.mjs', true],
   ['scripts/test-side-zip.mjs', true],
   ['scripts/test-target-year.mjs', true],

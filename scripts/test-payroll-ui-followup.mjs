@@ -20,7 +20,9 @@ assert.match(yearSrc,/updateUnsavedForecastPreview\(\);/);
 assert.match(yearSrc,/未保存の試算：/);
 assert.match(yearSrc,/現在の年間合計には未反映/);
 assert.match(yearSrc,/const amount=parseYen\(raw\);/);
-assert.match(yearSrc,/if\(proposedForecast===saved\.forecast\)return;/);
+assert.match(yearSrc,/if\(proposedForecast===saved\.forecast&&!salaryDraft&&!bonusDirty\)return;/);
+assert.match(yearSrc,/月別内訳・計算根拠に変更あり/);
+assert.match(yearSrc,/年間合計は同額ですが、月別内訳・計算根拠は未保存です。/);
 // Confirm actual model arithmetic without personal or remote data.
 const id=asPersonId('11111111-1111-4111-8111-111111111111');
 const year=emptyYear(id,2026);

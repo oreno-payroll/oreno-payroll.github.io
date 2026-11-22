@@ -31,6 +31,7 @@ const tests = [
   ['scripts/test-calendar-year.mjs', true],
   ['scripts/test-home-registration-status.mjs', true],
   ['scripts/test-payroll-ui-followup.mjs', true],
+  ['scripts/test-payroll-forecast-safety.mjs', true],
   ['scripts/test-monthly-registration.mjs', true],
   ['scripts/test-side-zip.mjs', true],
   ['scripts/test-target-year.mjs', true],

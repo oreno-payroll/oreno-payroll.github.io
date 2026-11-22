@@ -5,7 +5,8 @@ import vm from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 const source=fs.readFileSync(new URL('../src/view.ts',import.meta.url),'utf8');
 const sharedStatus=fs.readFileSync(new URL('../src/ui/appStatus.ts',import.meta.url),'utf8');
-const runnable=stripTypeScriptTypes(sharedStatus.replace(/^export /gm,'')+'\n'+source.replace(/^import .*?;\s*$/gm,''),{mode:'strip'});
+const safePdf=fs.readFileSync(new URL('../src/pdf/safePdf.ts',import.meta.url),'utf8');
+const runnable=stripTypeScriptTypes(sharedStatus.replace(/^export /gm,'')+'\n'+safePdf.replace(/^export /gm,'')+'\n'+source.replace(/^import .*?;\s*$/gm,''),{mode:'strip'});
 const pdf=new Blob(['%PDF-1.4\ncloud-test\n'],{type:'application/pdf'});
 const reader={hidden:true,src:'',title:''};const status={hidden:false,textContent:'',dataset:{},classList:{add(){}},setAttribute(){},removeAttribute(){}};
 let unregistered=false;
@@ -14,7 +15,7 @@ const ctx={
  document:{title:'',getElementById(id){return id==='pdf-status'?status:id==='pdf-reader'?reader:null;}},
  location:{href:'https://payroll.example/view/index.html?id=7',search:'?id=7'},
  navigator:{serviceWorker:{async getRegistration(){return {active:{scriptURL:'https://payroll.example/view/pdf-sw.js'},async unregister(){unregistered=true;}};}}},
- URL:class extends URL{static createObjectURL(blob){assert.equal(blob,pdf);return 'blob:cloud-payroll-pdf';}static revokeObjectURL(){}},
+ URL:class extends URL{static createObjectURL(blob){assert.equal(blob.type,'application/pdf');assert.notEqual(blob,pdf);return 'blob:cloud-payroll-pdf';}static revokeObjectURL(){}},
  URLSearchParams,Blob,console,setTimeout:()=>1,clearTimeout:()=>{},
  createTabLockCoordinator:()=>({epoch:()=>'',check:()=>true}),
  receiveYearEndPdf:async()=>{throw new Error('not expected in personal viewer test');},

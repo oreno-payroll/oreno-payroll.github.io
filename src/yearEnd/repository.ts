@@ -493,7 +493,8 @@ export class YearEndRepository {
   * Protect against changed salary references, old estimates and other-tab edits. */
  async replaceIncomeForecasts(id:PersonId,year:number,method:EstimateMethod,months:string[],overrides:Record<string,number>,
   previousEstimates:Estimate[],previousNoPaymentMonths:string[],expectedReferences:ForecastPreview['references'],
-  previousBonusEstimates:Estimate[],bonusDraft?:{month:string;amount:number}|{month:string;remove:true}):Promise<void>{
+   previousBonusEstimates:Estimate[],bonusDraft?:{month:string;amount:number}|{month:string;remove:true},
+   salaryUpdate=true):Promise<void>{
   asPersonId(id);
   const a=await this.access(),context=await this.yearContext(a,id,year,true);
   if(JSON.stringify(context.data.estimates)!==JSON.stringify(previousEstimates)||
@@ -501,9 +502,9 @@ export class YearEndRepository {
    JSON.stringify(context.data.bonusEstimates)!==JSON.stringify(previousBonusEstimates))
    throw new Error('別の画面で見込みが変更されました。再読み込みしてから保存してください。');
   const compatible={...context.data,noPaymentMonths:[]};
-  const fresh=months.length?forecastPreview(compatible,method,months,overrides):null;
-  if(JSON.stringify(fresh?.references??[])!==JSON.stringify(expectedReferences))
-   throw new Error('確定給与の参照先が変更されました。再読み込みしてから保存してください。');
+   const fresh=salaryUpdate&&months.length?forecastPreview(compatible,method,months,overrides):null;
+   if(salaryUpdate&&JSON.stringify(fresh?.references??[])!==JSON.stringify(expectedReferences))
+    throw new Error('確定給与の参照先が変更されました。再読み込みしてから保存してください。');
   let bonusEstimates=context.data.bonusEstimates;
   if(bonusDraft){
    if(!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(bonusDraft.month)||!bonusDraft.month.startsWith(String(year)+'-'))
@@ -523,10 +524,12 @@ export class YearEndRepository {
     }
    }
   }
-  const next:YearData={...context.data,estimates:fresh?.estimated??[],noPaymentMonths:[],bonusEstimates,confirmedAt:null};
-  if(!context.data.noPaymentMonths.length&&
-   JSON.stringify(next.estimates.map(e=>[e.month,e.amount,e.method,e.references]))===JSON.stringify(context.data.estimates.map(e=>[e.month,e.amount,e.method,e.references]))&&
-   bonusEstimates===context.data.bonusEstimates)return;
+   const next:YearData={...context.data,
+    estimates:salaryUpdate?(fresh?.estimated??[]):context.data.estimates,
+    noPaymentMonths:salaryUpdate?[]:context.data.noPaymentMonths,bonusEstimates,confirmedAt:null};
+   if((!salaryUpdate||(!context.data.noPaymentMonths.length&&
+     JSON.stringify(next.estimates.map(e=>[e.month,e.amount,e.method,e.references]))===JSON.stringify(context.data.estimates.map(e=>[e.month,e.amount,e.method,e.references]))))&&
+    bonusEstimates===context.data.bonusEstimates)return;
   await this.saveYear(a,id,year,context.file,next,context.yearFile);
  }
  async commitBonusEstimate(id:PersonId,year:number,month:string,amount:number):Promise<void>{

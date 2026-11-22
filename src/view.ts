@@ -3,6 +3,7 @@ import { createAppStatus } from './ui/appStatus';
 import { getRecord } from './storage/payrollStore';
 import { receivePdfHandoff } from './pdf/handoff';
 import {receiveYearEndPdf} from './pdf/yearEndHandoff';
+import {asVerifiedPdfBlob,requirePdfMime} from './pdf/safePdf';
 import {createTabLockCoordinator} from './cloud/tabLock';
 
 const status = document.getElementById('pdf-status');
@@ -41,12 +42,14 @@ async function start(): Promise<void> {
   if(yearEndId!==null){
    const ticket=new URLSearchParams((location.hash??'').slice(1)).get('handoff')??'';
    if(!ticket)throw new Error('年末調整画面からPDFを開いてください。');
-   const payload=await receiveYearEndPdf(yearEndId,ticket);
-   assertUnlocked(startEpoch);
+    const payload=await receiveYearEndPdf(yearEndId,ticket);
+    requirePdfMime(payload.pdf);
+    const verifiedPdf=await asVerifiedPdfBlob(payload.pdf);
+    assertUnlocked(startEpoch);
    const clean=new URL(location.href);clean.hash='';window.history.replaceState(window.history.state,'',clean.href);
    document.title=payload.fileName;reader.title=payload.fileName;
    await removeLegacyWorker();assertUnlocked(startEpoch);
-   fallbackUrl=URL.createObjectURL(payload.pdf);
+    fallbackUrl=URL.createObjectURL(verifiedPdf);
    reader.src=fallbackUrl;reader.hidden=false;
    appStatus.success('PDF原本を表示しました');
    return;
@@ -78,7 +81,9 @@ async function start(): Promise<void> {
   reader.title = record.fileName;
   await removeLegacyWorker();
   assertUnlocked(startEpoch);
-  fallbackUrl = URL.createObjectURL(record.pdf);
+  const verifiedPdf=await asVerifiedPdfBlob(record.pdf);
+  assertUnlocked(startEpoch);
+  fallbackUrl = URL.createObjectURL(verifiedPdf);
   reader.src = fallbackUrl;
   reader.hidden = false;
   appStatus.success('PDFを表示しました');

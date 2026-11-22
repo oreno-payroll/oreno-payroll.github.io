@@ -79,4 +79,25 @@ assert.match(ui, /bonusClearedMonth\?\{month:bonusClearedMonth,remove:true\}/);
 assert.match(ui, /bonusDirty\?requestedBonusChange\(\):undefined/);
 assert.match(ui, /bonusChange&&'amount' in bonusChange/,'deletion must not invoke amount preview');
 assert.match(ui, /bonusClearedMonth=!month&&bonusLastMonth/,'clearing month retains a precise saved deletion target');
+// Bonus-only write must not rewrite old salary estimate metadata or migrate legacy no-pay months.
+const annualPath=key([...root,'persons',id,'years'],yearId+'.enc');
+const oldAnnual=await repo.year(id,2026);
+const legacy={...oldAnnual,
+ estimates:[...oldAnnual.estimates,{month:'2026-07',amount:90000,method:'latest',references:[],updatedAt:'2026-08-01T00:00:00Z'}],
+ noPaymentMonths:['2026-02'],confirmedAt:at};
+store.set(annualPath,{text:JSON.stringify(legacy),etag:`e${++seq}`});
+const prior=await repo.year(id,2026),beforeBonusOnly=writes;
+await repo.replaceIncomeForecasts(id,2026,'manual',[],{},prior.estimates,prior.noPaymentMonths,
+ [],prior.bonusEstimates,{month:'2026-11',amount:85000},false);
+const preserved=await repo.year(id,2026);
+assert.deepEqual(JSON.parse(JSON.stringify(preserved.estimates)),JSON.parse(JSON.stringify(prior.estimates)),
+ 'mixed salary methods, references, timestamps and amounts remain identical');
+assert.deepEqual(JSON.parse(JSON.stringify(preserved.noPaymentMonths)),['2026-02'],
+ 'legacy no-payment markers must not silently migrate during bonus-only edit');
+assert.equal(preserved.bonusEstimates[0].amount,85000);
+assert.equal(writes,beforeBonusOnly+1,'bonus-only edit commits exactly one annual file');
+await assert.rejects(repo.replaceIncomeForecasts(id,2026,'manual',[],{},prior.estimates,prior.noPaymentMonths,
+ [],prior.bonusEstimates,{month:'2026-11',amount:95000},false),/別の画面/,
+ 'stale bonus-only edit must not overwrite a concurrent change');
+console.log('PASS: bonus-only preservation of mixed salary methods, references, timestamps, and no-pay markers');
 console.log('PASS: bonus forecast removal, 0 yen, independent months, no-op, stale-tab collision, year bounds, UI intent');

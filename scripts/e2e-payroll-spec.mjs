@@ -114,3 +114,34 @@ test('mobile Microsoft account actions occupy their settings row width', async (
     expect(Math.abs(width - rowWidth), id).toBeLessThan(2);
   }
 });
+
+
+// Browser-side PDF upload/parse is exercised without a real payroll account.
+test('synthetic PDF can enter the actual upload analysis UI without connecting to Graph', async ({page}) => {
+ await page.goto('/upload/index.html');
+ const bytes=Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Count 0 /Kids [] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n');
+ await page.locator('input[type="file"]').first().setInputFiles({name:'synthetic-only.pdf',mimeType:'application/pdf',buffer:bytes});
+ await expect(page.locator('.file-list__item').first()).toBeVisible();
+ await expect(page.locator('.file-list__item').first()).toContainText('synthetic-only.pdf');
+ // No authenticated vault: do not attempt to store the document in OneDrive.
+});
+
+// One-use handoff tests the REAL receiving page: an HTML blob must be rejected
+// before an iframe ever receives a blob: URL. Deliberately no sign-in bypass.
+test('year-end viewer rejects an HTML Blob handed off as a PDF', async ({page}) => {
+ const id='11111111-1111-4111-8111-111111111111';
+ const ticket='22222222-2222-4222-8222-222222222222';
+ await page.addInitScript(({ticket})=>{
+  const channel=new BroadcastChannel('payroll-yearend-view-v1-'+ticket);
+  window.__syntheticPdfHandoffChannel=channel;
+  channel.onmessage=event=>{
+   if(event.data?.type==='ready')channel.postMessage({type:'pdf',id:event.data.id,ticket,
+    pdf:new Blob(['<html><script>throw new Error("executable")</script></html>'],{type:'text/html'}),
+    fileName:'synthetic-only.pdf'});
+  };
+ },{ticket});
+ await page.goto('/view/index.html?yearend='+id+'#handoff='+ticket);
+ await expect(page.locator('#pdf-status')).toContainText('PDF以外のMIME形式は閲覧できません。', {timeout:15000});
+ await expect(page.locator('#pdf-reader')).toBeHidden();
+ await expect(page.locator('#pdf-reader')).not.toHaveAttribute('src',/blob:/);
+});

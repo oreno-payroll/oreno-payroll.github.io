@@ -2,6 +2,7 @@
  * The receiving tab owns the iframe so it can discard plaintext on global vault lock.
  * Never navigate a tab directly to a bare blob: URL. */
 import type {HandoffPdf} from './handoff';
+import {requirePdfMime} from './safePdf';
 const PREFIX='payroll-yearend-view-v1-';
 const UUID=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const LIMIT=50_000_000;
@@ -23,8 +24,9 @@ export function openYearEndPdf(id:string,load:()=>Promise<HandoffPdf>):void{
   void (async()=>{
    try{
     const payload=await load();
-    if(epoch!==localStorage.getItem('payroll-global-vault-lock-epoch-v1'))throw new Error('保管庫がロックされました。');
-    if(!(payload.pdf instanceof Blob)||payload.pdf.size<1||payload.pdf.size>LIMIT||
+     if(epoch!==localStorage.getItem('payroll-global-vault-lock-epoch-v1'))throw new Error('保管庫がロックされました。');
+     requirePdfMime(payload.pdf);
+     if(!(payload.pdf instanceof Blob)||payload.pdf.size<1||payload.pdf.size>LIMIT||
       !payload.fileName||payload.fileName.length>500)throw new Error('PDF原本の形式が正しくありません。');
     channel.postMessage({type:'pdf',id,ticket,pdf:payload.pdf,fileName:payload.fileName} satisfies Message);
    }catch(error){channel.postMessage({type:'error',id,ticket,error:error instanceof Error?error.message:'原本を開けませんでした。'} satisfies Message);}
@@ -54,7 +56,8 @@ export function receiveYearEndPdf(id:string,ticket:string):Promise<HandoffPdf>{
       typeof message.fileName!=='string'||!message.fileName||message.fileName.length>500){
     reject(new Error('PDF原本の形式が不正です。'));return;
    }
-   resolve({pdf:message.pdf,fileName:message.fileName});
+    try{requirePdfMime(message.pdf);resolve({pdf:message.pdf,fileName:message.fileName});}
+    catch(error){reject(error);}
   };
   channel.postMessage({type:'ready',id,ticket} satisfies Message);
  });

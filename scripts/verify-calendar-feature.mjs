@@ -14,5 +14,8 @@ assert.match(calculation,/Math\.max\(start, latest \+ 1, todayMonth\)/,'past mis
 const main=read('src/main.ts');
 assert.match(main,/calculateCalendarForecast/);
 assert.match(main,/過去月の未登録給与は補完しません/);
-assert.match(read('dist/main.js'),/12月までの見込み計算根拠/);
+// esbuild の ASCII 文字列エスケープも同じ意味の文字列として検証する。
+const mainJs = read('dist/main.js');
+const decodedMainJs = mainJs.replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+assert.ok(decodedMainJs.includes('12月までの見込み計算根拠'), 'ビルド済みの暦年見込み見出しが見つかりません');
 console.log('PASS: fiscal/calendar switch and current-month forecasting are built');

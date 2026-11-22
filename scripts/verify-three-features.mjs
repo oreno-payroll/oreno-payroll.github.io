@@ -16,6 +16,9 @@ for(const id of ['export-password','export-confirm','restore-password']){
 }
 assert.ok(info.includes(`v${version}`),'build-info version must match package.json');
 assert.match(homeJs,/payroll-side-/);
-assert.match(backupJs,/パスワードを表示/);
+// esbuild は日本語文字列を \uXXXX に変換する場合があるため、検査時だけ復号する。
+const decodedBackupJs = backupJs.replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+assert.ok(backupJs.includes('[data-toggle-password]'), 'ビルド済みのパスワード表示操作が見つかりません');
+assert.ok(decodedBackupJs.includes('パスワードを表示'), 'ビルド済みのパスワード表示ラベルが見つかりません');
 for(const file of ['dist/upload/index.html','dist/edit/index.html'])assert.match(read(file),/data-build-version/);
 console.log('PASS: current release version, password visibility, side PDF ZIP and built HTML');

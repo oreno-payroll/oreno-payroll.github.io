@@ -499,3 +499,34 @@
   }
   body.payroll-upload-viewport > .build-info { flex: 0 0 auto; }
 }
+
+/* Build/version text is decorative, not an interactive footer. Never let it
+ * intercept clicks on review inputs at a constrained desktop viewport. */
+body.payroll-upload-viewport > .build-info { pointer-events: none; }
+
+/* Round 4: explicit opt-in for unresolved amounts, adjacent to the save action. */
+.save-bar__actions { display:flex; flex:none; align-items:center; justify-content:flex-end; gap:14px; min-width:0; }
+.zero-approval { max-width: min(430px,46vw); min-width:0; font-size:12px; line-height:1.4; color:var(--color-text); }
+.zero-approval[hidden] { display:none !important; }
+.zero-approval__choice { display:flex; align-items:center; gap:7px; cursor:pointer; font-weight:750; }
+.zero-approval__choice input { width:17px; height:17px; flex:none; accent-color:var(--color-primary,#255ad4); }
+.zero-approval__choice input:disabled { cursor:not-allowed; }
+.zero-approval__count { padding-left:24px; font-size:10px; color:var(--color-muted); }
+.zero-approval__details { padding-left:24px; margin-top:3px; font-size:10px; color:var(--color-muted); }
+.zero-approval__details summary { cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+.zero-approval__details ul { max-height:108px; max-width:100%; overflow:auto; padding:6px 0 0 14px; overflow-wrap:anywhere; }
+.zero-approval__details li { padding:3px 0; }
+@media (max-width:860px) {
+  .save-bar__actions { max-width:65%; gap:9px; }
+  .zero-approval { max-width:100%; font-size:11px; }
+  .zero-approval__count,.zero-approval__details { font-size:9px; }
+}
+@media (max-width:560px) {
+  .save-bar { align-items:stretch; }
+  .save-bar__actions { flex:1; max-width:100%; flex-wrap:wrap; justify-content:space-between; }
+  .zero-approval { flex:1 1 190px; max-width:100%; }
+}
+@media (max-width:390px) {
+  .save-bar__actions { width:100%; align-items:stretch; flex-direction:column; }
+  .zero-approval { flex:none; }
+}

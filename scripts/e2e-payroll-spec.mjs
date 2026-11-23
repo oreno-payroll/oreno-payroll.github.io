@@ -221,3 +221,67 @@ test('desktop upload has no footer-caused document scroll, including populated l
     expect(panel.overflowY).toBe('auto');
   }
 });
+
+// Round4/B: real upload UI exercised with a text-only, synthetic, single-page PDF.
+// No Microsoft sign-in or OneDrive mutation, and the Save button is never clicked.
+function syntheticOnePagePdf(){
+ const stream='BT /F1 12 Tf 15 350 Td (synthetic) Tj ET';
+ const objects=[
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+ ];
+ let source='%PDF-1.4\n';const offsets=[0];
+ for(const [i,object] of objects.entries()){
+  offsets.push(Buffer.byteLength(source));
+  source+=`${i+1} 0 obj\n${object}\nendobj\n`;
+ }
+ const cross=Buffer.byteLength(source);
+ source+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+ for(const offset of offsets.slice(1))source+=`${String(offset).padStart(10,'0')} 00000 n \n`;
+ source+=`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${cross}\n%%EOF\n`;
+ return Buffer.from(source);
+}
+test('zero consent rejects stale inputs and never auto-selects itself',async({page})=>{
+ await page.goto('/upload/index.html');
+ const zero=page.locator('#zero-missing-amounts');
+ await expect(zero).not.toBeChecked();
+ await expect(page.locator('#zero-approval')).toBeHidden();
+ await page.locator('input[type="file"]').first().setInputFiles({
+  name:'synthetic-only.pdf',mimeType:'application/pdf',buffer:syntheticOnePagePdf(),
+ });
+ await expect(page.locator('#review-content')).toBeVisible();
+ // The synthetic PDF contains no salary layout, so no kind can be inferred.
+ // The opt-in must stay hidden until the user explicitly selects salary/bonus.
+ await expect(page.locator('#zero-approval')).toBeHidden();
+ await expect(zero).not.toBeChecked();
+ // The radio input is a visually hidden 1px control. Click the visible
+ // segmented-choice label as a user would, not the hidden input's 1px box.
+ // Keep the real pointer hit-test (no force:true / evaluate(click)).
+ await expect(page.locator('body > .build-info')).toHaveCSS('pointer-events','none');
+ await page.locator('#review-form input[name="job"][value="main"] + span').click();
+ await expect(page.locator('#review-form input[name="job"][value="main"]')).toBeChecked();
+ await page.locator('#review-form input[name="kind"][value="salary"] + span').click();
+ await expect(page.locator('#review-form input[name="kind"][value="salary"]')).toBeChecked();
+ await expect(page.locator('#zero-approval')).toBeVisible();
+ await expect(zero).not.toBeChecked();
+ await page.locator('#review-form input[name="targetMonth"]').fill('2026-11');
+ await page.locator('#review-form input[name="paymentDate"]').fill('2026-11-27');
+ await page.locator('#review-form input[name="gross"]').fill('250000');
+ await page.locator('#review-form input[name="net"]').fill('250000');
+ await page.locator('#review-form input[name="taxable"]').fill('250000');
+ await page.locator('#review-form input[name="nonTaxable"]').fill('0');
+ await page.locator('#validate-button').click();
+ await expect(zero).toBeEnabled();
+ await zero.check();
+ await expect(zero).toBeChecked();
+ // Changing just one field invalidates both the per-file review and the global
+ // zero-conversion consent. It cannot silently apply to the updated form.
+ await page.locator('#review-form input[name="residentTax"]').fill('0');
+ await expect(zero).not.toBeChecked();
+ await expect(page.locator('#save-all')).toBeDisabled();
+ await page.reload();
+ await expect(zero).not.toBeChecked();
+});

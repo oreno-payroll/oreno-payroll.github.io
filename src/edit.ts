@@ -4,6 +4,7 @@ import {preparePdfHandoff} from './pdf/handoff';
 import {capturePdfHandoffAuthorization} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import {deleteRecord,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,type SavedPayrollSummary} from './storage/payrollStore';
+import {reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
 import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
 import { showInlineError, clearInlineError } from './ui/feedback';
@@ -123,6 +124,7 @@ saveButton.addEventListener('click', async () => {
       ...record,
       fileName: storedPdfName(formValues.job, formValues.kind, formValues.paymentDate, record.originalFileName ?? record.fileName),
       form: formValues,
+      zeroResolution: reconcilePayrollZeroResolution(record.zeroResolution,formValues),
       warningsAcknowledged: checked.warnings.length ? confirmDiff.checked : record.warningsAcknowledged,
       reviewedIssues: checked.warnings.length ? checked.warnings : record.reviewedIssues,
       reviewedAt: checked.warnings.length ? new Date().toISOString() : record.reviewedAt,

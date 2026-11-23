@@ -4,6 +4,7 @@ import type {SavedPayrollRecord,SavedPayrollSummary} from '../storage/payrollSto
 import {fiscalYearOfTargetMonth} from '../forecast/payrollCalendar';
 import {payrollPeriodKey} from '../storage/payrollValidation';
 import {isValidPayrollSemantics} from '../storage/payrollSemantics';
+import {isValidPayrollZeroResolution} from '../storage/payrollZeroResolution';
 import {rememberNavigationSnapshot,restoredNavigationSnapshot,clearNavigationSnapshot} from './snapshot';
 import {toPublicIncomeRecord,type PublicIncomeRecord} from './income';
 import {MAX_RECORDS,MAX_TOTAL_PDF_BYTES} from '../storage/storageLimits';
@@ -52,6 +53,8 @@ function validateDoc(value:AnnualDocument):AnnualDocument {
  for(const rec of value.records) {
   if(!rec||!idOkay(rec.id)||ids.has(rec.id)||!rec.form||typeof rec.form!=='object'||typeof rec.originalId!=='string'||!/^[\da-f-]{36}$/i.test(rec.originalId)||!/^\d{4}-\d{2}$/.test(rec.originalMonth)||!Number.isSafeInteger(rec.pdfSize)||rec.pdfSize<1||typeof rec.fileName!=='string')throw new Error('年別明細のレコードが不正です。');
   if(rec.semantics!==undefined&&!isValidPayrollSemantics(rec.semantics))throw new Error('保存済み明細の解析意味情報が不正です。');
+  if(rec.zeroResolution!==undefined&&!isValidPayrollZeroResolution(rec.zeroResolution,rec.form))
+   throw new Error('保存済み明細の0円確認情報が不正です。');
   ids.add(rec.id);
  }
  for(const id of value.deleted)if(!idOkay(id))throw new Error('削除履歴が不正です。');

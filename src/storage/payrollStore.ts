@@ -1,5 +1,6 @@
 /** Payroll v2: 保存の正本はOneDriveの暗号化保管庫だけ。旧IndexedDBはmigration専用。 */
 import {payrollPeriodKey,validatePayrollForm} from './payrollValidation';
+import {isValidPayrollSemantics,type PayrollStatementSemantics} from './payrollSemantics';
 import {cloudVault} from '../cloud/auth';
 import type {CloudRecord} from '../cloud/vault';
 import {PayrollPartialSuccessError} from './operationError';
@@ -8,6 +9,8 @@ import {MAX_RECORDS,MAX_PDF_SIZE,MAX_TOTAL_PDF_BYTES} from './storageLimits';
 export interface SavedPayrollRecordInput {
  fileName:string;originalFileName?:string;pdf:Blob;fileHash?:string;
  form:Record<string,string>;pages:number;warningsAcknowledged:boolean;
+ /** Optional for legacy statements; no automatic data migration on read. */
+ semantics?:PayrollStatementSemantics;
  reviewedIssues?:string[];reviewedAt?:string;
 }
 export interface SavedPayrollRecord extends SavedPayrollRecordInput {
@@ -26,9 +29,9 @@ export interface ReplacementConflict {
 export function recordSignature(record:SavedPayrollRecord|SavedPayrollSummary):string {
  const pdfSize='pdf' in record?record.pdf.size:record.pdfSize;
  const pdfType='pdf' in record?record.pdf.type:record.pdfType;
- return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form]);
+ return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form,record.semantics??null]);
 }
-const conflicts=(old:SavedPayrollSummary,incoming:SavedPayrollRecordInput):('same-pdf'|'same-period')[]=>{
+const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'fileHash'|'form'>):('same-pdf'|'same-period')[]=>{
  const result:('same-pdf'|'same-period')[]=[];
  if(old.fileHash&&incoming.fileHash&&old.fileHash===incoming.fileHash)result.push('same-pdf');
  if(payrollPeriodKey(old.form)===payrollPeriodKey(incoming.form))result.push('same-period');
@@ -36,10 +39,21 @@ const conflicts=(old:SavedPayrollSummary,incoming:SavedPayrollRecordInput):('sam
 };
 function assertValid(input:SavedPayrollRecordInput,legacy=false):void {
  if('personId' in input||'employeeId' in input||'yearEndAssist' in input)throw new Error('第三者の年末調整データは本人用Payrollに保存できません。');
+ if(input.semantics!==undefined&&!isValidPayrollSemantics(input.semantics))throw new Error('保存した明細の解析バージョン情報が不正です。');
  const {errors,warnings}=validatePayrollForm(input.form);
  if(errors.length)throw new Error(errors[0]);
  if(!legacy&&warnings.length&&!input.warningsAcknowledged)throw new Error('金額の検算警告が未確認です。');
  if(!(input.pdf instanceof Blob)||input.pdf.size===0||input.pdf.size>MAX_PDF_SIZE)throw new Error('PDF原本は1件50MB以内が必要です。');
+}
+/** A metadata-only edit does not fabricate a Blob or weaken field validation. */
+function assertValidMetadata(input:SavedPayrollSummary):void {
+ if('personId' in input||'employeeId' in input||'yearEndAssist' in input)
+  throw new Error('第三者の年末調整データは本人用Payrollに保存できません。');
+ const {errors,warnings}=validatePayrollForm(input.form);
+ if(errors.length)throw new Error(errors[0]);
+ if(warnings.length&&!input.warningsAcknowledged)throw new Error('金額の検算警告が未確認です。');
+ if(!Number.isSafeInteger(input.pdfSize)||input.pdfSize<1||input.pdfSize>MAX_PDF_SIZE||
+   typeof input.pdfType!=='string')throw new Error('PDF原本の保存済み情報が不正です。');
 }
 function checkLimits(current:readonly SavedPayrollSummary[],incoming:readonly SavedPayrollRecordInput[]):void {
  if(current.length+incoming.length>MAX_RECORDS)throw new Error('給与明細は最大2000件です。');
@@ -48,6 +62,12 @@ function checkLimits(current:readonly SavedPayrollSummary[],incoming:readonly Sa
 async function cloudSummaries():Promise<CloudRecord[]> {
  const vault=await cloudVault();return vault.refresh();
 }
+/** Read-only exports verify the *latest* index and every annual ETag.
+ * Reuse authenticated annual JSON only when its remote ID/ETag/size still match.
+ * Never use this option for save/delete/migration or to skip the final PDF check.
+ * Cross-page reuse is limited to the already encrypted, tab-scoped CE snapshot.
+ */
+const freshReadOnlyOptions = {forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true} as const;
 /** PDFを取りに行かず、年度別の暗号化JSONだけを取得する。 */
 export interface DashboardLoadOptions {
  forceFresh?:boolean;
@@ -56,7 +76,7 @@ export interface DashboardLoadOptions {
 }
 /** Dashboard startup reuses only the freshly verified index, never for saving or editing. */
 export async function loadRecordSummaries(options?:DashboardLoadOptions):Promise<SavedPayrollSummary[]> {
- if(!options)return cloudSummaries();
+ if(!options){const vault=await cloudVault();return vault.refresh(freshReadOnlyOptions);}
  const start=performance.now();
  options.onProgress?.('Microsoft接続と暗号保管庫を確認しています…');
  const vault=await cloudVault();
@@ -70,6 +90,35 @@ export async function loadRecordSummaries(options?:DashboardLoadOptions):Promise
  return result;
 }
 export async function summaryCacheInfo():Promise<{cached:boolean;deadline:number}>{const vault=await cloudVault();return {cached:vault.isShowingSnapshot(),deadline:vault.navigationDeadline()};}
+/** Edit screen: fetch and authenticate statement metadata only, never the original PDF. */
+export async function getRecordSummary(id:number,untrustedYearHint?:string):Promise<SavedPayrollSummary|undefined> {
+ if(!Number.isSafeInteger(id)||id<=0)throw new Error('明細IDが不正です。');
+ // The URL hint only determines fetch priority. Never use it for the record
+ // identity, physical PDF path, year selection, or any write target.
+ const hint=untrustedYearHint&&/^(19|20|21)\d{2}$/.test(untrustedYearHint)?untrustedYearHint:undefined;
+ const vault=await cloudVault();
+ const list=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,
+  priorityYears:hint?[hint]:[]});
+ const record=list.find(r=>r.id===id);
+ if(!record)return undefined;
+ const {originalId:_,originalMonth:__,...summary}=record;
+ return summary;
+}
+/** A direct edit-page download verifies the current signature before fetching the PDF. */
+export async function getOriginalForVerifiedEdit(id:number,expectedSignature:string):Promise<Blob> {
+ if(!Number.isSafeInteger(id)||id<=0||!expectedSignature)throw new Error('原本の取得条件が不正です。');
+ const vault=await cloudVault();
+ const current=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
+ const record=current.find(r=>r.id===id);
+ if(!record||recordSignature(record)!==expectedSignature)
+  throw new Error('明細が別の画面で更新されました。再読み込みして原本を開いてください。');
+ const pdf=await vault.original(record); // size + SHA-256 authenticated
+ const after=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
+ const latest=after.find(r=>r.id===id);
+ if(!latest||recordSignature(latest)!==expectedSignature)
+  throw new Error('PDF取得中に明細が更新されました。再読み込みしてください。');
+ return pdf;
+}
 export async function getRecord(id:number):Promise<SavedPayrollRecord|undefined> {
  const vault=await cloudVault();const list=await vault.refresh();const rec=list.find(r=>r.id===id);
  if(!rec)return undefined;
@@ -94,7 +143,7 @@ export async function getOriginalForCurrentView(id:number,expectedSignature:stri
  * すべてのPDFが揃った後にもう一度明細の署名を確認し、途中更新を拒否する。 */
 export async function loadRecords(onProgress?:(completed:number,total:number)=>void):Promise<SavedPayrollRecord[]> {
  const vault=await cloudVault();
- const list=await vault.refresh();
+ const list=await vault.refresh(freshReadOnlyOptions);
  const snapshot=payrollSnapshot(list);
  const result=new Array<SavedPayrollRecord>(list.length);
  let next=0,completed=0;
@@ -111,14 +160,14 @@ export async function loadRecords(onProgress?:(completed:number,total:number)=>v
   }
  };
  await Promise.all(Array.from({length:Math.min(2,list.length)},()=>worker()));
- const latest=await vault.refresh();
+ const latest=await vault.refresh(freshReadOnlyOptions);
  if(JSON.stringify(payrollSnapshot(latest))!==JSON.stringify(snapshot))
   throw new Error('バックアップ中に明細が更新されました。最新の明細を読み込み直して再実行してください。');
  return result;
 }
-export async function inspectReplacementConflicts(records:SavedPayrollRecordInput[],excludeId?:number):Promise<ReplacementConflict[]> {
+export async function inspectReplacementConflicts(records:Array<SavedPayrollRecordInput|SavedPayrollSummary>,excludeId?:number):Promise<ReplacementConflict[]> {
  if(!records.length)throw new Error('保存対象がありません。');
- for(const record of records)assertValid(record);
+ for(const record of records){if('pdf' in record)assertValid(record);else assertValidMetadata(record);}
  const old=await cloudSummaries();
  return old.filter(r=>r.id!==excludeId).flatMap(r=>{
   const reasons=[...new Set(records.flatMap(v=>conflicts(r,v)))];
@@ -175,6 +224,32 @@ export async function updateRecord(record:SavedPayrollRecord,approvals:Replaceme
  if(conflicting.length!==allowed.size||conflicting.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))throw new Error('重複する明細が変更されました。再度確認してください。');
  await vault.save({...record,revision:(prior.revision??0)+1});
  let removed=0;
+ for(const other of conflicting){
+  try{await vault.remove(other.id);removed++;}
+  catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup',`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+ }
+}
+/** Edit an existing cloud record without requiring or uploading its original PDF. */
+export async function updateRecordMetadata(record:SavedPayrollSummary,approvals:ReplacementConflict[]=[],expectedSignature?:string,onProgress?:(stage:string)=>void):Promise<void> {
+ assertValidMetadata(record);
+ const vault=await cloudVault();
+ const current=await vault.refresh({forceFresh:true});
+ const prior=current.find(r=>r.id===record.id);
+ if(!prior||!expectedSignature||recordSignature(prior)!==expectedSignature)
+  throw new Error('別端末で明細が変更されました。読み直してから保存してください。');
+ if(prior.fileHash!==record.fileHash||prior.pdfSize!==record.pdfSize||prior.pdfType!==record.pdfType||
+    prior.pages!==record.pages||prior.savedAt!==record.savedAt||prior.originalFileName!==record.originalFileName)
+  throw new Error('PDF原本の保存情報が変更されています。再読み込みしてください。');
+ const conflicting=current.filter(r=>r.id!==record.id&&conflicts(r,record).length);
+ const allowed=new Map(approvals.map(a=>[a.id,a]));
+ if(conflicting.length!==allowed.size||conflicting.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))
+  throw new Error('重複する明細が変更されました。再度確認してください。');
+ // The vault always takes physical PDF id/month/hash/size/type from the live source,
+ // and verifies the expected revision/signature again at the conditional year write.
+ await vault.save({...record,revision:(prior.revision??0)+1},onProgress,
+  remote=>recordSignature(remote)===expectedSignature);
+ let removed=0;
+ if(conflicting.length)onProgress?.('明細データを保存済み。重複した明細の除外を確認しています…');
  for(const other of conflicting){
   try{await vault.remove(other.id);removed++;}
   catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup',`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}

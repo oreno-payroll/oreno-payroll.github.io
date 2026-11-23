@@ -3,10 +3,12 @@ import {PayrollGraph,isCollision,type RemoteFile,type CloudFolderItem} from './g
 import type {SavedPayrollRecord,SavedPayrollSummary} from '../storage/payrollStore';
 import {fiscalYearOfTargetMonth} from '../forecast/payrollCalendar';
 import {payrollPeriodKey} from '../storage/payrollValidation';
+import {isValidPayrollSemantics} from '../storage/payrollSemantics';
 import {rememberNavigationSnapshot,restoredNavigationSnapshot,clearNavigationSnapshot} from './snapshot';
 import {toPublicIncomeRecord,type PublicIncomeRecord} from './income';
 import {MAX_RECORDS,MAX_TOTAL_PDF_BYTES} from '../storage/storageLimits';
 import {PayrollPartialSuccessError} from '../storage/operationError';
+import {beginPerfOperation} from './perf';
 
 export interface CloudRecord extends SavedPayrollSummary {
   originalId: string;
@@ -49,6 +51,7 @@ function validateDoc(value:AnnualDocument):AnnualDocument {
  const ids=new Set<number>();
  for(const rec of value.records) {
   if(!rec||!idOkay(rec.id)||ids.has(rec.id)||!rec.form||typeof rec.form!=='object'||typeof rec.originalId!=='string'||!/^[\da-f-]{36}$/i.test(rec.originalId)||!/^\d{4}-\d{2}$/.test(rec.originalMonth)||!Number.isSafeInteger(rec.pdfSize)||rec.pdfSize<1||typeof rec.fileName!=='string')throw new Error('年別明細のレコードが不正です。');
+  if(rec.semantics!==undefined&&!isValidPayrollSemantics(rec.semantics))throw new Error('保存済み明細の解析意味情報が不正です。');
   ids.add(rec.id);
  }
  for(const id of value.deleted)if(!idOkay(id))throw new Error('削除履歴が不正です。');
@@ -114,6 +117,12 @@ export class PayrollVault {
  private salt='';
  private index=emptyIndex();
  private shards=new Map<string,AnnualDocument>();
+ // Verified ciphertext identity. Only after a full decrypt+schema validation can the
+ // corresponding annual document be reused behind a fresh Graph metadata check.
+ private shardVersions=new Map<string,{id:string;etag:string;size?:number}>();
+ private shardKey:CryptoKey|null=null;
+ private shardSalt='';
+ private shardGeneration:string|undefined;
  private pdfDrafts=new WeakMap<Blob,{id:string;month:string;encrypted:string}>();
  // The verified index from unlock is fresh enough for one immediate dashboard load.
  // Mutations and later refreshes always revalidate the remote index.
@@ -141,6 +150,30 @@ export class PayrollVault {
    }
    if(docs.size!==index.years.length)return false;
    this.key=key;this.salt=salt;this.index=index;this.shards=docs;
+   // This metadata is inside the authenticated, encrypted, account-scoped
+   // navigation snapshot. NEVER trust it without a NEW remote index and
+   // ETag inventory check before using it for an edit or a PDF download.
+   const claimed=(value as {versions?:unknown}).versions;
+   const versions=new Map<string,{id:string;etag:string;size?:number}>();
+   let validVersions=Array.isArray(claimed)&&claimed.length===index.years.length;
+   if(validVersions)for(const entry of claimed as unknown[]){
+    if(!Array.isArray(entry)||entry.length!==2||typeof entry[0]!=='string'||
+       !index.years.includes(entry[0])||versions.has(entry[0])||
+       !entry[1]||typeof entry[1]!=='object'||Array.isArray(entry[1])){validVersions=false;break;}
+    const meta=entry[1] as {id?:unknown;etag?:unknown;size?:unknown};
+    if(typeof meta.id!=='string'||!meta.id||meta.id.length>512||
+       typeof meta.etag!=='string'||!meta.etag||meta.etag.length>512||
+       (meta.size!==undefined&&(!Number.isSafeInteger(meta.size)||
+       (meta.size as number)<1||(meta.size as number)>MAX_YEAR))){validVersions=false;break;}
+    versions.set(entry[0],{id:meta.id,etag:meta.etag,size:meta.size as number|undefined});
+   }
+   if(validVersions&&versions.size===index.years.length){
+    this.shardVersions=versions;this.shardKey=key;this.shardSalt=salt;this.shardGeneration=index.generation;
+   }else{
+    // Legacy or malformed snapshots may still be displayed, but are never
+    // allowed to skip a cryptographically authenticated annual-file read.
+    this.shardVersions.clear();this.shardKey=null;this.shardSalt='';this.shardGeneration=undefined;
+   }
    this.reusedSnapshot=true;this.snapshotDeadline=cached.expires;this.firstDashboardIndexUntil=0;
    return true;
   }catch{clearNavigationSnapshot();return false;}
@@ -151,7 +184,7 @@ export class PayrollVault {
  private ensureRotationAllowed(index:Index):void{if(index.rotation?.id && index.rotation.id!==this.rotationId)throw new InterruptedRotationError();}
  constructor(readonly graph:PayrollGraph){}
  isUnlocked():boolean{return this.key!==null;}
- lock():void{this.key=null;this.salt='';this.index=emptyIndex();this.shards.clear();this.firstDashboardIndexUntil=0;this.rotationId=null;this.reusedSnapshot=false;this.snapshotDeadline=0;clearNavigationSnapshot();}
+ lock():void{this.key=null;this.salt='';this.index=emptyIndex();this.shards.clear();this.shardVersions.clear();this.shardKey=null;this.shardSalt='';this.shardGeneration=undefined;this.firstDashboardIndexUntil=0;this.rotationId=null;this.reusedSnapshot=false;this.snapshotDeadline=0;clearNavigationSnapshot();}
  private unlocked():CryptoKey{if(!this.key)throw new Error('OneDriveの給与保管庫を解除してください。');return this.key;}
  async unlock(passphrase:string, createIfMissing=false):Promise<boolean> {
   const derive=(salt:string):Promise<CryptoKey>=>deriveKey(passphrase,salt);
@@ -166,6 +199,7 @@ export class PayrollVault {
    const verify=await this.graph.read(['payroll'],'index.enc',MAX_INDEX);
    if(!verify)throw new Error('暗号化索引を読み戻せません。');
    const decoded=validateIndex(await decryptJson<Index>('index',verify.text,key));
+   this.shards.clear();this.shardVersions.clear();this.shardKey=null;
    this.key=key;this.salt=salt;this.index=decoded;this.firstDashboardIndexUntil=Date.now()+15_000;return true;
   }
   if (file.size === 0 && file.text.length === 0) throw new EmptyPayrollIndexError();
@@ -178,6 +212,7 @@ export class PayrollVault {
   const key=await derive(salt);
   const index=validateIndex(await decryptJson<Index>('index',file.text,key));
   this.ensureRotationAllowed(index);
+  this.shards.clear();this.shardVersions.clear();this.shardKey=null;
   this.key=key;this.salt=salt;this.index=index;this.firstDashboardIndexUntil=Date.now()+15_000;
   // 起動時は索引の検証だけにする。全年度の取得と収入ファイル再保存は画面表示/更新時のみ。
   return true;
@@ -202,6 +237,7 @@ export class PayrollVault {
   }
   const index=validateIndex(decoded);
   this.ensureRotationAllowed(index);
+  this.shards.clear();this.shardVersions.clear();this.shardKey=null;
   this.key=key;this.salt=salt;this.index=index;this.firstDashboardIndexUntil=Date.now()+15_000;
  }
  /** パスフレーズの代わりに安全なメモリ連携へ渡す。鍵はextractable:false。 */
@@ -458,6 +494,10 @@ export class PayrollVault {
  async refresh(options?:{
   dashboardStartup?:boolean;
   forceFresh?:boolean;
+  /** Reuse a previously decrypted year ONLY after fresh remote ETag validation. */
+  reuseVerifiedYears?:boolean;
+  /** One fresh paginated Graph inventory validates all indexed annual ETags. */
+  bulkYearMetadata?:boolean;
   priorityYears?:readonly string[];
   onProgress?:(loaded:number,total:number,year:string)=>void;
  }):Promise<CloudRecord[]> {
@@ -473,15 +513,62 @@ export class PayrollVault {
    return Number(b)-Number(a);
   });
   const docs=new Map<string,AnnualDocument>();
+  const versions=new Map<string,{id:string;etag:string;size?:number}>();
+  const mayReuse=options?.reuseVerifiedYears===true && this.shardKey===this.key &&
+    this.shardSalt===this.salt && this.shardGeneration===index.generation &&
+    typeof this.graph.metadata==='function';
+  // Capture the prior verified snapshot before workers await remote metadata.
+  const priorDocs=mayReuse?new Map(this.shards):new Map<string,AnnualDocument>();
+  const priorVersions=mayReuse?new Map(this.shardVersions):new Map<string,{id:string;etag:string;size?:number}>();
+  // Read-only edit/PDF checks and income publication retain EVERY indexed
+  // year at EACH consistency boundary. A fresh paginated Graph folder inventory
+  // replaces N individual metadata GETs; changed years are decrypted again.
+  // A missing, duplicate, malformed, or oversized indexed item fails closed.
+  // Writes never trust navigation snapshots without their own live checks.
+  const bulk=options?.bulkYearMetadata===true&&mayReuse&&years.length>=3&&typeof this.graph.listFolder==='function';
+  let inventory:Map<string,{id:string;etag:string;size:number}>|undefined;
+  if(bulk){
+   const entries=await this.graph.listFolder(this.pathFor(index,'statements'));
+   if(!entries)throw new Error('収入同期用の年度フォルダーが存在しません。同期を中断しました。');
+   const indexed=new Set(years.map(year=>`${year}.enc`));
+   inventory=new Map();
+   for(const item of entries){
+    if(!indexed.has(item.name))continue;
+    if(item.folder||!item.id||!item.etag||!Number.isSafeInteger(item.size)||item.size<1||item.size>MAX_YEAR||inventory.has(item.name))
+     throw new Error('収入同期用の年度メタデータが不正または重複しています。同期を中断しました。');
+    inventory.set(item.name,{id:item.id,etag:item.etag,size:item.size});
+   }
+   if(inventory.size!==years.length)throw new Error('収入同期中に年度ファイルの一覧が変更されました。同期を中断しました。');
+  }
   let next=0,loaded=0,failed=false;
   const worker=async():Promise<void>=>{
    for(;;){
     const at=next++;
     if(at>=years.length)return;
     const year=years[at];
+    const prior=priorVersions.get(year);
+    if(prior && priorDocs.has(year)) {
+      // The current ETag is checked in this boundary either by a fresh folder
+      // listing or by the original individual metadata GET (not by cache age).
+      const current=inventory?inventory.get(`${year}.enc`):await this.graph.metadata(this.pathFor(index,'statements'),`${year}.enc`);
+      if(!current)throw new Error(`${year}年の明細ファイルがありません。`);
+      if(current.size!==undefined&&(current.size<1||current.size>MAX_YEAR))throw new Error('OneDriveファイルの容量が上限を超えています。');
+      if(current.id===prior.id&&current.etag===prior.etag&&current.size===prior.size){
+        docs.set(year,copy(priorDocs.get(year)!));versions.set(year,current);
+        loaded++;
+        if(!failed)options?.onProgress?.(loaded,years.length,year);
+        continue;
+      }
+    }
+    // ETag/identity changed, or no verified prior document: fetch, decrypt, validate.
     const {doc,file}=await this.readYear(year,index);
     if(!file)throw new Error(`${year}年の明細ファイルがありません。`);
-    docs.set(year,doc);
+    // A file changed DURING a paginated listing/read. Never install a mixed
+    // snapshot or silently publish its partially observed contents to Finance.
+    const listed=inventory?.get(`${year}.enc`);
+    if(listed&&(file.id!==listed.id||file.etag!==listed.etag||file.size!==listed.size))
+     throw new Error(`${year}年度の暗号明細が一覧照合中に更新されました。同期を中断しました。`);
+    docs.set(year,doc);versions.set(year,{id:file.id,etag:file.etag,size:file.size});
     loaded++;
     if(!failed)options?.onProgress?.(loaded,years.length,year);
    }
@@ -490,9 +577,10 @@ export class PayrollVault {
    await Promise.all(Array.from({length:Math.min(4,years.length)},()=>worker()));
   } catch(error){failed=true;throw error;}
   // Atomic handover: a failed load cannot replace the last complete in-memory snapshot.
-  this.index=index;this.shards=docs;
+  this.index=index;this.shards=docs;this.shardVersions=versions;
+  this.shardKey=this.unlocked();this.shardSalt=this.salt;this.shardGeneration=index.generation;
   this.snapshotDeadline=Date.now()+120_000;
-  if(this.snapshotScope&&!index.rotation)await rememberNavigationSnapshot(this.snapshotScope,this.salt,this.unlocked(),{index,years:[...docs]});
+  if(this.snapshotScope&&!index.rotation)await rememberNavigationSnapshot(this.snapshotScope,this.salt,this.unlocked(),{index,years:[...docs],versions:[...versions]});
   return this.records();
  }
  records():CloudRecord[] {
@@ -523,6 +611,9 @@ export class PayrollVault {
     if(!verify.file)throw new Error('保存後に年別明細が見つかりません。');
     for(const rec of changed.records)if(!verify.doc.records.some(r=>r.id===rec.id))throw new Error('年別明細の保存結果が一致しません。');
     this.shards.set(year,verify.doc);
+    // The full read-back has just validated this shard under its current key.
+    if(this.shardKey===this.key&&this.shardSalt===this.salt&&this.shardGeneration===this.index.generation)
+      this.shardVersions.set(year,{id:verify.file.id,etag:verify.file.etag,size:verify.file.size});
     return;
    }catch(e){if(isCollision(e))continue;throw e;}
   }
@@ -980,28 +1071,60 @@ export class PayrollVault {
   }
   return new Blob([new Uint8Array(bytes)],{type:record.pdfType});
  }
- async save(record:SavedPayrollRecord,progress?:(stage:string)=>void):Promise<void> {
+ async save(record:SavedPayrollRecord|SavedPayrollSummary,progress?:(stage:string)=>void,expectedMatch?:(current:CloudRecord)=>boolean):Promise<void> {
   this.unlocked();
   const year=shardYear(record);
   const originalPrior=this.records().find(r=>r.id===record.id);
+  const metadataOnly=!('pdf' in record);
+  if(metadataOnly&&(!originalPrior||!expectedMatch||!expectedMatch(originalPrior)))
+   throw new Error('明細が変更・削除されました。最新の明細を開き直してください。');
   const month=originalPrior?.originalMonth??record.form.targetMonth;
   const id=originalPrior?.originalId??crypto.randomUUID();
-  if(!originalPrior) {
-   await this.storeOriginal(record,id,month,progress);
-   progress?.('PDF原本の読み戻し照合が完了しました');
+  let next:CloudRecord;
+  if('pdf' in record){
+   if(!originalPrior){
+    await this.storeOriginal(record,id,month,progress);
+    progress?.('PDF原本の読み戻し照合が完了しました');
+   }
+   const {pdf,...summary}=record;
+   next={...summary,pdfSize:pdf.size,pdfType:pdf.type,originalId:id,originalMonth:month};
+  }else{
+   // Never substitute an empty Blob. The original remains encrypted at its old ID.
+   const previous=originalPrior!;
+   if(record.fileHash!==previous.fileHash||record.pdfSize!==previous.pdfSize||
+      record.pdfType!==previous.pdfType||record.pages!==previous.pages||
+      record.originalFileName!==previous.originalFileName||record.savedAt!==previous.savedAt)
+    throw new Error('PDF原本の保存情報が変化しました。最新の明細を開き直してください。');
+   next={...previous,fileName:record.fileName,form:copy(record.form),
+    warningsAcknowledged:record.warningsAcknowledged,reviewedIssues:record.reviewedIssues,
+    reviewedAt:record.reviewedAt,revision:record.revision};
+   // A fiscal-year move requires a live source record before publishing the target.
+   const sourceYear=shardYear(previous);
+   if(sourceYear!==year){
+    const {doc:source}=await this.readYear(sourceYear);
+    const sourceRecord=source.records.find(r=>r.id===record.id);
+    if(!sourceRecord||!expectedMatch!(sourceRecord))
+     throw new Error('年度移動中に明細が変更されました。保存を中断しました。');
+   }
   }
-  const {pdf,...summary}=record;
-  const next:CloudRecord={...summary,pdfSize:pdf.size,pdfType:pdf.type,originalId:id,originalMonth:month};
   const doc=copy(this.shards.get(year)??emptyDoc());
   const at=doc.records.findIndex(r=>r.id===record.id);
   if(at>=0)doc.records[at]=next;else doc.records.push(next);
   doc.deleted=doc.deleted.filter(n=>n!==record.id);
   progress?.('解析済み給与データを保存・検証しています…');
-  await this.commit(year,doc);
+  await this.commit(year,doc,expectedMatch?remote=>{
+   const current=remote.records.find(r=>r.id===record.id);
+   if(originalPrior&&shardYear(originalPrior)===year){
+    if(!current||!expectedMatch(current))throw new Error('保存直前に明細が更新されました。再読み込みしてください。');
+   }else if(current)throw new Error('年度移動先に同じ明細IDが存在します。保存を中断しました。');
+  }:undefined);
   // 対象年変更時は移動元を削除履歴へ。原本は回復のため削除しない。
   for(const [other,base] of [...this.shards])if(other!==year&&base.records.some(r=>r.id===record.id)) {
    const changed=copy(base);changed.records=changed.records.filter(r=>r.id!==record.id);changed.deleted.push(record.id);
-   try{await this.commit(other,changed);}
+   try{await this.commit(other,changed,expectedMatch?remote=>{
+    const source=remote.records.find(r=>r.id===record.id);
+    if(!source||!expectedMatch(source))throw new Error('移動元年度の明細が更新されました。除外を中断しました。');
+   }:undefined);}
    catch(error){
     let status='移動先年度への保存が完了しましたが、移動元年度の除外は完了していない可能性があります。';
     try{
@@ -1032,38 +1155,47 @@ export class PayrollVault {
  /** Every income write verifies the current source statements both before and after
   * the ETag-protected income update. A raced writer must retry with fresh source. */
  async syncIncome(changedYears?:ReadonlySet<string>):Promise<void> {
-  await this.refresh({forceFresh:true});
-  const allYears=changedYears??new Set<string>([...this.index.incomeYears,...this.records().map(incomeYear)]);
-  for(const year of allYears) {
-   let completed=false;
-   for(let attempt=0;attempt<8;attempt++) {
-    await this.refresh({forceFresh:true});
-    const current:IncomeDocument={format:'payroll-income-v1',year,records:this.records().filter(r=>incomeYear(r)===year).map(toPublicIncomeRecord).sort((a,b)=>a.id-b.id)};
-    const file=await this.graph.read(this.storagePath('income'),`${year}.enc`,MAX_YEAR);
-    let equal=false;
-    if(file) {
-     const env=parseEnvelope(file.text,'income');if(env.salt!==this.salt)throw new Error('収入連携ファイルの暗号鍵が異なります。');
-     equal=same(await decryptJson<IncomeDocument>('income',file.text,this.unlocked()),current);
+  const perf=beginPerfOperation('finance-income-sync');
+  let success=false;
+  try {
+   // Full rebuild needs one fresh source snapshot to discover all affected years.
+   // A targeted write already supplies its years; its first attempt performs the
+   // mandatory fresh revalidation, avoiding an extra all-year round trip.
+   if(!changedYears)await perf.measure('source-refresh',()=>this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}));
+   const allYears=changedYears??new Set<string>([...this.index.incomeYears,...this.records().map(incomeYear)]);
+   for(const year of allYears) {
+    let completed=false;
+    for(let attempt=0;attempt<8;attempt++) {
+     await perf.measure('source-refresh',()=>this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}));
+     const current:IncomeDocument={format:'payroll-income-v1',year,records:this.records().filter(r=>incomeYear(r)===year).map(toPublicIncomeRecord).sort((a,b)=>a.id-b.id)};
+     const file=await this.graph.read(this.storagePath('income'),`${year}.enc`,MAX_YEAR);
+     let equal=false;
+     if(file) {
+      const env=parseEnvelope(file.text,'income');if(env.salt!==this.salt)throw new Error('収入連携ファイルの暗号鍵が異なります。');
+      equal=same(await decryptJson<IncomeDocument>('income',file.text,this.unlocked()),current);
+     }
+     if(!equal) {
+      // Revalidate the source just before the ETag-protected income write.
+      await perf.measure('income-prewrite-refresh',()=>this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}));
+      const sourceNow=this.records().filter(r=>incomeYear(r)===year).map(toPublicIncomeRecord).sort((a,b)=>a.id-b.id);
+      if(!same(sourceNow,current.records))continue;
+      try {
+       await perf.measure('income-write',async()=>this.graph.write(this.storagePath('income'),`${year}.enc`,await encryptJson('income',current,this.unlocked(),this.salt),file,MAX_YEAR));
+      }catch(error){if(isCollision(error))continue;throw error;}
+     }
+     // Read-back and a separate fresh source revalidation remain mandatory.
+     const verify=await this.graph.read(this.storagePath('income'),`${year}.enc`,MAX_YEAR);
+     if(!verify)throw new Error(`${year}年の収入ファイルを確認できません。`);
+     const saved=await decryptJson<IncomeDocument>('income',verify.text,this.unlocked());
+     await perf.measure('income-postwrite-refresh',()=>this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}));
+     const sourceAfter=this.records().filter(r=>incomeYear(r)===year).map(toPublicIncomeRecord).sort((a,b)=>a.id-b.id);
+     if(same(saved,current)&&same(sourceAfter,current.records)){completed=true;break;}
     }
-    if(!equal) {
-     // Refresh a second time before writing, so a source change during the income read is detected.
-     await this.refresh({forceFresh:true});
-     const sourceNow=this.records().filter(r=>incomeYear(r)===year).map(toPublicIncomeRecord).sort((a,b)=>a.id-b.id);
-     if(!same(sourceNow,current.records))continue;
-     try {
-      await this.graph.write(this.storagePath('income'),`${year}.enc`,await encryptJson('income',current,this.unlocked(),this.salt),file,MAX_YEAR);
-     }catch(error){if(isCollision(error))continue;throw error;}
-    }
-    const verify=await this.graph.read(this.storagePath('income'),`${year}.enc`,MAX_YEAR);
-    if(!verify)throw new Error(`${year}年の収入ファイルを確認できません。`);
-    const saved=await decryptJson<IncomeDocument>('income',verify.text,this.unlocked());
-    await this.refresh({forceFresh:true});
-    const sourceAfter=this.records().filter(r=>incomeYear(r)===year).map(toPublicIncomeRecord).sort((a,b)=>a.id-b.id);
-    if(same(saved,current)&&same(sourceAfter,current.records)){completed=true;break;}
+    if(!completed)throw new Error(`${year}年の収入同期中に明細が更新され続けたため、中断しました。後で「連携データを再生成」を実行してください。`);
+    await perf.measure('income-register',()=>this.registerYear(year,'incomeYears'));
    }
-   if(!completed)throw new Error(`${year}年の収入同期中に明細が更新され続けたため、中断しました。後で「連携データを再生成」を実行してください。`);
-   await this.registerYear(year,'incomeYears');
-  }
+   success=true;
+  } finally{perf.finish(success);}
  }
 
 }

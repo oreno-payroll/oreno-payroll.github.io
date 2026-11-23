@@ -21,7 +21,7 @@ assert.ok(html.indexOf('id="yea-drafts"')<html.indexOf('id="yea-review-content"'
 assert.match(css,/\.yea-upload-workspace\{display:grid;grid-template-columns/);
 assert.match(ui,/uploadAccordion\.open=data\.documents\.length===0/,'expand empty year only');
 assert.match(ui,/repo\.saveDocumentsBatch\(id,year,/,'bulk click uses isolated repository');
-assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile\)/,'one annual commit per batch');
+assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile,context\)/,'one annual commit per batch');
 assert.doesNotMatch(html,/id="yea-review-ack"|id="yea-validate"|この従業員のPDF原本と入力内容を照合しました/,'no per-file checkbox or mandatory check button');
 assert.doesNotMatch(ui,/reviewAck|\.reviewed|reviewed:/,'no manual review state');
 assert.match(ui,/const blocked=ready\.some\(item=>validateQueueItem\(item\)!==null\)/,'automatic validation gates save');

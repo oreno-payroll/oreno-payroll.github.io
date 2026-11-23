@@ -160,19 +160,30 @@ export async function reconnectMicrosoftAccount():Promise<void>{
  catch(error){if(!(error instanceof MicrosoftSignInRequiredError))throw error;}
  await app.acquireTokenRedirect({scopes:SCOPES,account:user});
 }
-type GateUI = {panel:HTMLElement;id:HTMLInputElement;password:HTMLInputElement;browser:HTMLInputElement;remembered:HTMLButtonElement;loginError:HTMLElement;unlockError:HTMLElement;button:HTMLButtonElement;login:HTMLButtonElement;loginForm:HTMLFormElement;unlockForm:HTMLFormElement};
+type GateUI = {panel:HTMLElement;checking:HTMLElement;checkMessage:HTMLElement;retry:HTMLButtonElement;reload:HTMLButtonElement;id:HTMLInputElement;settings:HTMLElement;editSettings:HTMLButtonElement;password:HTMLInputElement;browser:HTMLInputElement;remembered:HTMLButtonElement;loginError:HTMLElement;unlockError:HTMLElement;button:HTMLButtonElement;login:HTMLButtonElement;loginForm:HTMLFormElement;unlockForm:HTMLFormElement};
 function mount():GateUI {
  const panel=document.createElement('div');panel.id='payroll-cloud-gate';
  panel.innerHTML=`<section class="payroll-cloud-dialog" role="dialog" aria-modal="true" aria-labelledby="payroll-cloud-title">
  <div class="payroll-cloud-heading"><span class="payroll-cloud-symbol" aria-hidden="true">&#9670;</span><div>
  <p class="payroll-cloud-eyebrow">SECURE VAULT</p><h2 id="payroll-cloud-title">給与データを開く</h2></div></div>
+ <div id="payroll-cloud-checking" class="payroll-cloud-checking" role="status" aria-live="polite" hidden>
+ <div class="payroll-cloud-checking__message"><span class="payroll-cloud-spinner" aria-hidden="true"></span><p id="payroll-cloud-check-message">Microsoftアカウントの接続状態を確認しています…</p></div>
+ <p class="payroll-cloud-checking__help">確認が完了するまで接続状態を調べています。必要なら手動確認に切り替えられます。</p>
+ <div class="payroll-cloud-checking__actions">
+ <button id="payroll-cloud-check-retry" type="button" class="payroll-cloud-login">手動で接続を確認</button>
+ <button id="payroll-cloud-check-reload" type="button" class="payroll-cloud-reload">ページを再読み込み</button>
+ </div>
+ </div>
  <form id="payroll-cloud-login-form" class="payroll-cloud-form" autocomplete="off" hidden>
- <div class="payroll-cloud-secret">
+ <p class="payroll-cloud-intro">MicrosoftアカウントでOneDriveに接続します。</p>
+ <div id="payroll-cloud-config" class="payroll-cloud-secret payroll-cloud-settings" hidden>
  <label for="payroll-client-id">Client ID</label>
  <input id="payroll-client-id" name="clientId" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required form="payroll-cloud-login-form" />
+ <p class="payroll-cloud-setting-help">接続アプリの公開Client IDです。既存の設定はそのまま引き継がれます。</p>
  </div>
  <p id="payroll-login-error" class="payroll-cloud-error" role="alert" hidden></p>
  <button id="payroll-login" type="submit" class="payroll-cloud-login" disabled>Microsoftアカウントに接続</button>
+ <button id="payroll-cloud-edit-id" class="payroll-cloud-settings-toggle" type="button">接続の詳細設定</button>
  </form>
  <form id="payroll-cloud-unlock-form" class="payroll-cloud-form" autocomplete="on" hidden>
  <div class="payroll-cloud-secret">
@@ -191,9 +202,11 @@ function mount():GateUI {
  </section>`;
  document.body.append(panel);
  const el=<T extends HTMLElement>(id:string)=>panel.querySelector<T>('#'+id)!;
- return {panel,id:el('payroll-client-id'),password:el('payroll-passphrase'),browser:el('payroll-remember-browser'),remembered:el('payroll-open-remembered'),loginError:el('payroll-login-error'),unlockError:el('payroll-unlock-error'),button:el('payroll-unlock'),login:el('payroll-login'),loginForm:el('payroll-cloud-login-form'),unlockForm:el('payroll-cloud-unlock-form')};
+ return {panel,checking:el('payroll-cloud-checking'),checkMessage:el('payroll-cloud-check-message'),retry:el('payroll-cloud-check-retry'),reload:el('payroll-cloud-check-reload'),id:el('payroll-client-id'),settings:el('payroll-cloud-config'),editSettings:el('payroll-cloud-edit-id'),password:el('payroll-passphrase'),browser:el('payroll-remember-browser'),remembered:el('payroll-open-remembered'),loginError:el('payroll-login-error'),unlockError:el('payroll-unlock-error'),button:el('payroll-unlock'),login:el('payroll-login'),loginForm:el('payroll-cloud-login-form'),unlockForm:el('payroll-cloud-unlock-form')};
 }
 function showAccount(ui:GateUI, state:'checking'|'connected'|'disconnected'|'reauth'|'temporary'|'error'):void {
+ ui.checking.hidden=state!=='checking';
+ if(state==='checking')ui.checkMessage.textContent='Microsoftアカウントの接続状態を確認しています…';
  ui.loginForm.hidden=state==='connected'||state==='checking';
  ui.unlockForm.hidden=state!=='connected';
  ui.login.disabled=state==='checking'||state==='connected';
@@ -217,16 +230,39 @@ function clearGateError(target:HTMLElement):void {target.textContent='';target.h
 function showGateError(target:HTMLElement, message:string):void {target.textContent=message;target.hidden=false;}
 async function beginUnlock():Promise<PayrollVault> {
  const ui=mount();ui.id.value=clientId();
- if(!validId(clientId()))showAccount(ui,'disconnected');
+ const hasClientId=validId(clientId());
+ // UI-only generation token. A delayed MSAL result must not overwrite a
+ // manual recovery choice, even after the original Promise eventually settles.
+ let checkVersion=0;
+ let checkSlowTimer:ReturnType<typeof setTimeout>|undefined;
+ const cancelCheck=()=>{
+  ++checkVersion;
+  if(checkSlowTimer!==undefined){clearTimeout(checkSlowTimer);checkSlowTimer=undefined;}
+ };
+ const allowCheckUpdate=(version:number)=>version===checkVersion&&ui.panel.isConnected;
+ ui.retry.addEventListener('click',()=>{
+  if(ui.checking.hidden)return;
+  cancelCheck();
+  showAccount(ui,'temporary');
+  clearGateError(ui.loginError);
+ });
+ ui.reload.addEventListener('click',()=>{cancelCheck();window.location.reload();});
+ ui.settings.hidden=hasClientId;
+ ui.editSettings.hidden=!hasClientId;
+ ui.editSettings.addEventListener('click',()=>{
+  ui.settings.hidden=!ui.settings.hidden;
+  ui.editSettings.textContent=ui.settings.hidden?'接続の詳細設定':'詳細設定を閉じる';
+ });
+ if(!hasClientId)showAccount(ui,'disconnected');
  const onClientIdEdited=()=>{
   clearGateError(ui.loginError);
-  if(ui.id.value.trim()!==clientId())showAccount(ui,'disconnected');
+  if(ui.id.value.trim()!==clientId()){cancelCheck();showAccount(ui,'disconnected');}
  };
  // 1Password等の補完はinput/changeのどちらかだけを発火する場合がある。
  ui.id.addEventListener('input',onClientIdEdited);
  ui.id.addEventListener('change',onClientIdEdited);
  const ready=new Promise<PayrollVault>((resolve)=>{
-  ui.loginForm.addEventListener('submit',event=>{event.preventDefault();void(async()=>{
+  ui.loginForm.addEventListener('submit',event=>{event.preventDefault();cancelCheck();void(async()=>{
    clearGateError(ui.loginError);
    ui.login.disabled=true;
    ui.login.textContent='Microsoft接続を確認中…';
@@ -355,20 +391,32 @@ async function beginUnlock():Promise<PayrollVault> {
    finally{ui.remembered.disabled=false;}
   })();});
  });
- if(validId(clientId())) {
+ if(hasClientId) {
   showAccount(ui,'checking');
+  const currentCheck=++checkVersion;
+  const active=()=>allowCheckUpdate(currentCheck);
+  checkSlowTimer=setTimeout(()=>{
+   if(active()&&!ui.checking.hidden)
+    ui.checkMessage.textContent='Microsoftの応答に時間がかかっています。手動確認や再読み込みも選べます。';
+  },7000);
   void getMsal().then(async app=>{
+   if(!active())return;
    const user=account(app);
    if(!user){showAccount(ui,'disconnected');return;}
    try{
     await token();
+    if(!active())return;
     showAccount(ui,'connected');void showRememberedOption(ui);ui.password.focus();
    }catch(error){
+    if(!active())return;
     showAccount(ui,error instanceof MicrosoftSignInRequiredError?'reauth':'temporary');
     showGateError(ui.loginError,error instanceof Error?error.message:'Microsoftの接続を確認できません。');
    }
   }).catch(e=>{
+   if(!active())return;
    showAccount(ui,'error');showGateError(ui.loginError,e instanceof Error?e.message:'Microsoftへ接続できませんでした。');
+  }).finally(()=>{
+   if(active()&&checkSlowTimer!==undefined){clearTimeout(checkSlowTimer);checkSlowTimer=undefined;}
   });
  }
  return ready;

@@ -14,7 +14,7 @@ assert.throws(()=>mod.validateYear({...base,memo:3},id,2026),/年度データ/);
 assert.equal(mod.calculateYear({...base,memo:'memo'}).total,0);
 const repository=read('src/yearEnd/repository.ts');
 assert.match(repository,/async saveYearMemo\(/);
-assert.match(repository,/await this\.saveYear\(a,id,year,context\.file,next,context\.yearFile\)/);
+assert.match(repository,/await this\.saveYear\(a,id,year,context\.file,next,context\.yearFile,context\)/);
 const html=read('public/year-end-assist/index.html');
 for(const id of ['yea-year-memo','yea-save-memo','yea-memo-state'])assert.match(html,new RegExp(`id="${id}"`));
 const ui=read('src/year-end-assist.ts');

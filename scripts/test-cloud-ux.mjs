@@ -64,7 +64,10 @@ assert.match(vault,/async syncIncome\(changedYears\?/);
 // The income writer now refreshes source statements before and after the ETag write.
 const incomeSync=vault.slice(vault.indexOf(' async syncIncome(changedYears?'));
 assert.match(incomeSync,/for\(let attempt=0;attempt<8;attempt\+\+\)/);
-assert.match(incomeSync,/await this\.refresh\(\{forceFresh:true\}\)/);
+// Phase 1: conditional ciphertext reuse still verifies every source ETag before/after income writes.
+assert.match(incomeSync,/await perf\.measure\('source-refresh',\(\)=>this\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}\)\)/);
+assert.match(incomeSync,/await perf\.measure\('income-prewrite-refresh',\(\)=>this\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}\)\)/);
+assert.match(incomeSync,/await perf\.measure\('income-postwrite-refresh',\(\)=>this\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}\)\)/);
 assert.match(incomeSync,/if\(!same\(sourceNow,current\.records\)\)continue/);
 assert.match(incomeSync,/same\(sourceAfter,current\.records\)/);
 assert.match(storeCode,/onProgress\?\./);

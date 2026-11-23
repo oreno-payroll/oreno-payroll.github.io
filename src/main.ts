@@ -1,4 +1,5 @@
 import { createAppStatus } from './ui/appStatus';
+import {dashboardFreshnessLabel} from './ui/operationFeedback';
 import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
 import { capturePdfHandoffAuthorization } from './cloud/auth';
@@ -80,7 +81,7 @@ function selectedPeriodRecords(): SavedPayrollSummary[] {
     (bonusToggle.checked || item.form.kind !== 'bonus'));
 }
 sideZipButton.addEventListener('click', async () => {
-  if (exportingSideZip) return;
+  if (exportingSideZip || dashboardLoading || dashboardStale) return;
   const exportYear = yearSelect.value;
   const exportMode = periodMode;
   const side = selectedPeriodRecords().filter(item => item.form.job === 'side');
@@ -92,16 +93,32 @@ sideZipButton.addEventListener('click', async () => {
   sideZipStatus.removeAttribute('role');
   try {
     // 表示には索引しか持たないため、ZIP作成の際にだけ対象PDF原本を取得する。
-    const originals: SavedPayrollRecord[] = [];
-    for (const [index, item] of side.entries()) {
-      sideZipStatus.textContent = `副業PDFを取得中… ${index + 1} / ${side.length}件（${exportMode === 'calendar' ? '暦年' : '年度'} ${exportYear}）`;
-      appStatus.loading(`PDF原本を取得中 ${index+1}/${side.length}件`);
-      const full = await getRecord(item.id);
-      if (!full || recordSignature(full) !== recordSignature(item)) {
-        throw new Error('保存済み明細が変更されました。画面を更新してから再実行してください。');
+    const before=await loadRecordSummaries();
+    if(side.some(item=>!before.some(rec=>rec.id===item.id&&recordSignature(rec)===recordSignature(item))))
+      throw new Error('保存済み明細が変更されました。画面を更新してから再実行してください。');
+    // Two bounded workers mirror the backup reader. Never publish a partial ZIP;
+    // preserve the selected order regardless of individual download completion.
+    const originals = new Array<SavedPayrollRecord>(side.length);
+    let next=0,completed=0,firstFailure:unknown=null;
+    const worker=async():Promise<void>=>{
+      while(firstFailure===null){
+        const index=next++;
+        if(index>=side.length)return;
+        const item=side[index];
+        try{
+          const pdf=await getOriginalForCurrentView(item.id,recordSignature(item));
+          originals[index]={...item,pdf};
+          completed++;
+          sideZipStatus.textContent=`副業PDFを取得中… ${completed} / ${side.length}件（${exportMode === 'calendar' ? '暦年' : '年度'} ${exportYear}）`;
+          appStatus.loading(`PDF原本を取得中 ${completed}/${side.length}件`);
+        }catch(error){if(firstFailure===null)firstFailure=error;}
       }
-      originals.push(full);
-    }
+    };
+    await Promise.all(Array.from({length:Math.min(2,side.length)},()=>worker()));
+    if(firstFailure!==null)throw firstFailure;
+    const after=await loadRecordSummaries();
+    if(side.some(item=>!after.some(rec=>rec.id===item.id&&recordSignature(rec)===recordSignature(item))))
+      throw new Error('PDF取得中に保存済み明細が更新されました。再読み込みしてください。');
     const archive = await createSidePdfZip(originals);
     const url = URL.createObjectURL(archive);
     const a = document.createElement('a');
@@ -119,7 +136,7 @@ sideZipButton.addEventListener('click', async () => {
     sideZipStatus.setAttribute('role', 'alert');
   } finally {
     exportingSideZip = false;
-    sideZipButton.disabled = selectedPeriodRecords().every(item => item.form.job !== 'side');
+    sideZipButton.disabled = dashboardLoading || dashboardStale || selectedPeriodRecords().every(item => item.form.job !== 'side');
   }
 });
 
@@ -342,7 +359,10 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     });
     const edit = document.createElement('a');
     edit.className = 'btn btn--icon';
-    edit.href = `./edit/index.html?id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}`;
+    // A verified source record supplies an untrusted *priority* hint for the
+    // edit page. It is never used as an authority for writes or PDF locations.
+    const hintedYear=fiscalYearOfTargetMonth(record.form.targetMonth);
+    edit.href = `./edit/index.html?id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}${hintedYear!==null?`&hintYear=${encodeURIComponent(String(hintedYear))}`:''}`;
     edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg>';
     edit.setAttribute('aria-label', `${record.fileName} の保存情報を編集`);
     edit.title = '保存情報を確認・編集';
@@ -352,8 +372,10 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>';
     remove.setAttribute('aria-label', `${record.fileName} を削除`);
     remove.title = '保存済みの明細を削除（暗号化PDF原本はOneDriveに保持）';
-    remove.disabled = deletingRecordIds.has(record.id);
+    remove.dataset.recordId=String(record.id);
+    remove.disabled = deletingRecordIds.has(record.id) || dashboardLoading || dashboardStale;
     remove.addEventListener('click', async () => {
+      if (dashboardLoading||dashboardStale){appStatus.error('最新の明細を確認できていません。再確認してから削除してください。');return;}
       if (deletingRecordIds.has(record.id)) return;
       const label = record.form.job === 'main' ? '本業' : '副業';
       const kind = record.form.kind === 'bonus' ? '賞与' : '給与';
@@ -431,7 +453,7 @@ function render(): void {
   renderMonthlyRegistration(year, isCalendar);
   const main = yearRecords.filter(item => item.form.job === 'main');
   const side = yearRecords.filter(item => item.form.job === 'side');
-  sideZipButton.disabled = exportingSideZip || side.length === 0;
+  sideZipButton.disabled = exportingSideZip || side.length === 0 || dashboardLoading || dashboardStale;
   sideZipButton.title = side.length ? `表示中の副業明細${side.length}件の原本PDFをZIPで保存` : '表示中の副業PDFはありません';
   if (!exportingSideZip) sideZipStatus.textContent = '';
   const forecast = forecastToggle.checked
@@ -474,52 +496,76 @@ forecastToggle.addEventListener('change', render);
 let dashboardValidUntil=0;
 let dashboardMutationEpoch='';
 let dashboardLoading=false;
+let dashboardHasView=false;
+let dashboardStale=false;
 async function refreshDashboard(forceFresh=false): Promise<void> {
   if(dashboardLoading)return;
+  const hadView=dashboardHasView;
   dashboardLoading=true;
-  registrationPanel.hidden = true;
-  appStatus.loading('明細データを読み込んでいます…');
+  if(!hadView)registrationPanel.hidden = true;
+  appStatus.loading(hadView?'OneDriveで最新データを再確認しています…':'明細データを読み込んでいます…');
+  const indicator=document.getElementById('payroll-data-freshness');
+  const freshness=hadView?'rechecking':'checking';
+  if(indicator){indicator.textContent=dashboardFreshnessLabel(freshness);indicator.dataset.freshness=freshness;}
   const refreshButton=document.querySelector<HTMLButtonElement>('#payroll-refresh-data');
   if(refreshButton)refreshButton.disabled=true;
+  // Keep last complete data visible while rechecking. Block cloud mutations, not local filters.
+  document.querySelectorAll<HTMLButtonElement>('.statement-item__actions .btn--delete').forEach(button=>{button.disabled=true;});
   const preferred=initialYear??currentPeriodYear();
   periodLabel.setAttribute('aria-busy','true');
-  yearSelect.disabled=true;
-  bonusToggle.disabled=true;
-  forecastToggle.disabled=true;
+  yearSelect.disabled=!hadView;
+  bonusToggle.disabled=!hadView;
+  forecastToggle.disabled=!hadView;
   sideZipButton.disabled=true;
   try {
     saved = await loadRecordSummaries({
       forceFresh,
       priorityYears:[String(preferred),String(preferred-1)],
-      onProgress:message=>{periodLabel.textContent=message;appStatus.loading(message);},
+      onProgress:message=>{if(!hadView)periodLabel.textContent=message;appStatus.loading(message);},
     });
     yearSelect.disabled = false;
     bonusToggle.disabled = false;
     forecastToggle.disabled = false;
     periodLabel.removeAttribute('role');
     periodLabel.style.removeProperty('color');
+    dashboardStale=false;
     updateYearOptions();
     render();
+    dashboardHasView=true;
     dashboardMutationEpoch=mutationEpoch();
     const cache=await summaryCacheInfo();dashboardValidUntil=cache.deadline;
-    const indicator=document.getElementById('payroll-data-freshness');
-    if(indicator)indicator.textContent=cache.cached?'短時間の暗号化キャッシュを表示中':'OneDrive確認済み';
-    appStatus.success('明細データを読み込みました');
+    const freshState=cache.cached?'snapshot':'verified';
+    if(indicator){indicator.textContent=dashboardFreshnessLabel(freshState);indicator.dataset.freshness=freshState;}
+    appStatus.success(cache.cached?'暗号化スナップショットを表示しています（変更操作時はOneDriveを再検証します）':'明細データを読み込みました');
   } catch (error) {
     console.error('保存済み明細を読み込めませんでした。', error);
     appStatus.error(`明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);
-    periodLabel.textContent = `保存済み明細の読み込みに失敗しました。OneDriveへの接続と暗号化保管庫をご確認ください。${error instanceof Error ? ` (${error.message})` : ''}`;
-    periodLabel.setAttribute('role', 'alert');
-    periodLabel.style.color = 'var(--color-danger)';
-    yearSelect.disabled = true;
-    bonusToggle.disabled = true;
-    forecastToggle.disabled = true;
-    sideZipButton.disabled = true;
-    // エラー文を通常renderで上書きしない。既存レコードが消えたわけではない。
+    dashboardStale=dashboardHasView;
+    const failedState=dashboardHasView?'stale':'unavailable';
+    if(indicator){indicator.textContent=dashboardFreshnessLabel(failedState);indicator.dataset.freshness=failedState;}
+    if(dashboardHasView){
+      // Existing figures are for reference only. Never imply the refresh succeeded.
+      yearSelect.disabled=false;bonusToggle.disabled=false;forecastToggle.disabled=false;
+      render();
+      sideZipButton.disabled=true;
+    }else{
+      periodLabel.textContent = `保存済み明細の読み込みに失敗しました。OneDriveへの接続と暗号化保管庫をご確認ください。${error instanceof Error ? ` (${error.message})` : ''}`;
+      periodLabel.setAttribute('role', 'alert');
+      periodLabel.style.color = 'var(--color-danger)';
+      yearSelect.disabled = true;bonusToggle.disabled = true;forecastToggle.disabled = true;
+      sideZipButton.disabled = true;
+    }
+    // The last verified screen is preserved for read-only use; saving is blocked.
   } finally {
     periodLabel.removeAttribute('aria-busy');
     dashboardLoading=false;
     if(refreshButton)refreshButton.disabled=false;
+    document.querySelectorAll<HTMLButtonElement>('.statement-item__actions .btn--delete').forEach(button=>{
+      const id=Number(button.dataset.recordId);
+      button.disabled=dashboardStale||deletingRecordIds.has(id);
+    });
+    if(dashboardHasView&&!dashboardStale)
+      sideZipButton.disabled=exportingSideZip||selectedPeriodRecords().every(item=>item.form.job!=='side');
   }
 }
 // Back/forward cache does not imply a changed dataset. Only mutations or TTL expiry force a reload.

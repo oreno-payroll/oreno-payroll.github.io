@@ -17,6 +17,20 @@
 .payroll-cloud-login{background:#fff;color:var(--color-primary,#315bd4);border-color:var(--color-border-strong,#cfd8e5)!important}
 @media(max-width:480px){.payroll-cloud-dialog{padding:22px 18px;gap:13px;border-radius:16px}}
 
+/* Never leave a logo-only modal while Microsoft/MSAL is still responding. */
+.payroll-cloud-checking{display:grid;gap:13px;min-width:0}
+.payroll-cloud-checking[hidden]{display:none!important}
+.payroll-cloud-checking__message{display:flex;align-items:center;gap:11px;font-size:13px;font-weight:750;line-height:1.6;overflow-wrap:anywhere}
+.payroll-cloud-checking__message p{min-width:0}
+.payroll-cloud-spinner{display:inline-block;flex:none;width:20px;height:20px;border:2px solid var(--color-border-strong,#cfd8e5);border-top-color:var(--color-primary,#315bd4);border-radius:50%;animation:payroll-cloud-check-spin .9s linear infinite}
+.payroll-cloud-checking__help{font-size:11px;line-height:1.6;color:var(--color-muted,#69778b)}
+.payroll-cloud-checking__actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}
+.payroll-cloud-checking__actions button{min-width:0;padding:9px 11px;font-size:12px}
+.payroll-cloud-reload{background:transparent;border-color:var(--color-border-strong,#cfd8e5)!important;color:var(--color-text,#17253b)}
+.payroll-cloud-checking__actions button:focus-visible{outline:2px solid var(--color-primary,#315bd4);outline-offset:2px}
+@keyframes payroll-cloud-check-spin{to{transform:rotate(360deg)}}
+@media(max-width:380px){.payroll-cloud-checking__actions{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.payroll-cloud-spinner{animation:none}}
 /* Errors appear above the action only after a failed attempt, never as persistent status text. */
 .payroll-cloud-error{padding:10px 12px;border:1px solid #f0d5d9;border-radius:9px;background:#fff6f7;color:#9d3642;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .payroll-cloud-error[hidden]{display:none}
@@ -29,9 +43,20 @@
 .payroll-cloud-lock:focus-visible{outline:2px solid var(--color-primary,#315bd4);outline-offset:3px}
 
 /* Dashboard cache status and explicit refresh control. */
-.payroll-data-sync{display:inline-flex;align-items:center;gap:9px;font-size:11px;opacity:.8}
+.payroll-data-sync{display:inline-flex;align-items:center;flex-wrap:wrap;gap:5px 9px;max-width:100%;font-size:11px;opacity:.85;line-height:1.6}
 .payroll-data-sync button{color:inherit;background:transparent;border:0;border-bottom:1px dotted currentColor;cursor:pointer;padding:1px 0;font:inherit}
+#payroll-data-freshness{overflow-wrap:anywhere}
+#payroll-data-freshness[data-freshness="stale"]{color:var(--color-warning,#a06a16);font-weight:750}
+#payroll-data-freshness[data-freshness="rechecking"]{font-weight:750}
 
+/* The OAuth Client ID is advanced configuration, not the main sign-in action. */
+.payroll-cloud-intro{font-size:13px;color:var(--color-muted,#69778b);line-height:1.65}
+.payroll-cloud-settings{padding:12px;border-radius:10px;background:var(--color-primary-soft,#edf2ff)}
+.payroll-cloud-settings[hidden],.payroll-cloud-settings-toggle[hidden]{display:none!important}
+.payroll-cloud-setting-help{font-size:11px;color:var(--color-muted,#69778b);line-height:1.5}
+.payroll-cloud-form .payroll-cloud-settings-toggle{justify-self:center;width:auto;min-height:26px;padding:2px 8px;background:transparent;color:var(--color-muted,#69778b);font-size:12px;font-weight:600;border:0;text-decoration:underline;text-underline-offset:3px}
+.payroll-cloud-form .payroll-cloud-settings-toggle:hover{color:var(--color-primary,#315bd4)}
+.payroll-cloud-form .payroll-cloud-settings-toggle:focus-visible{outline:2px solid var(--color-primary,#315bd4);outline-offset:3px}
 /* OAuth と保管庫解除を独立した標準フォームとして扱う。1Passwordの送信にも対応。 */
 .payroll-cloud-form{display:grid;gap:15px;margin:0;min-width:0}
 .payroll-cloud-form[hidden]{display:none}

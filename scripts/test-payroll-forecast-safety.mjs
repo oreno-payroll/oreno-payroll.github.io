@@ -13,7 +13,11 @@ assert.match(ui,/function salaryUpdateRequested\(\)/);
 assert.match(ui,/function validateForecastEditor\(\)/);
 assert.match(ui,/aria-describedby/);
 assert.match(repo,/salaryUpdate\?\[\]:context\.data\.noPaymentMonths/);
-assert.match(repo,/salaryUpdate\?\(fresh\?\.estimated\?\?\[\]\):context\.data\.estimates/);
+// The 2026-11 forecast fix preserves method/references of months whose amounts did not change.
+assert.match(repo,/const updatedSalaryEstimates=salaryUpdate\?\(fresh\?\.estimated\?\?\[\]\)\.map\(nextEstimate=>\{/);
+assert.match(repo,/const old=context\.data\.estimates\.find\(e=>e\.month===nextEstimate\.month\)/);
+assert.match(repo,/return method==='manual'&&old&&old\.amount===nextEstimate\.amount\?old:nextEstimate/);
+assert.match(repo,/estimates:updatedSalaryEstimates/);
 assert.match(handoff,/requirePdfMime\(message\.pdf\)/);
 assert.match(view,/requirePdfMime\(payload\.pdf\)/);
 assert.equal((workflow.match(/run: node scripts\/audit-dist\.mjs --require-private-terms/g)||[]).length,2);

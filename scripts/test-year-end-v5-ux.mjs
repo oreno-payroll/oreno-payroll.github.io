@@ -15,7 +15,43 @@ assert.match(ui,/function syncForecastAmounts\(methodChanged=false\)/);
 assert.match(ui,/syncForecastAmounts\(true\)/);
 assert.doesNotMatch(ui,/check\.addEventListener\('change'/);
 assert.match(ui,/for\(const input of fields\)/);
-assert.match(ui,/input\.value=!methodChanged&&oldZero/);
+// 2026-11: switching method must preserve explicit edits, saved amounts, and saved zero months.
+assert.match(ui,/if\(input\.dataset\.userEdited==='true'\)continue/,'switching method must not erase edited monthly drafts');
+assert.match(ui,/if\(method==='manual'\)input\.value=oldZero\?'0':existing\?String\(existing\.amount\):methodChanged\?'':input\.value/,'manual mode retains saved values');
+assert.match(ui,/else if\(calculated\.has\(month\)\)input\.value=oldZero\?'0':existing\?String\(existing\.amount\):String\(calculated\.get\(month\)!\)/,'auto mode retains saved values and zero');
+// Exercise the actual sync function in an isolated fake DOM. Synthetic numbers only,
+// without accessing a Microsoft account or storing any payroll information.
+const switchStart=ui.indexOf('function syncForecastAmounts(methodChanged=false){');
+const switchEnd=ui.indexOf('function renderEstimateMonths()',switchStart);
+assert.ok(switchStart>=0&&switchEnd>switchStart,'forecast sync function must be available');
+const syncSource=stripTypeScriptTypes(ui.slice(switchStart,switchEnd),{mode:'strip'});
+const monthInput=(month,value,edited=false)=>({dataset:{override:month,userEdited:String(edited)},value,placeholder:''});
+const editDraft=monthInput('2026-10','777777',true);
+const savedAmount=monthInput('2026-11','',false);
+const savedZero=monthInput('2026-12','',false);
+const pending=monthInput('2026-09','',false);
+const controls=[editDraft,savedAmount,savedZero,pending];
+let selectedMode='manual';let redrawCount=0;
+const forecastSandbox={
+ data:{estimates:[{month:'2026-11',amount:250000}],noPaymentMonths:['2026-12']},
+ selectedMethod:()=>selectedMode,
+ estimateMonths:{querySelectorAll:()=>controls},
+ forecastPreview:()=>({estimated:[{month:'2026-09',amount:111111},{month:'2026-10',amount:222222},{month:'2026-11',amount:333333},{month:'2026-12',amount:444444}]}),
+ setLocalError:()=>{},forecastError:{},
+ updateForecastSaveState:()=>{redrawCount++;},Map,Array,String,
+};
+vm.runInNewContext(syncSource+'\nthis.runForecastSync=syncForecastAmounts;',forecastSandbox);
+forecastSandbox.runForecastSync(true);
+assert.equal(editDraft.value,'777777','manual switch keeps an explicitly typed draft');
+assert.equal(savedAmount.value,'250000','manual switch keeps a saved estimate');
+assert.equal(savedZero.value,'0','manual switch keeps a saved zero month');
+assert.equal(pending.value,'','unfilled manual month remains blank');
+selectedMode='latest';forecastSandbox.runForecastSync(true);
+assert.equal(editDraft.value,'777777','auto switch keeps an explicitly typed draft');
+assert.equal(savedAmount.value,'250000','auto switch does not replace a saved amount');
+assert.equal(savedZero.value,'0','auto switch keeps a saved zero month');
+assert.equal(pending.value,'111111','auto switch fills only unsaved, untouched months');
+assert.equal(redrawCount,2,'both mode switches update the forecast preview');
 assert.doesNotMatch(html,/id="yea-method-help"/);
 assert.match(ui,/\$<HTMLButtonElement>\('yea-discard-edit'\)\.hidden=!changed/);
 const save=ui.slice(ui.indexOf('async function saveAllDocuments()'),ui.indexOf('async function refreshPeopleKeepSelection()'));
@@ -29,7 +65,7 @@ assert.match(remove,/if\(dialog\.open\)dialog\.close\(\)/);
 assert.ok(remove.indexOf('dialog.close()')<remove.indexOf('await repo.deletePerson(id)'));
 assert.match(css,/\.yea-manage-dialog\{width:min\(390px/);
 assert.match(repo,/for\(let i=0;i<pending\.length;i\+=3\)/);
-assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile\)/);
+assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile,context\)/);
 // Exercise exact adapter with synthetic side-bonus and guard for non-taxable rows.
 let nonTaxable=undefined,transportation=undefined,gross='120000';
 const stripped=stripTypeScriptTypes(pdf.replace(/^import .*?;\s*$/gm,'').replace(/new URL\('[^']+',import\.meta\.url\)\.href/g,"'http://localhost/fake'"),{mode:'strip'})

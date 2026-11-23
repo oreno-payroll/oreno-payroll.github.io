@@ -78,6 +78,31 @@ assert.deepEqual(new Set(await during.otherYearNames()),new Set(['旧年度の�
 assert.equal(injected,true);
 console.log('PASS: profile changed while year JSONs load triggers a fresh comparison');
 
+// A different reader refreshes the shared profile cache while our first
+// yearWithOtherYearNames() is waiting for its annual JSON. The associated ETag
+// must remain bound to the *older* profile returned by its original read.
+reset();
+let signalYearStart,releaseAnnual;
+const yearStarted=new Promise(resolve=>{signalYearStart=resolve;});
+const annualRelease=new Promise(resolve=>{releaseAnnual=resolve;});
+let pausedYear=false;
+readYearHook=async(_parts,name)=>{
+ if(name===yearFile2026+'.enc'&&!pausedYear){pausedYear=true;signalYearStart();await annualRelease;}
+};
+const pendingDisplay=repo.yearWithOtherYearNames(id,2026);
+await yearStarted;
+put(person,'profile.enc',profile({...originalProfile().yearFiles,'2024':yearFile2024}));
+put(years,yearFile2024+'.enc',makeYear(2024,'並行更新で追加された名前'));
+// A second read updates the shared profile cache to the new ETag.
+readYearHook=null;
+await repo.year(id,2026);
+releaseAnnual();
+const racedDisplay=await pendingDisplay;
+assert.deepEqual(new Set(await racedDisplay.otherYearNames()),
+ new Set(['旧年度の名前','並行更新で追加された名前']),
+ 'the deferred comparison must not pair the old profile with the newer cached ETag');
+console.log('PASS: concurrent profile cache refresh during display cannot hide a new year');
+
 reset();const locked=await repo.yearWithOtherYearNames(id,2026);const before=counts.year;unlocked=false;
 await assert.rejects(locked.otherYearNames(),/ロック|変更/);
 assert.equal(counts.year,before,'locked vault must never read other-year salary data');
@@ -111,15 +136,51 @@ const simulate=async({existing,conflict})=>{
  await v.commit('2026',emptyDoc());return state;
 };
 const existing=await simulate({existing:true,conflict:false});
-assert.equal(existing.indexReads,1,'registered year must use preparation index proof for first commit attempt');
+assert.equal(existing.indexReads,3,'registered year must validate root before and after annual write');
 assert.equal(existing.yearReads,2,'existing year still requires prewrite year GET and postwrite readback');
-console.log('PASS: existing-year commit uses one fresh index check and two authenticated year reads');
+console.log('PASS: existing-year commit validates root at preparation, pre-write and readback');
 const created=await simulate({existing:false,conflict:false});
-assert.equal(created.indexReads,2,'new-year index registration requires a new pre-commit index read');
+assert.equal(created.indexReads,4,'new year must recheck after registration and around annual write');
 assert.equal(created.registered,1);
 console.log('PASS: new-year registration retains the second generation/lock check');
 const retried=await simulate({existing:true,conflict:true});
-assert.equal(retried.indexReads,2,'ETag conflict retry must recheck index');
+assert.equal(retried.indexReads,5,'ETag conflict retry must recheck index and the final write');
 assert.equal(retried.writes,2,'commit should retry after one ETag collision');
 console.log('PASS: ETag collision retry revalidates root index');
+// A remote rotation lock can appear while the writer awaits the annual GET.
+// The pre-write root recheck must prevent a write into the retiring generation.
+const lockDuringRead={lock:false,reads:0,writes:0};
+const lockGraph={async write(){lockDuringRead.writes++;}};
+const lockedWriter=new vaultApi.PayrollVault(lockGraph);
+lockedWriter.key=key;lockedWriter.salt=salt;lockedWriter.index=vaultIndex(true);
+lockedWriter.readIndex=async()=>{lockDuringRead.reads++;
+ if(lockDuringRead.lock)throw new Error('simulated remote rotation lock');
+ return {index:vaultIndex(true),file:{id:'root',etag:'live-root',text:'synthetic'}};
+};
+lockedWriter.readYear=async()=>{
+ if(!lockDuringRead.lock)lockDuringRead.lock=true;
+ return {doc:emptyDoc(),file:{id:'year',etag:'old-year',text:'synthetic'}};
+};
+await assert.rejects(lockedWriter.commit('2026',emptyDoc()),/rotation lock/);
+assert.equal(lockDuringRead.writes,0,'locked generation must not accept annual writes');
+assert.equal(lockDuringRead.reads,2,'the root is rechecked after the annual read');
+console.log('PASS: rotation lock inserted during annual fetch blocks old-year commit');
+
+// If the rotation begins DURING the annual PUT, its read-back must not be
+// reported as success or cached for subsequent edits.
+const lockDuringPut={lock:false,reads:0,writes:0};
+const raceGraph={async write(){lockDuringPut.writes++;lockDuringPut.lock=true;}};
+const racedWriter=new vaultApi.PayrollVault(raceGraph);
+racedWriter.key=key;racedWriter.salt=salt;racedWriter.index=vaultIndex(true);
+racedWriter.readIndex=async()=>{lockDuringPut.reads++;
+ if(lockDuringPut.lock)throw new Error('simulated remote rotation lock');
+ return {index:vaultIndex(true),file:{id:'root',etag:'root',text:'synthetic'}};
+};
+racedWriter.readYear=async()=>({doc:emptyDoc(),file:{id:'year',etag:'old-year',text:'synthetic'}});
+await assert.rejects(racedWriter.commit('2026',emptyDoc()),/rotation lock/);
+assert.equal(lockDuringPut.writes,1,'the remote may have accepted an ambiguous write');
+assert.equal(racedWriter.shards.size,0,'an ambiguous write must not become a cached success');
+assert.equal(lockDuringPut.reads,3,'root is rechecked after write verification');
+console.log('PASS: lock appearing during annual PUT refuses an unverified success');
+
 console.log('PASS: YearEnd freshness and Payroll commit dedupe regression');

@@ -612,11 +612,18 @@ export class PayrollVault {
    const {doc:remote,file}=await this.readYear(year);
    checkRemote?.(remote);
    const merged=mergeAnnual(base,changed,remote);
+   // Refresh the root lock after the annual GET and encryption. A different
+   // device may have started rotation while we were awaiting either operation.
+   const encrypted=await encryptJson('year',merged,this.unlocked(),this.salt);
+   await this.readIndex();
    try {
-    await this.graph.write(this.storagePath('statements'),`${year}.enc`,await encryptJson('year',merged,this.unlocked(),this.salt),file,MAX_YEAR);
+    await this.graph.write(this.storagePath('statements'),`${year}.enc`,encrypted,file,MAX_YEAR);
     const verify=await this.readYear(year);
     if(!verify.file)throw new Error('保存後に年別明細が見つかりません。');
     for(const rec of changed.records)if(!verify.doc.records.some(r=>r.id===rec.id))throw new Error('年別明細の保存結果が一致しません。');
+    // If rotation started during the PUT/readback, never report success or
+    // cache a snapshot that may belong to the superseded generation.
+    await this.readIndex();
     this.shards.set(year,verify.doc);
     // The full read-back has just validated this shard under its current key.
     if(this.shardKey===this.key&&this.shardSalt===this.salt&&this.shardGeneration===this.index.generation)

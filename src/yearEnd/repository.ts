@@ -64,7 +64,7 @@ export class YearEndRepository {
   * ETag, item identity and size must all match; any failure aborts instead of
   * serving old data. The result never includes a reusable write ETag. */
  private async readOnlyJson<T>(a:Access,kind:'profile'|'year',path:string[],name:string,max:number,
-  validate:(value:T)=>T):Promise<T|null>{
+  validate:(value:T)=>T,captureVerified?:(entry:VerifiedRead)=>void):Promise<T|null>{
   this.checkReadOnlyScope(a);
   const scope=this.readOnlyScope;
   const cache=kind==='profile'?this.readOnlyProfiles:this.readOnlyYears;
@@ -76,8 +76,11 @@ export class YearEndRepository {
    if(!current){cache.delete(cacheKey);return null;}
    if(current.size!==undefined&&(!Number.isSafeInteger(current.size)||current.size<1||current.size>max))
     throw new Error('OneDriveファイルの容量が不正です。');
-   if(prior.id===current.id&&prior.etag===current.etag&&prior.size===current.size)
-    return copyReadOnly(prior.value) as T;
+   if(prior.id===current.id&&prior.etag===current.etag&&prior.size===current.size){
+    const value=copyReadOnly(prior.value) as T;
+    captureVerified?.({value:copyReadOnly(value),id:prior.id,etag:prior.etag,size:prior.size});
+    return value;
+   }
   }
   // A new file, changed ETag, or missing cache requires a full authenticated
   // decrypt+schema validation, never a metadata-only result.
@@ -89,15 +92,19 @@ export class YearEndRepository {
   if(fresh.file?.id&&fresh.file.etag){
    const bound=kind==='profile'?128:8;
    if(cache.size>=bound)cache.delete(cache.keys().next().value!);
-   cache.set(cacheKey,{value:copyReadOnly(validated),id:fresh.file.id,etag:fresh.file.etag,size:fresh.file.size});
+   const entry={value:copyReadOnly(validated),id:fresh.file.id,etag:fresh.file.etag,size:fresh.file.size};
+   cache.set(cacheKey,entry);
+   // Couple the version proof with the exact returned profile in this turn.
+   // Never retrieve an identity from the shared Map after another await.
+   captureVerified?.({value:copyReadOnly(entry.value),id:entry.id,etag:entry.etag,size:entry.size});
   }
   return validated;
  }
  /** Used only for display. Mutations use profile() and always fetch live index and profile. */
- private async readOnlyProfile(a:Access,id:PersonId):Promise<PersonProfile>{
+ private async readOnlyProfile(a:Access,id:PersonId,captureVerified?:(entry:VerifiedRead)=>void):Promise<PersonProfile>{
   await this.assertActive(a,id);
   const value=await this.readOnlyJson<PersonProfile>(a,'profile',this.personPath(a,id),'profile.enc',MAX_PROFILE,
-   profile=>validateProfile(profile,id));
+   profile=>validateProfile(profile,id),captureVerified);
   if(!value)throw new Error('従業員プロフィールが見つかりません。');
   return value;
  }
@@ -227,17 +234,16 @@ export class YearEndRepository {
   asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
   const perf=yearEndPerf('yearend-year');let success=false;
   let a:Access,profile:PersonProfile,data:YearData;
+  let verified:VerifiedRead|undefined;
   try{
    a=await perf.measure('yearend-access',()=>this.access());
-   profile=await perf.measure('yearend-profile',()=>this.readOnlyProfile(a,id));
+   profile=await perf.measure('yearend-profile',()=>this.readOnlyProfile(a,id,entry=>{verified=entry;}));
    data=await perf.measure('yearend-context',()=>this.verifiedDisplayYear(a,id,year,profile));
    success=true;
   }finally{perf.finish(success);}
-  // Capture the specific profile that produced the display, not whatever a
-  // separate background read might later place in the shared read-only cache.
+  // The profile/version pair is captured atomically by the validated read.
+  // Another read may replace the shared Map while year JSON is being fetched.
   const profilePath=this.personPath(a,id);
-  const cacheKey=profilePath.join('/')+'/profile.enc';
-  let verified=this.readOnlyProfiles.get(cacheKey);
   const stillUnlocked=async()=>{
    const vault=await cloudVault();
    if(!vault.isUnlocked()||(vault.graph&&vault.graph!==a.graph)||
@@ -256,8 +262,7 @@ export class YearEndRepository {
     if(!matches(before,verified)){
      // Changed ETag/identity: validate active employee and decrypt the latest
      // profile before deciding which years to compare. No stale year list.
-     currentProfile=await this.readOnlyProfile(a,id);
-     verified=this.readOnlyProfiles.get(cacheKey);
+     currentProfile=await this.readOnlyProfile(a,id,entry=>{verified=entry;});
      if(!matches(before,verified))continue; // changed during the reload
     }
     const names=await this.otherYearNamesFromProfile(a,id,year,currentProfile);

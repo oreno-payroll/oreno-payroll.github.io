@@ -10,6 +10,15 @@ export const PAYROLL_SEMANTICS_FORMAT='payroll-semantics-v1' as const;
 /** Advance this identifier when PDF interpretation rules change. */
 export const PAYROLL_PARSER_REVISION='payroll-parser-2026-11-r1' as const;
 
+/** Historical wire-format v1 keys. NEVER derive this from current form fields.
+ * When a new salary field is introduced, design semantics v2 and preserve this list. */
+export const PAYROLL_SEMANTICS_V1_KEYS = Object.freeze([
+ 'job','kind','targetMonth','paymentDate','gross','net','taxable','nonTaxable',
+ 'transportation','reimbursedExpenses','workDays','incomeTax','residentTax',
+ 'healthInsurance','careInsurance','childcareSupport','pension',
+ 'employmentInsurance','otherDeductions','yearEndAdjustment','bonusBase','performanceBonus',
+] as const);
+
 const FIELD_LABELS:Readonly<Record<PayrollFieldKey,string>>={
  job:'勤務区分',kind:'明細区分',targetMonth:'給与対象年月',paymentDate:'支給日',
  gross:'総支給額',net:'差引支給額',taxable:'課税支給合計',nonTaxable:'非課税支給合計',
@@ -61,7 +70,7 @@ export function isValidPayrollSemantics(value:unknown):value is PayrollStatement
     typeof x.parserRevision!=='string'||!/^[a-z0-9_.-]{1,80}$/.test(x.parserRevision)||
     !['matched','suspect','unknown'].includes(x.layoutStatus??''))return false;
  if(!x.fieldLabels||typeof x.fieldLabels!=='object'||Array.isArray(x.fieldLabels))return false;
- const expected=Object.keys(FIELD_LABELS);
+ const expected:readonly string[]=PAYROLL_SEMANTICS_V1_KEYS;
  const observed=Object.keys(x.fieldLabels);
  return observed.length===expected.length&&expected.every(key=>{
   const label=(x.fieldLabels as Record<string,unknown>)[key];

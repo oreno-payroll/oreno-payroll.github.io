@@ -220,8 +220,8 @@ export class YearEndRepository {
   return data;
  }
  /** Return the year immediately, with a deferred read-only name comparison.
-  * The deferred job reuses this exact validated active index/profile snapshot,
-  * but rechecks that the vault is unlocked with the same non-extractable key.
+  * The deferred job shares the initial validated profile, but probes its live
+  * ETag before and after comparing names so recently added years are included.
   */
  async yearWithOtherYearNames(id:PersonId,year:number):Promise<{data:YearData;otherYearNames:()=>Promise<string[]>}>{
   asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
@@ -233,11 +233,42 @@ export class YearEndRepository {
    data=await perf.measure('yearend-context',()=>this.verifiedDisplayYear(a,id,year,profile));
    success=true;
   }finally{perf.finish(success);}
-  return {data,otherYearNames:async()=>{
+  // Capture the specific profile that produced the display, not whatever a
+  // separate background read might later place in the shared read-only cache.
+  const profilePath=this.personPath(a,id);
+  const cacheKey=profilePath.join('/')+'/profile.enc';
+  let verified=this.readOnlyProfiles.get(cacheKey);
+  const stillUnlocked=async()=>{
    const vault=await cloudVault();
-   if(!vault.isUnlocked()||vault.sessionKey().key!==a.key)
+   if(!vault.isUnlocked()||(vault.graph&&vault.graph!==a.graph)||
+      vault.sessionKey().key!==a.key||vault.sessionKey().salt!==a.salt)
     throw new Error('保管庫がロックまたは変更されました。他年度の氏名照合を中止しました。');
-   return this.otherYearNamesFromProfile(a,id,year,profile);
+  };
+  const matches=(meta:{id:string;etag:string;size?:number}|null,entry:VerifiedRead|undefined)=>
+   Boolean(meta&&entry&&meta.id===entry.id&&meta.etag===entry.etag&&meta.size===entry.size);
+  return {data,otherYearNames:async()=>{
+   let currentProfile=profile;
+   for(let attempt=0;attempt<3;attempt++){
+    await stillUnlocked();
+    const before=await a.graph.metadata(profilePath,'profile.enc');
+    await stillUnlocked();
+    if(!before)throw new Error('従業員プロフィールが見つかりません。');
+    if(!matches(before,verified)){
+     // Changed ETag/identity: validate active employee and decrypt the latest
+     // profile before deciding which years to compare. No stale year list.
+     currentProfile=await this.readOnlyProfile(a,id);
+     verified=this.readOnlyProfiles.get(cacheKey);
+     if(!matches(before,verified))continue; // changed during the reload
+    }
+    const names=await this.otherYearNamesFromProfile(a,id,year,currentProfile);
+    await stillUnlocked();
+    const after=await a.graph.metadata(profilePath,'profile.enc');
+    await stillUnlocked();
+    if(matches(after,verified))return names;
+    // Another tab added/removed a year during the background comparison.
+    // Repeat with the new profile, or fail closed if it keeps changing.
+   }
+   throw new Error('他年度の氏名照合中に従業員プロフィールが変更されました。再読み込みしてください。');
   }};
  }
  async year(id:PersonId,year:number):Promise<YearData>{

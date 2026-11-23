@@ -307,9 +307,12 @@ export class PayrollVault {
  }
  /** Register a verified empty year before writing real statements. An index failure can then
   * leave only an empty orphan, never invisible payroll records. */
- private async prepareYearForWrite(year:string):Promise<void> {
+ private async prepareYearForWrite(year:string):Promise<boolean> {
   const {index}=await this.readIndex();
-  if(index.years.includes(year))return;
+  // A pre-existing year was just checked against the live index, rotation lock
+  // and encryption generation. A newly registered year MUST re-read the index
+  // before committing because this path may write both the year and the index.
+  if(index.years.includes(year))return true;
   const existing=await this.readYear(year,index);
   if(!existing.file) {
    try {
@@ -321,6 +324,7 @@ export class PayrollVault {
   if(confirmed.doc.records.length||confirmed.doc.deleted.length)
    throw new Error(`${year}年度に索引未登録の明細が存在します。上書きせず、設定画面の「孤立年度を検査・復旧」を実行してください。`);
   await this.registerYear(year,'years');
+  return false;
  }
  /** Scan every encrypted original, including PDFs detached from deleted statements.
   * The inventory is read-only and bounded; unexpected paths stop key rotation/cleanup. */
@@ -599,10 +603,12 @@ export class PayrollVault {
   return [...byId.values()];
  }
  private async commit(year:string,changed:AnnualDocument,checkRemote?:(remote:AnnualDocument)=>void):Promise<void> {
-  await this.prepareYearForWrite(year);
+  const existingYearChecked=await this.prepareYearForWrite(year);
   const base=copy(this.shards.get(year)??emptyDoc());
   for(let retry=0;retry<5;retry++) {
-   await this.readIndex(); // 最終更新前に保管庫の変更ロックと保存世代を確認。
+   // The existing-year preparation read is this attempt's fresh index guard.
+   // On creation or every ETag conflict retry, repeat the remote lock/generation check.
+   if(!existingYearChecked||retry>0)await this.readIndex();
    const {doc:remote,file}=await this.readYear(year);
    checkRemote?.(remote);
    const merged=mergeAnnual(base,changed,remote);

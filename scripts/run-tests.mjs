@@ -90,6 +90,7 @@ const tests = [
   ['scripts/test-payroll-performance-ce.mjs', true],
   ['scripts/test-payroll-performance-ce-standalone.mjs', true],
   ['scripts/test-payroll-performance-f.mjs', true],
+  ['scripts/test-payroll-optimization-round2.mjs', true],
   ['scripts/test-payroll-performance-phase04.mjs', true],
   ['scripts/test-payroll-performance-phase05.mjs', true],
   ['scripts/test-cloud-startup.mjs', true],

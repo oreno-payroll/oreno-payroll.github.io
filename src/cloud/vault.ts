@@ -524,21 +524,22 @@ export class PayrollVault {
   // year at EACH consistency boundary. A fresh paginated Graph folder inventory
   // replaces N individual metadata GETs; changed years are decrypted again.
   // A missing, duplicate, malformed, or oversized indexed item fails closed.
-  // Writes never trust navigation snapshots without their own live checks.
+  // Read-only and batch-save snapshots require fresh live metadata at each boundary.
+  // Batch writes independently re-read the live index/year and use conditional ETags.
   const bulk=options?.bulkYearMetadata===true&&mayReuse&&years.length>=3&&typeof this.graph.listFolder==='function';
   let inventory:Map<string,{id:string;etag:string;size:number}>|undefined;
   if(bulk){
    const entries=await this.graph.listFolder(this.pathFor(index,'statements'));
-   if(!entries)throw new Error('収入同期用の年度フォルダーが存在しません。同期を中断しました。');
+   if(!entries)throw new Error('年度フォルダーが存在しません。最新状態の確認を中断しました。');
    const indexed=new Set(years.map(year=>`${year}.enc`));
    inventory=new Map();
    for(const item of entries){
     if(!indexed.has(item.name))continue;
     if(item.folder||!item.id||!item.etag||!Number.isSafeInteger(item.size)||item.size<1||item.size>MAX_YEAR||inventory.has(item.name))
-     throw new Error('収入同期用の年度メタデータが不正または重複しています。同期を中断しました。');
+     throw new Error('年度メタデータが不正または重複しています。最新状態の確認を中断しました。');
     inventory.set(item.name,{id:item.id,etag:item.etag,size:item.size});
    }
-   if(inventory.size!==years.length)throw new Error('収入同期中に年度ファイルの一覧が変更されました。同期を中断しました。');
+   if(inventory.size!==years.length)throw new Error('年度ファイルの一覧が変更されました。最新状態の確認を中断しました。');
   }
   let next=0,loaded=0,failed=false;
   const worker=async():Promise<void>=>{
@@ -691,11 +692,14 @@ export class PayrollVault {
    throw new Error(`PDF原本 ${originalsDone}/${records.length}件の保存・照合後に失敗しました。解析明細は未確定ですが、暗号化原本が一部OneDriveに残っている可能性があります。原因: ${msg}`,{cause:firstFailure});
   }
 
-  // 原本の全件検証後、最新のクラウド年度データを再取得して重複・容量を確認。
+  // 原本の全件検証後、最新の索引と全年度ETagを確認して重複・容量を検証。
+  // 変更のない年度だけ復号済み本文を再利用。書き込み前後の境界は省略しない。
+  // 保存本体は commit() のライブ索引、最新年度本文、条件付きETag書込で保護する。
+  const verifiedBatchRefresh=()=>this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
   // 別端末が間に保存した同一給与の存在をここで検出する。
   progress?.(`最新の明細と競合を確認しています ${elapsed()}`);
   let current:CloudRecord[];
-  try { current=await this.refresh(); }
+  try { current=await verifiedBatchRefresh(); }
   catch(error) {
    const msg=error instanceof Error?error.message:String(error);
    throw new Error(`原本${records.length}件の保存・照合は完了しましたが、年度データの再取得に失敗しました。解析明細は未確定で、暗号化原本だけが残っている可能性があります。原因: ${msg}`,{cause:error});
@@ -717,7 +721,7 @@ export class PayrollVault {
     progress?.(`${year}年度の解析データを保存・検証しています（${committed}/${records.length}件確定）${elapsed()}`);
     // Read the latest shard BEFORE creating the local candidate.
      // Recheck all indexed years immediately before each annual commit.
-     const latest=await this.refresh({forceFresh:true});
+     const latest=await verifiedBatchRefresh();
      if(items.some(rec=>latest.some(r=>r.id===rec.id||collides(rec,latest))))
       throw new Error('別端末が明細を追加しました。重複があるため保存を中止しました。');
      this.assertRecordLimits([...latest,...items]);
@@ -729,7 +733,7 @@ export class PayrollVault {
       this.assertRecordLimits([...this.records().filter(r=>!remote.records.some(x=>x.id===r.id)),...remote.records,...items]);
      });
     committed+=items.length;
-    const after=await this.refresh({forceFresh:true});
+    const after=await verifiedBatchRefresh();
     try{this.assertRecordLimits(after);}catch(error){throw new Error('保存直後に別端末との同時更新で上限超過を検出しました。明細は保存済みの可能性があります。追加操作せず確認してください。',{cause:error});}
     progress?.(`解析済み明細 ${committed}/${records.length}件を確定 ${elapsed()}`);
    }

@@ -455,12 +455,14 @@ function syncForecastAmounts(methodChanged=false){
  }
  for(const input of fields){
   const month=input.dataset.override!;
-  if(methodChanged)input.dataset.userEdited='false';
-  else if(input.dataset.userEdited==='true')continue;
+  // Changing estimation method must never discard an edited monthly draft.
+  if(input.dataset.userEdited==='true')continue;
   const existing=data.estimates.find(e=>e.month===month);
   const oldZero=data.noPaymentMonths.includes(month);
-  if(method==='manual')input.value=methodChanged?'':(oldZero?'0':existing?String(existing.amount):'');
-  else if(calculated.has(month))input.value=!methodChanged&&oldZero?'0':!methodChanged&&existing?String(existing.amount):String(calculated.get(month)!);
+  // The old method may have supplied this value, but the amount belongs to
+  // the saved month, not to the selector. Manual editing must retain it.
+  if(method==='manual')input.value=oldZero?'0':existing?String(existing.amount):methodChanged?'':input.value;
+  else if(calculated.has(month))input.value=oldZero?'0':existing?String(existing.amount):String(calculated.get(month)!);
   else input.value='';
   input.placeholder=method==='manual'?'金額を入力':'推定できません';
  }

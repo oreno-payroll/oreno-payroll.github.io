@@ -382,7 +382,8 @@
 
 /* OneDrive save activity: show honest per-file byte progress and elapsed cloud wait. */
 .save-feedback{display:grid;gap:6px;width:100%;max-width:560px;padding-top:3px}
-.save-feedback__top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--color-text);font-size:12px;font-weight:800}
+.save-feedback__top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--color-text);font-size:12px;font-weight:800;min-width:0}
+#save-stage{min-width:0;overflow-wrap:anywhere}
 #save-elapsed{color:var(--color-muted);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .save-feedback__track{height:6px;background:#e7edf6;border-radius:8px;overflow:hidden;position:relative}
 .save-feedback__fill{height:100%;width:0;background:var(--color-primary);border-radius:8px;transition:width .22s ease}
@@ -423,3 +424,78 @@
 .upload-troubleshooting > summary:focus-visible { outline:2px solid var(--color-primary); outline-offset:3px; }
 .upload-troubleshooting > p { margin:12px 0 9px; font-size:10px; line-height:1.7; }
 .upload-troubleshooting > .btn { margin-bottom:2px; }
+
+/* PAYROLL-DESKTOP-EMPTY-UPLOAD-20261123
+ * Desktop's two-column rule overrode .workspace.is-empty, leaving a tiny picker
+ * at the upper left with a ghost second column. Enlarge only the empty state.
+ * With files selected, retain the compact uploader, file list, and review panel.
+ */
+@media (min-width: 861px) {
+  .upload-page .workspace.is-empty {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(100%, 760px);
+    max-width: 760px;
+    margin-inline: auto;
+    align-items: start;
+  }
+  .upload-page .workspace.is-empty .upload-left { width: 100%; }
+  .upload-page .workspace.is-empty .upload-zone-card { width: 100%; padding: 12px; }
+  .upload-page .workspace.is-empty .zone-content {
+    min-height: clamp(220px, 34dvh, 320px);
+    padding: 30px 24px;
+  }
+  .upload-page .workspace.is-empty .zone-icon {
+    width: 60px; height: 60px; margin-bottom: 15px; border-radius: 18px;
+  }
+  .upload-page .workspace.is-empty .zone-icon .icon { width: 27px; height: 27px; }
+  .upload-page .workspace.is-empty .zone-copy h2 { font-size: 19px; margin-bottom: 6px; }
+  .upload-page .workspace.is-empty .zone-copy p { font-size: 12px; line-height: 1.7; }
+  .upload-page .workspace.is-empty .zone-privacy { margin-top: 17px; font-size: 11px; }
+}
+@media (min-width: 641px) and (max-width: 860px) {
+  .upload-page .workspace.is-empty {
+    flex: 1;
+    grid-template-columns: minmax(0, 1fr);
+    width: min(100%, 760px);
+    margin-inline: auto;
+    align-items: start;
+  }
+  .upload-page .workspace.is-empty .upload-left {
+    width: 100%; height: auto; max-height: none; overflow: visible;
+  }
+  .upload-page .workspace.is-empty #drop-zone { min-height: 190px; padding: 22px; }
+  .upload-page .workspace.is-empty .zone-icon { display: grid; margin-bottom: 11px; }
+  .upload-page .workspace.is-empty .zone-privacy { display: flex; }
+  .upload-page .workspace.is-empty .zone-copy h2 { font-size: 16px; }
+}
+
+/* PAYROLL-UPLOAD-FOOTER-FIT-20261123
+ * The build-info footer is a direct child of body, OUTSIDE .app-shell.
+ * Previously main took 100dvh - header, then footer added its own height,
+ * producing a small unintended whole-document scroll on desktop/tablet.
+ * Flex distributes the viewport between header, content and visible footer.
+ * Intentionally allow natural scrolling on narrow or short viewports.
+ */
+@media (min-width: 641px) and (min-height: 621px) {
+  body.payroll-upload-viewport {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  body.payroll-upload-viewport > .app-shell {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+  }
+  body.payroll-upload-viewport .site-header { flex: 0 0 auto; }
+  body.payroll-upload-viewport .upload-page {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+  body.payroll-upload-viewport > .build-info { flex: 0 0 auto; }
+}

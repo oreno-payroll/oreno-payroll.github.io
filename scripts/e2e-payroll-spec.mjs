@@ -145,3 +145,79 @@ test('year-end viewer rejects an HTML Blob handed off as a PDF', async ({page}) 
  await expect(page.locator('#pdf-reader')).toBeHidden();
  await expect(page.locator('#pdf-reader')).not.toHaveAttribute('src',/blob:/);
 });
+
+// Responsive layout regression: no actual PDF is read and no OneDrive calls are made.
+test('empty desktop upload is top-aligned and spacious, populated and mobile layouts remain usable', async ({ page, isMobile }) => {
+  await page.goto('/upload/index.html');
+  const workspace = page.locator('.workspace');
+  const drop = page.locator('#drop-zone');
+  const mobilePicker = page.locator('#mobile-file-picker');
+  await expect(workspace).toHaveClass(/is-empty/);
+  if (isMobile) {
+    await expect(drop).toBeHidden();
+    await expect(mobilePicker).toBeVisible();
+    return;
+  }
+  await expect(drop).toBeVisible();
+  const empty = await drop.boundingBox();
+  const area = await workspace.boundingBox();
+  expect(empty).not.toBeNull();
+  expect(area).not.toBeNull();
+  expect(empty.width).toBeGreaterThan(420);
+  expect(empty.height).toBeGreaterThan(210);
+  expect(Math.abs((empty.x + empty.width / 2) - (area.x + area.width / 2))).toBeLessThan(30);
+  expect(Math.abs(empty.y - area.y)).toBeLessThan(30); // top-aligned within content workspace
+  await workspace.evaluate(node => node.classList.remove('is-empty'));
+  const populated = await drop.boundingBox();
+  expect(populated.height).toBeLessThan(empty.height);
+  await expect(page.locator('.file-panel')).toBeVisible();
+  await page.setViewportSize({ width: 820, height: 900 });
+  await workspace.evaluate(node => node.classList.add('is-empty'));
+  const tablet = await drop.boundingBox();
+  expect(tablet.width).toBeGreaterThan(420);
+  expect(tablet.height).toBeGreaterThan(180);
+  const tabletWorkspace = await workspace.boundingBox();
+  expect(tabletWorkspace).not.toBeNull();
+  expect(Math.abs(tablet.y - tabletWorkspace.y)).toBeLessThan(30);
+});
+
+// PAYROLL-UPLOAD-FOOTER-FIT-20261123: synthetic-only layout checks, no Microsoft account or real PDF.
+test('desktop upload has no footer-caused document scroll, including populated layout', async ({ page, isMobile }) => {
+  if (isMobile) return; // On mobile, allow necessary natural page scrolling.
+  for (const [width, height] of [[1280, 800], [820, 900]]) {
+    await page.setViewportSize({ width, height });
+    await page.goto('/upload/index.html');
+    await expect(page.locator('.build-info')).toBeVisible();
+    const fit = async () => page.evaluate(() => {
+      const footer = document.querySelector('.build-info');
+      return {
+        documentHeight: document.documentElement.scrollHeight,
+        bodyHeight: document.body.scrollHeight,
+        viewportHeight: window.innerHeight,
+        footerBottom: footer.getBoundingClientRect().bottom,
+      };
+    });
+    const empty = await fit();
+    expect(empty.documentHeight - empty.viewportHeight).toBeLessThanOrEqual(1);
+    expect(empty.bodyHeight - empty.viewportHeight).toBeLessThanOrEqual(1);
+    expect(empty.footerBottom).toBeLessThanOrEqual(empty.viewportHeight + 1);
+    await page.locator('.workspace').evaluate(node => node.classList.remove('is-empty'));
+    await page.locator('.review-panel').evaluate(panel => {
+      const sample = document.createElement('div');
+      sample.style.height = '1800px';
+      sample.setAttribute('data-layout-fixture', '');
+      panel.append(sample);
+    });
+    await expect(page.locator('.file-panel')).toBeVisible();
+    const populated = await fit();
+    expect(populated.documentHeight - populated.viewportHeight).toBeLessThanOrEqual(1);
+    expect(populated.footerBottom).toBeLessThanOrEqual(populated.viewportHeight + 1);
+    const panel = await page.locator('.review-panel').evaluate(node => ({
+      scrollHeight: node.scrollHeight,
+      clientHeight: node.clientHeight,
+      overflowY: getComputedStyle(node).overflowY,
+    }));
+    expect(panel.scrollHeight).toBeGreaterThan(panel.clientHeight);
+    expect(panel.overflowY).toBe('auto');
+  }
+});

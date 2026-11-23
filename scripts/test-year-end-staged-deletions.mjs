@@ -46,8 +46,9 @@ const graph={
  }
 };
 const root=['payroll','versions','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','year-end-assist'];
+const stableMockKey={}; // Synthetic key identity remains stable until an explicit simulated key rotation.
 const sandbox={crypto:webcrypto,Blob,TextEncoder,TextDecoder,Uint8Array,Set,Map,Number,Date,Error,JSON,Buffer,Promise,
- cloudVault:async()=>({yearEndAccess:async()=>({path:root,key:{},salt:'test',graph})}),
+ cloudVault:async()=>({yearEndAccess:async()=>({path:root,key:stableMockKey,salt:'test',graph})}),
  encryptJson:async(_,obj)=>JSON.stringify(obj),decryptJson:async(_,str)=>JSON.parse(str),
  encryptBytes:async(_,bytes)=>Buffer.from(bytes).toString('base64'),decryptBytes:async(_,str)=>new Uint8Array(Buffer.from(str,'base64')),
  isCollision:err=>/collision/.test(err.message)};

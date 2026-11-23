@@ -1,7 +1,9 @@
 import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
+import {preparePdfHandoff} from './pdf/handoff';
+import {capturePdfHandoffAuthorization} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
-import { deleteRecord, getRecord, updateRecord, inspectReplacementConflicts, recordSignature, type SavedPayrollRecord } from './storage/payrollStore';
+import {deleteRecord,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,type SavedPayrollSummary} from './storage/payrollStore';
 import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
 import { showInlineError, clearInlineError } from './ui/feedback';
@@ -33,8 +35,8 @@ const homeHref = originYear && /^\d{4}$/.test(originYear) &&
 document.querySelectorAll<HTMLAnchorElement>('a[href="../index.html"]').forEach(link => {
   link.setAttribute('href', homeHref);
 });
-let record: SavedPayrollRecord | undefined;
-let url: string | undefined;
+let record: SavedPayrollSummary | undefined;
+let pdfDownloading=false;
 let saving = false;
 let leavingAfterSave = false;
 
@@ -84,8 +86,7 @@ function updateUI(): void {
 }
 function showState(): void {
   if (!record) return;
-  const { pdf, ...metadata } = record;
-  state.textContent = JSON.stringify({ ...metadata, pdf: { size: pdf.size, type: pdf.type } }, null, 2);
+  state.textContent = JSON.stringify({ ...record, pdf: { size: record.pdfSize, type: record.pdfType, loaded: false } }, null, 2);
 }
 function showError(message: string): void {
   appStatus.error(message);
@@ -118,7 +119,7 @@ saveButton.addEventListener('click', async () => {
   appStatus.loading('明細の変更を保存しています…');
   updateUI();
   try {
-    const updated: SavedPayrollRecord = {
+    const updated: SavedPayrollSummary = {
       ...record,
       fileName: storedPdfName(formValues.job, formValues.kind, formValues.paymentDate, record.originalFileName ?? record.fileName),
       form: formValues,
@@ -133,7 +134,7 @@ saveButton.addEventListener('click', async () => {
         saving = false; updateUI(); return;
       }
     }
-    await updateRecord(updated, conflicts, recordSignature(record));
+    await updateRecordMetadata(updated, conflicts, recordSignature(record),stage=>appStatus.loading(stage));
     appStatus.success('明細の変更を保存しました');
     leavingAfterSave = true;
     window.location.assign(homeHref);
@@ -186,24 +187,48 @@ window.addEventListener('beforeunload', event => {
   event.preventDefault();
   event.returnValue = '';
 });
-window.addEventListener('pagehide', () => { if (url) URL.revokeObjectURL(url); });
 appStatus.loading('保存済み明細を読み込んでいます…');
 void (async () => {
   const id = Number(new URLSearchParams(location.search).get('id'));
   if (!Number.isSafeInteger(id) || id <= 0) { showError('明細IDが不正です。ホームに戻って選び直してください。'); return; }
   try {
-    record = await getRecord(id);
+    // Priority-only hint, not a trusted statement location. CloudVault still
+    // validates the whole indexed snapshot before returning any editable record.
+    const yearHint=new URLSearchParams(location.search).get('hintYear')??undefined;
+    record = await getRecordSummary(id,yearHint);
     if (!record) { showError('保存済み明細が見つかりません。'); return; }
     editor.hidden = false;
     appStatus.success('明細を読み込みました');
     $('record-name').textContent = record.fileName;
-    $('record-details').textContent = `ID ${record.id} / 登録日時 ${new Date(record.savedAt).toLocaleString('ja-JP')} / PDF ${record.pdf.size.toLocaleString('ja-JP')} bytes`;
-    url = URL.createObjectURL(record.pdf);
+    $('record-details').textContent = `ID ${record.id} / 登録日時 ${new Date(record.savedAt).toLocaleString('ja-JP')} / PDF ${record.pdfSize.toLocaleString('ja-JP')} bytes`;
     const link = $<HTMLAnchorElement>('original-pdf');
-    link.href = url;
+    link.href = `../view/index.html?id=${encodeURIComponent(String(record.id))}`;
+    // Opens a new viewer tab synchronously; the already-unlocked editor transfers
+    // only the verified PDF Blob over a one-use, lock-aware BroadcastChannel.
+    const startHandoff=()=>preparePdfHandoff(link,record!.id,async()=>({
+      fileName:record!.fileName,
+      pdf:await getOriginalForVerifiedEdit(record!.id,recordSignature(record!)),
+    }),capturePdfHandoffAuthorization());
+    link.addEventListener('click',event=>{if(!event.defaultPrevented)startHandoff();});
+    link.addEventListener('auxclick',event=>{if(event.button===1&&!event.defaultPrevented)startHandoff();});
     const download = $<HTMLAnchorElement>('download-pdf');
-    download.href = url;
-    download.download = safePdfFileName(record.fileName);
+    download.href = '#'; // Real bytes are fetched and verified only after a click.
+    download.addEventListener('click',async event=>{
+      event.preventDefault();
+      if(!record||saving||pdfDownloading)return;
+      pdfDownloading=true;appStatus.loading('PDF原本を取得・照合しています…');
+      try{
+        const pdf=await getOriginalForVerifiedEdit(record.id,recordSignature(record));
+        const objectUrl=URL.createObjectURL(pdf);
+        try{
+          const anchor=document.createElement('a');
+          anchor.href=objectUrl;anchor.download=safePdfFileName(record.fileName);
+          document.body.append(anchor);anchor.click();anchor.remove();
+        }finally{window.setTimeout(()=>URL.revokeObjectURL(objectUrl),60_000);}
+        appStatus.success('PDFのダウンロードを開始しました');
+      }catch(error){showError(`PDF原本を取得できませんでした：${error instanceof Error?error.message:String(error)}`);}
+      finally{pdfDownloading=false;}
+    });
     fillForm(record.form);
     showState();
     updateUI();

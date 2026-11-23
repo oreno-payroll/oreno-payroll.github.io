@@ -55,7 +55,7 @@ assert.equal((html.match(/class="yea-forecast-work"/g)??[]).length,1);
 const del=repo.slice(repo.indexOf('async deleteDocument('),repo.indexOf('async correctDocument('));
 assert.match(del,/documents:context\.data\.documents\.filter\(r=>r\.id!==documentId\)/);
 assert.match(del,/estimates:context\.data\.estimates\.filter\(e=>!e\.references\.includes\(record\.id\)\)/);
-assert.match(del,/await this\.saveYear\(a,id,year,context\.file,next,context\.yearFile\)/);
+assert.match(del,/await this\.saveYear\(a,id,year,context\.file,next,context\.yearFile,context\)/);
 assert.match(del,/await a\.graph\.trashFile\(path,file\)/);
 assert.ok(del.indexOf('await this.saveYear')<del.indexOf('await a.graph.trashFile'));
 assert.match(model,/kind:'estimate-replaced'\|'document-corrected'\|'document-deleted'/);

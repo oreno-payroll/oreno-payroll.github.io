@@ -1,5 +1,6 @@
 /** Finance v1.1のAppFolder/ETag/事前認証URL方式をPayroll専用APIへ適用。 */
 import {MicrosoftSignInRequiredError,MicrosoftTemporaryError} from './msalPolicy.ts';
+import {observeGraphTransfer,observeGraphRetry} from './perf.ts';
 const BASE = 'https://graph.microsoft.com/v1.0';
 // Graph のスロットリングと一時障害だけを、読み取り専用で再試行する。
 // Retry-After が待機上限を超える場合は早めに再送せず、呼び出し元へエラーを返す。
@@ -21,6 +22,13 @@ function retryWaitMs(response:Response, retry:number):number|null {
   return 350*2**retry;
 }
 const pause=(ms:number):Promise<void>=>new Promise(resolve=>setTimeout(resolve,ms));
+// The cache contains only encrypted JSON text in RAM. It never stores PDF originals,
+// a plaintext payroll record, an OAuth token, or a decryption key.
+const MAX_CACHED_ENCRYPTED_BYTES=1_048_576;
+const MAX_TOTAL_CACHED_ENCRYPTED_BYTES=4_194_304;
+const MAX_CACHED_ENCRYPTED_FILES=8;
+interface CachedEncryptedRead {file:RemoteFile;bytes:number}
+
 
 export interface RemoteFile { id: string; etag: string; text: string; size?: number; }
 interface Item { id?: string; name?: string; folder?: Record<string,unknown>; eTag?: string; size?: number; '@microsoft.graph.downloadUrl'?: string }
@@ -36,28 +44,57 @@ export class PayrollGraph {
   private rootPending:Promise<string>|undefined;
   private folders = new Map<string,string>();
   private folderPending = new Map<string,Promise<string|null>>();
+  private encryptedReadCache=new Map<string,CachedEncryptedRead>();
+  private encryptedReadCacheBytes=0;
+  private encryptedReadPending=new Map<string,{epoch:number;promise:Promise<RemoteFile|null>}>();
+  private readCacheEpoch=0;
+  private clearEncryptedReadCache():void {
+    this.readCacheEpoch++;
+    this.encryptedReadCache.clear();this.encryptedReadCacheBytes=0;
+  }
+  private discardEncryptedRead(key:string):void {
+    const value=this.encryptedReadCache.get(key);
+    if(value){this.encryptedReadCacheBytes-=value.bytes;this.encryptedReadCache.delete(key);}
+  }
+  private rememberEncryptedRead(key:string,file:RemoteFile,bytes:number):void {
+    this.discardEncryptedRead(key);
+    if(bytes>MAX_CACHED_ENCRYPTED_BYTES||bytes<1)return;
+    while(this.encryptedReadCache.size>=MAX_CACHED_ENCRYPTED_FILES ||
+       this.encryptedReadCacheBytes+bytes>MAX_TOTAL_CACHED_ENCRYPTED_BYTES){
+      const oldest=this.encryptedReadCache.keys().next().value;
+      if(oldest===undefined)break;
+      this.discardEncryptedRead(oldest);
+    }
+    this.encryptedReadCache.set(key,{file:{...file},bytes});
+    this.encryptedReadCacheBytes+=bytes;
+  }
+
   constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>}) {}
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, accept304=false): Promise<Response> {
     const method=(init.method??'GET').toUpperCase();
     const readonly=method==='GET'||method==='HEAD';
-    if(!readonly)this.onMutation();
+    if(!readonly){this.clearEncryptedReadCache();this.onMutation();}
     let bearer=typeof this.token==='function'?await this.token():this.token;
     const graphUrl=`${BASE}${path}`;
-    const send=()=>this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});
+    const send=async()=>{
+      const started=performance.now();
+      try{return await this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});}
+      finally{observeGraphTransfer('graph-api',performance.now()-started);}
+    };
     let retries=0,renewed=false;
     for (;;) {
       let r:Response;
       try {r=await send();}
       catch(error){
         // GET/HEAD だけ、通信中断にも限定回数のバックオフを適用。
-        if(readonly&&retries<READ_RETRIES){await pause(350*2**retries++);continue;}
+        if(readonly&&retries<READ_RETRIES){observeGraphRetry();await pause(350*2**retries++);continue;}
         throw error;
       }
       if(r.status===401&&this.unauthorized&&!renewed){
         this.unauthorized.invalidate();
         if(readonly){
           // 期限切れ認証は別系統の一回限りの再取得。書き込みは再送しない。
-          renewed=true;bearer=await this.unauthorized.refresh();
+          observeGraphRetry();renewed=true;bearer=await this.unauthorized.refresh();
           continue;
         }
       }
@@ -65,10 +102,11 @@ export class PayrollGraph {
         const delay=retryWaitMs(r,retries);
         if(delay!==null){
           try{await r.body?.cancel();}catch{/* レスポンス本体を診断に使わない */}
-          retries++;await pause(delay);continue;
+          observeGraphRetry();retries++;await pause(delay);continue;
         }
       }
-      if (!r.ok) {
+      // HTTP 304 is allowed only by an explicitly conditional, read-only caller.
+      if (!r.ok && !(readonly&&accept304&&r.status===304)) {
         let code = '';
         try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
         throw new GraphError(r.status,code);
@@ -80,13 +118,17 @@ export class PayrollGraph {
   private async download(url:string):Promise<Response> {
     for(let retry=0;;){
       let response:Response;
-      try {response=await this.http(url,{credentials:'omit',cache:'no-store'});}
-      catch(error){if(retry>=READ_RETRIES)throw error;await pause(350*2**retry++);continue;}
+      try {
+        const started=performance.now();
+        try{response=await this.http(url,{credentials:'omit',cache:'no-store'});}
+        finally{observeGraphTransfer('encrypted-download',performance.now()-started);}
+      }
+      catch(error){if(retry>=READ_RETRIES)throw error;observeGraphRetry();await pause(350*2**retry++);continue;}
       if(TEMPORARY_READ_STATUSES.has(response.status)&&retry<READ_RETRIES){
         const delay=retryWaitMs(response,retry);
         if(delay!==null){
           try{await response.body?.cancel();}catch{}
-          retry++;await pause(delay);continue;
+          observeGraphRetry();retry++;await pause(delay);continue;
         }
       }
       return response;
@@ -98,13 +140,17 @@ export class PayrollGraph {
    * OneDrive の暗号文は解析せず、書き込み・削除の再試行も行わない。
    * URL・トークン・生のレスポンスはエラーやログへ含めない。
    */
-  private async readMetadata<T>(path: string, stage: string): Promise<T> {
+  private async readMetadata<T>(path:string,stage:string):Promise<T>;
+  private async readMetadata<T>(path:string,stage:string,etag:string):Promise<T|null>;
+  private async readMetadata<T>(path:string,stage:string,etag?:string):Promise<T|null> {
     for(let attempt=1;attempt<=3;attempt++) {
       let response:Response;
       try {
         response=await this.request(path,{
-          method:'GET',cache:'no-store',headers:{'Accept':'application/json'},
-        });
+          method:'GET',cache:'no-store',headers:{'Accept':'application/json',
+            ...(etag?{'If-None-Match':etag}:{})},
+        },Boolean(etag));
+        if(response.status===304)return null;
       }catch(error){
         if(error instanceof GraphError||error instanceof MicrosoftSignInRequiredError||error instanceof MicrosoftTemporaryError)throw error;
         throw new Error(`${stage}：GraphのGET開始前（認証など）または通信処理で失敗しました。暗号ファイルは変更していません。`,{cause:error});
@@ -237,12 +283,43 @@ export class PayrollGraph {
     return {id:item.id,etag:item.eTag,size:item.size};
   }
   async read(parts: string[], name: string, limit: number): Promise<RemoteFile|null> {
+    if(!/^[A-Za-z0-9_.-]{1,100}$/.test(name))throw new Error('ファイル名が不正です。');
+    const pendingKey=JSON.stringify([parts,name,limit]);
+    const running=this.encryptedReadPending.get(pendingKey);
+    if(running?.epoch===this.readCacheEpoch){const result=await running.promise;return result?{...result}:null;}
+    const operation=this.readEncryptedUnshared(parts,name,limit);
+    const entry={epoch:this.readCacheEpoch,promise:operation};
+    this.encryptedReadPending.set(pendingKey,entry);
+    try{const result=await operation;return result?{...result}:null;}
+    finally{if(this.encryptedReadPending.get(pendingKey)===entry)this.encryptedReadPending.delete(pendingKey);}
+  }
+  private async readEncryptedUnshared(parts:string[],name:string,limit:number):Promise<RemoteFile|null> {
     if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('ファイル名が不正です。');
     const parent = await this.folder(parts,false);
     if (!parent) return null;
-    let item: Item;
-    try { item = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}`,'年度暗号ファイル情報の照会'); }
-    catch (e) { if (e instanceof GraphError && e.status === 404) return null; throw e; }
+    const cacheKey=JSON.stringify([parent,name]);
+    const cached=this.encryptedReadCache.get(cacheKey);
+    const startEpoch=this.readCacheEpoch;
+    const metadataPath=`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}`;
+    let item:Item|null;
+    try {
+      // A cached body is reusable only after a fresh, successful Graph 304 for
+      // the exact drive item. Any 200 re-downloads and validates the ciphertext.
+      item=cached && cached.bytes<=limit && cached.file.etag.length<=256 &&
+        !/[\r\n]/.test(cached.file.etag)
+        ? await this.readMetadata<Item>(metadataPath,'年度暗号ファイル情報の照会',cached.file.etag)
+        : await this.readMetadata<Item>(metadataPath,'年度暗号ファイル情報の照会');
+    } catch(e) {
+      if(e instanceof GraphError&&e.status===404){this.discardEncryptedRead(cacheKey);return null;}
+      throw e;
+    }
+    if(item===null){
+      if(!cached||this.readCacheEpoch!==startEpoch||this.encryptedReadCache.get(cacheKey)!==cached)
+        throw new Error('読み込み中に保存先の状態が変更されました。再読み込みしてください。');
+      this.encryptedReadCache.delete(cacheKey);this.encryptedReadCache.set(cacheKey,cached);
+      return {...cached.file};
+    }
+    this.discardEncryptedRead(cacheKey);
     if (!item.id || !item.eTag) throw new Error('クラウドファイルのIDまたはETagがありません。');
     if (item.size !== undefined && item.size > limit) throw new Error('OneDriveファイルの容量が上限を超えています。');
     let url = item['@microsoft.graph.downloadUrl'];
@@ -261,7 +338,12 @@ export class PayrollGraph {
       // HTMLのエラーページを成功レスポンスとして読み込む等の取り違えを検出する。
       if (item.size !== undefined && item.size !== byteLength)
         throw new Error(`OneDriveのファイルサイズが一致しません (メタデータ ${item.size}バイト、取得 ${byteLength}バイト)。クラウドは変更していません。`);
-      return {id:item.id!,etag:item.eTag!,text,size:item.size};
+      if(this.readCacheEpoch!==startEpoch)
+        throw new Error('読み込み中に保管庫の保存操作が始まりました。再読み込みしてください。');
+      const file={id:item.id!,etag:item.eTag!,text,size:item.size};
+      // Profile, annual and income ciphertext only. Never cache encrypted PDFs.
+      if(!parts.includes('originals'))this.rememberEncryptedRead(cacheKey,file,byteLength);
+      return file;
     };
     const body = response.body;
     if (!body) { const text=await response.text();const size=new TextEncoder().encode(text).length;if(size>limit)throw new Error('ダウンロードサイズ超過。');return checked(text,size); }

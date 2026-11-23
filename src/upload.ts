@@ -1,4 +1,5 @@
 import { createAppStatus } from "./ui/appStatus";
+import {describePayrollSaveProgress,type PayrollSavePhase} from './ui/operationFeedback';
 /**
  * 明細アップロード画面。
  * - PDFをブラウザ内だけで読み取り、ページ数・テキスト取得可否を検証
@@ -11,6 +12,7 @@ import { redactCoordinateDiagnostic } from "./pdf/redactDiagnostic";
 import { parsePayroll, type PdfTextCell, type PayrollParseResult } from "./pdf/payrollParser";
 import { saveRecordsSkippingDuplicates, type SavedPayrollRecordInput } from "./storage/payrollStore";
 import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
+import {createPayrollSemantics} from './storage/payrollSemantics';
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
 import { duplicateOwners, pdfFailureMessage, shortFileName } from "./pdf/uploadWorkflow";
@@ -117,6 +119,8 @@ let saveTick:ReturnType<typeof setInterval>|undefined;
 let saveStartedAt=0;
 let lastSaveUpdateAt=0;
 let lastSaveMessage='';
+let savePhase:PayrollSavePhase=0;
+let savePhaseLabel='保存の準備中';
 function stopSaveClock():void {if(saveTick!==undefined){clearInterval(saveTick);saveTick=undefined;}}
 function updateSaveClock():void {
  if(!saveStartedAt)return;
@@ -130,8 +134,8 @@ function beginSaveFeedback():void {
  appStatus.loading('明細を保存しています…');
  saveFeedback.hidden=false;saveFeedback.classList.remove('is-failed','is-complete');
  saveDuplicates.hidden=true;saveDuplicateList.replaceChildren();
- saveStartedAt=Date.now();lastSaveUpdateAt=saveStartedAt;lastSaveMessage='';
- saveStage.textContent='保存の準備中';
+ saveStartedAt=Date.now();lastSaveUpdateAt=saveStartedAt;lastSaveMessage='';savePhase=0;savePhaseLabel='保存の準備中';
+ saveStage.textContent='保存の準備中';saveStage.dataset.phase='0';saveProgress.setAttribute('aria-label','保存処理の進捗');
  saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。重複除外があった場合は結果を表示し、通常の保存完了時はホームへ戻ります。';
  saveProgress.classList.add('is-indeterminate');saveProgressFill.style.width='28%';
  saveProgress.removeAttribute('aria-valuenow');
@@ -139,25 +143,22 @@ function beginSaveFeedback():void {
 }
 function showSaveProgress(message:string):void {
  if(message!==lastSaveMessage){lastSaveUpdateAt=Date.now();lastSaveMessage=message;}
- const match=/^(\d+)\/(\d+)件[：を]/.exec(message);
- const pct=/暗号化PDFの送信 (\d+)%/.exec(message);
- const phase=pct?'PDFを送信中':message.includes('重複')?'重複を確認中':
-  message.includes('暗号化PDFをOneDriveへ送信')?'PDFの送信を開始':
-  message.includes('原本PDFを暗号化')?'PDFを暗号化中':
-  message.includes('読み戻して照合')?'PDF原本を検証中':
-  message.includes('解析済み給与データ')?'明細データを保存中':
-  message.includes('収入データを同期')?'収入データを同期中':
-  message.includes('クラウドへ保存しました')?'明細の保存完了':
-  message.includes('接続')?'OneDriveへ接続中':'保存結果を確認中';
- saveStage.textContent=`${match?`${match[1]} / ${match[2]}件 · `:''}${phase}`;
- appStatus.loading(saveStage.textContent);
- if(pct){
-  const n=Math.min(100,Math.max(0,Number(pct[1])));
-  saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width=`${n}%`;
-  saveProgress.setAttribute('aria-valuenow',String(n));
+ const view=describePayrollSaveProgress(message);
+ // Parallel PDFs can report in different order. Do not move the visible stage backwards.
+ if(view.phase>=savePhase){savePhase=view.phase;savePhaseLabel=`${view.count}${view.title}`;}
+ saveStage.textContent=savePhaseLabel;
+ saveStage.dataset.phase=String(savePhase);
+ appStatus.loading(savePhaseLabel);
+ if(view.percent!==null&&view.phase===savePhase){
+   saveProgress.classList.remove('is-indeterminate');
+   saveProgressFill.style.width=`${view.percent}%`;
+   saveProgress.setAttribute('aria-valuenow',String(view.percent));
+   saveProgress.setAttribute('aria-label','現在のPDF送信率');
  }else{
-  saveProgress.classList.add('is-indeterminate');saveProgressFill.style.width='28%';
-  saveProgress.removeAttribute('aria-valuenow');
+   saveProgress.classList.add('is-indeterminate');
+   saveProgressFill.style.width='28%';
+   saveProgress.removeAttribute('aria-valuenow');
+   saveProgress.setAttribute('aria-label','保存処理中（全体の完了率は未確定）');
  }
  saveStatus.textContent=message;
  saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。重複除外があった場合は結果を表示し、通常の保存完了時はホームへ戻ります。';
@@ -816,7 +817,7 @@ saveButton.addEventListener("click", async () => {
   updateSaveState();
   beginSaveFeedback();
   try {
-    saveStatus.textContent = '保存前のPDFを検証しています…';
+    showSaveProgress('保存前のPDFを検証しています…');
     // 保存前に形式とSHA-256を再確認する。ハッシュがないまま重複検査を素通りさせない。
     for (const entry of uploadable) {
       verifyPdfBytes(new Uint8Array(await entry.file.arrayBuffer()));
@@ -830,6 +831,7 @@ saveButton.addEventListener("click", async () => {
       pdf: entry.file,
       fileHash: entry.hash,
       form: applicablePayrollForm({ ...entry.form, workDays: ceilWorkDays(entry.form.workDays) }),
+      semantics: createPayrollSemantics(entry.form,entry.parsed),
       pages: entry.pages,
       warningsAcknowledged: hasReviewIssue(entry) && isReviewed(entry),
       ...(hasReviewIssue(entry) ? { reviewedIssues: [

@@ -210,24 +210,53 @@ export class YearEndRepository {
   if(!file)throw new Error('年度ファイルが見つかりません。');
   return {profile,activeIndex,data:validateYear(file.value,id,year),file:file.file,yearFile:name};
  }
+ private async verifiedDisplayYear(a:Access,id:PersonId,year:number,profile:PersonProfile):Promise<YearData>{
+  const name=profile.yearFiles[String(year)];
+  if(!name)return emptyYear(id,year);
+  if(!isUuid(name))throw new Error('年度ファイルIDが不正です。');
+  const data=await this.readOnlyJson<YearData>(a,'year',
+   [...this.personPath(a,id),'years'],name+'.enc',MAX_YEAR,value=>validateYear(value,id,year));
+  if(!data)throw new Error('年度ファイルが見つかりません。');
+  return data;
+ }
+ /** Return the year immediately, with a deferred read-only name comparison.
+  * The deferred job reuses this exact validated active index/profile snapshot,
+  * but rechecks that the vault is unlocked with the same non-extractable key.
+  */
+ async yearWithOtherYearNames(id:PersonId,year:number):Promise<{data:YearData;otherYearNames:()=>Promise<string[]>}>{
+  asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
+  const perf=yearEndPerf('yearend-year');let success=false;
+  let a:Access,profile:PersonProfile,data:YearData;
+  try{
+   a=await perf.measure('yearend-access',()=>this.access());
+   profile=await perf.measure('yearend-profile',()=>this.readOnlyProfile(a,id));
+   data=await perf.measure('yearend-context',()=>this.verifiedDisplayYear(a,id,year,profile));
+   success=true;
+  }finally{perf.finish(success);}
+  return {data,otherYearNames:async()=>{
+   const vault=await cloudVault();
+   if(!vault.isUnlocked()||vault.sessionKey().key!==a.key)
+    throw new Error('保管庫がロックまたは変更されました。他年度の氏名照合を中止しました。');
+   return this.otherYearNamesFromProfile(a,id,year,profile);
+  }};
+ }
  async year(id:PersonId,year:number):Promise<YearData>{
   const perf=yearEndPerf('yearend-year');let success=false;
   try{
    asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
    const a=await perf.measure('yearend-access',()=>this.access());
    const profile=await perf.measure('yearend-profile',()=>this.readOnlyProfile(a,id));
-   const name=profile.yearFiles[String(year)];
-   if(!name){success=true;return emptyYear(id,year);}
-   if(!isUuid(name))throw new Error('年度ファイルIDが不正です。');
-   const data=await perf.measure('yearend-context',()=>this.readOnlyJson<YearData>(a,'year',
-    [...this.personPath(a,id),'years'],name+'.enc',MAX_YEAR,value=>validateYear(value,id,year)));
-   if(!data)throw new Error('年度ファイルが見つかりません。');
+   const data=await perf.measure('yearend-context',()=>this.verifiedDisplayYear(a,id,year,profile));
    success=true;return data;
   }finally{perf.finish(success);}
  }
  /** Read-only comparison across other years; names remain in encrypted annual files. */
  async otherYearDetectedNames(id:PersonId,exceptYear:number):Promise<string[]>{
-  const a=await this.access(),profile=await this.readOnlyProfile(a,id),names:string[]=[];
+  const a=await this.access(),profile=await this.readOnlyProfile(a,id);
+  return this.otherYearNamesFromProfile(a,id,exceptYear,profile);
+ }
+ private async otherYearNamesFromProfile(a:Access,id:PersonId,exceptYear:number,profile:PersonProfile):Promise<string[]>{
+  const names:string[]=[];
   const years=Object.entries(profile.yearFiles).filter(([y])=>Number(y)!==exceptYear);
   // A single decrypted year JSON per year; do not repeat index/profile network reads.
   for(let i=0;i<years.length;i+=2){
@@ -508,10 +537,18 @@ export class YearEndRepository {
    nextHash=await hash(bytes);
    if(nextHash===prior.fileHash)throw new Error('元のPDFと同じ内容です。金額等の訂正だけ保存してください。');
    if(context.data.documents.some(r=>r.id!==prior.id&&r.fileHash===nextHash))throw new Error('ほかの登録済み明細と同一のPDFです。');
-   for(const otherYear of Object.keys(context.profile.value.yearFiles)){
-    if(Number(otherYear)===year)continue;
-    if((await this.year(id,Number(otherYear))).documents.some(r=>r.fileHash===nextHash))
-     throw new Error('この従業員の別年度に同じPDFが登録されています。');
+   const foreign=Object.entries(context.profile.value.yearFiles).filter(([y])=>Number(y)!==year);
+   // yearContext() already verified the active index and current profile.
+   // Only the referenced annual JSON needs to be decrypted and validated; no
+   // extra employee-index/profile round trip per year. Limit concurrent GETs.
+   for(let offset=0;offset<foreign.length;offset+=3){
+    const found=await Promise.all(foreign.slice(offset,offset+3).map(async([y,fileId])=>{
+     const remote=await this.readJson<YearData>(a,'year',
+      [...this.personPath(a,id),'years'],fileId+'.enc',MAX_YEAR);
+     if(!remote)throw new Error('同じ従業員の別年度ファイルが見つかりません。');
+     return validateYear(remote.value,id,Number(y)).documents.some(r=>r.fileHash===nextHash);
+    }));
+    if(found.some(Boolean))throw new Error('この従業員の別年度に同じPDFが登録されています。');
    }
    nextId=randomDocumentId();nextName=base64Name(yearEndPdfName(draft.kind,draft.paymentDate,replacement.name));nextSize=bytes.byteLength;
   }

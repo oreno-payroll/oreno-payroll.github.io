@@ -4,7 +4,7 @@ import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
 import { capturePdfHandoffAuthorization } from './cloud/auth';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
-import { deleteRecord, getRecord, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
+import { deleteRecord, getOriginalForVerifiedEdit, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import {PayrollPartialSuccessError} from './storage/operationError';
 import {mutationEpoch} from './cloud/snapshot';
 import { amountOrMissing } from './storage/payrollValidation';
@@ -340,14 +340,13 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
       download.disabled = true;
       appStatus.loading('PDF原本を取得しています…');
       try {
-        const full = await getRecord(record.id);
-        if (!full || recordSignature(full) !== recordSignature(record)) {
-          throw new Error('この明細は別タブで更新されています。画面を再読み込みしてください。');
-        }
-        const url = URL.createObjectURL(full.pdf);
+        // Revalidate the complete annual inventory and the displayed signature
+        // both before and after fetching the hash-verified original PDF.
+        const pdf = await getOriginalForVerifiedEdit(record.id, recordSignature(record));
+        const url = URL.createObjectURL(pdf);
         const anchor = document.createElement('a');
         anchor.href = url;
-        anchor.download = safePdfFileName(full.fileName);
+        anchor.download = safePdfFileName(record.fileName);
         document.body.append(anchor);
         anchor.click();
         anchor.remove();

@@ -358,10 +358,12 @@ async function loadYear(){
  showYearPlaceholders();
  try{
   const id=selected,year=activeYear;
-  data=await repo.year(id,year);
+  const view=await repo.yearWithOtherYearNames(id,year);
+  data=view.data;
   renderYear();
-  // Compare detected PDF names across years without blocking the document list.
-  void repo.otherYearDetectedNames(id,year).then(names=>{
+  // Share the verified active-index/profile context, keeping name matching
+  // asynchronous so the document list appears without waiting for other years.
+  void view.otherYearNames().then(names=>{
    if(selected===id&&activeYear===year){otherYearNames=names;updateDrafts(true);}
   }).catch(()=>{if(selected===id&&activeYear===year)say('他年度のPDF氏名照合は完了していません。',true);});
   if(editSnapshot)restoreForecastInput(editSnapshot);

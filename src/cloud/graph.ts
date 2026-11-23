@@ -286,11 +286,21 @@ export class PayrollGraph {
     if(!/^[A-Za-z0-9_.-]{1,100}$/.test(name))throw new Error('ファイル名が不正です。');
     const pendingKey=JSON.stringify([parts,name,limit]);
     const running=this.encryptedReadPending.get(pendingKey);
-    if(running?.epoch===this.readCacheEpoch){const result=await running.promise;return result?{...result}:null;}
+    if(running?.epoch===this.readCacheEpoch){
+      const result=await running.promise;
+      if(this.readCacheEpoch!==running.epoch)throw new Error('読み込み中に保存操作が完了しました。再読み込みしてください。');
+      return result?{...result}:null;
+    }
     const operation=this.readEncryptedUnshared(parts,name,limit);
     const entry={epoch:this.readCacheEpoch,promise:operation};
     this.encryptedReadPending.set(pendingKey,entry);
-    try{const result=await operation;return result?{...result}:null;}
+    try{
+      const result=await operation;
+      // Also guard the final promise handoff, including a concurrent 404 and a
+      // completed read whose result was waiting for the caller's continuation.
+      if(this.readCacheEpoch!==entry.epoch)throw new Error('読み込み中に保存操作が完了しました。再読み込みしてください。');
+      return result?{...result}:null;
+    }
     finally{if(this.encryptedReadPending.get(pendingKey)===entry)this.encryptedReadPending.delete(pendingKey);}
   }
   private async readEncryptedUnshared(parts:string[],name:string,limit:number):Promise<RemoteFile|null> {
@@ -461,6 +471,7 @@ export class PayrollGraph {
     // createUploadSessionの途中中断で0バイトのプレースホルダーが残る事態を避ける。
     // 更新ではETag付きアップロードセッションを維持して競合を検知する。
     if (!prior && bytes.byteLength <= 4 * 1024 * 1024) {
+      try {
       const path = `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
       const response = await this.request(path,{
         method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes,
@@ -470,7 +481,18 @@ export class PayrollGraph {
         throw new Error('OneDriveへの新規保存後のサイズが一致しません。保存成功とみなせません。');
       progress?.(bytes.length,bytes.length);
       return;
+      } finally {
+        // A new-file PUT can also overlap a pending GET; the final boundary
+        // must invalidate even when the Graph reply is lost or malformed.
+        this.clearEncryptedReadCache();
+        this.onMutation();
+      }
     }
+    // An upload-session PUT goes directly to a signed URL, bypassing request().
+    // request() invalidates at session creation; the *completion* boundary must
+    // invalidate again so overlapping GETs cannot publish pre-upload ciphertext.
+    // Failure is equally ambiguous: Graph may have committed the final chunk.
+    try {
     const path = prior
       ? `/me/drive/items/${encodeURIComponent(prior.id)}/createUploadSession`
       : `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/createUploadSession`;
@@ -497,6 +519,13 @@ export class PayrollGraph {
         if(!item.id || item.size !== bytes.length)throw new Error('OneDriveの保存IDまたはサイズが一致しません。');
       }
       progress?.(end,bytes.length);
+    }
+    } finally {
+      // Both success and failure invalidate all encrypted bodies and pending GETs.
+      // Keep this after the final signed PUT (or its failure), never only after
+      // the createUploadSession POST. onMutation also drops navigation snapshots.
+      this.clearEncryptedReadCache();
+      this.onMutation();
     }
   }
 }

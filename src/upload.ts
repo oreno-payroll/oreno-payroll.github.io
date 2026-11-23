@@ -13,6 +13,7 @@ import { parsePayroll, type PdfTextCell, type PayrollParseResult } from "./pdf/p
 import { saveRecordsSkippingDuplicates, type SavedPayrollRecordInput } from "./storage/payrollStore";
 import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
 import {createPayrollSemantics} from './storage/payrollSemantics';
+import {emptyOptionalAmounts,prepareOptionalZeros,ZERO_OPTIONAL_AMOUNT_LABELS} from './storage/payrollZeroResolution';
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
 import { duplicateOwners, pdfFailureMessage, shortFileName } from "./pdf/uploadWorkflow";
@@ -93,6 +94,23 @@ const analysisIssuesList = $<HTMLUListElement>("analysis-issues-list");
 const analysisIssuesCount = $<HTMLElement>("analysis-issues-count");
 const saveButton = $<HTMLButtonElement>("save-all");
 const saveButtonLabel = $<HTMLSpanElement>("save-all-label");
+const zeroApproval = $<HTMLElement>("zero-approval");
+const zeroCheckbox = $<HTMLInputElement>("zero-missing-amounts");
+const zeroCount = $<HTMLElement>("zero-approval-count");
+const zeroList = $<HTMLUListElement>("zero-approval-list");
+let zeroConsentFingerprint: string | null = null;
+zeroCheckbox.checked=false; // Never restore a sensitive batch-wide approval from browser form history.
+window.addEventListener('pageshow',()=>{
+  zeroCheckbox.checked=false;zeroConsentFingerprint=null;updateSaveState();
+});
+function zeroCandidatesFingerprint(items: readonly Entry[]): string {
+  return JSON.stringify(items.map(entry=>[entry.id,entry.hash??'',entry.status,
+    FIELDS.map(field=>entry.form[field]),entry.parsed?.missingFields??[]]));
+}
+zeroCheckbox.addEventListener('change',()=>{
+  zeroConsentFingerprint=zeroCheckbox.checked?zeroCandidatesFingerprint(candidates()):null;
+  updateSaveState();
+});
 const saveStatus = $<HTMLElement>("save-status");
 const uploadGuide = $<HTMLParagraphElement>("upload-guide");
 const workspace = document.querySelector<HTMLElement>(".workspace")!;
@@ -754,6 +772,12 @@ function hasReviewIssue(entry: Entry): boolean {
 function formError(entry: Entry): string | null {
   return validatePayrollForm(entry.form).errors[0] ?? null;
 }
+/** A missing-to-zero opt-in is not permission to ignore NEW arithmetic warnings. */
+function zeroIntroducedWarnings(entry: Entry): string[] {
+  const before=new Set(validatePayrollForm(entry.form).warnings);
+  const prepared=prepareOptionalZeros(entry.form,{},true);
+  return validatePayrollForm(prepared.form).warnings.filter(warning=>!before.has(warning));
+}
 function updateSaveState(): void {
   const locked = saving || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
@@ -771,7 +795,27 @@ function updateSaveState(): void {
   validateButton.disabled = locked;
   // 確認の入口を右側のボタンに一本化する。状態は選択中PDFごとに保持。
   // ボタン名を切り替えず、確認済みは左側のステータスと直下のメッセージで示す。
-  saveButton.disabled = saving || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0;
+  // Consent is only valid for the exact current batch and field values. Changing
+  // any PDF/form/status after checking resets it, never silently extends consent.
+  const fingerprint=zeroCandidatesFingerprint(uploadable);
+  if(zeroCheckbox.checked&&zeroConsentFingerprint!==fingerprint){
+    zeroCheckbox.checked=false;zeroConsentFingerprint=null;
+  }
+  const zeroRows=uploadable.map(entry=>({entry,fields:emptyOptionalAmounts(entry.form)}))
+    .filter(row=>row.fields.length>0);
+  const blankCount=zeroRows.reduce((sum,row)=>sum+row.fields.length,0);
+  zeroApproval.hidden=blankCount===0||saving;
+  zeroCheckbox.disabled=saving||pending||Boolean(badPdf)||Boolean(invalidEntry)||unreviewed.length>0;
+  const zeroContradictions=zeroCheckbox.checked?uploadable.filter(entry=>zeroIntroducedWarnings(entry).length>0):[];
+  zeroCount.textContent=zeroContradictions.length
+    ? `${zeroContradictions.length}件で0円補完による検算不一致。該当欄を手動確認するかチェックを外してください。`
+    : `${zeroRows.length}件のPDF・${blankCount}項目。OFFなら従来どおり空欄で保存します。`;
+  zeroList.replaceChildren(...zeroRows.map(({entry,fields})=>{
+    const item=document.createElement('li');
+    item.textContent=`${entry.file.name}：${fields.map(field=>ZERO_OPTIONAL_AMOUNT_LABELS[field]).join('・')}`;
+    return item;
+  }));
+  saveButton.disabled = saving || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
   saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
   const isEmpty=entries.length===0;
   workspace.classList.toggle('is-empty',isEmpty);
@@ -790,6 +834,8 @@ function updateSaveState(): void {
     saveStatus.textContent = `「${invalidEntry.file.name}」：${formError(invalidEntry)}`;
   } else if (unreviewed.length) {
     saveStatus.textContent = `${unreviewed.length}件が未確認です。左の「要確認」を選び、右側の「入力内容をチェック」を押してください。`;
+  } else if (zeroContradictions.length) {
+    saveStatus.textContent = `未取得金額を0円にすると${zeroContradictions.length}件で検算不一致になります。確認して手動入力するか、チェックを外してください。`;
   } else {
     const duplicateCount = entries.length - uploadable.length;
     saveStatus.textContent = `${uploadable.length}件を保存できます。${duplicateCount ? `一覧内の同一PDF ${duplicateCount}件は対象外。` : ""}既存データとの重複はスキップします。`;
@@ -812,6 +858,9 @@ saveButton.addEventListener("click", async () => {
     notice("未確認の明細があります。右側の「入力内容をチェック」で確認してください。");
     return;
   }
+  // Capture the opt-in BEFORE disabling the controls. It is never inferred from
+  // a previously saved statement or from a rendered summary's zero policy.
+  const approveZero=zeroCheckbox.checked&&zeroConsentFingerprint===zeroCandidatesFingerprint(uploadable);
   saving = true;
   clearInlineError(saveStatus);
   updateSaveState();
@@ -825,12 +874,23 @@ saveButton.addEventListener("click", async () => {
     }
     // OneDriveの複数ファイル書込みは一括トランザクションではない。
     // 1件ずつ保存確認し、途中で失敗すれば件数と不完全保存の可能性を通知する。
-    const records: SavedPayrollRecordInput[] = uploadable.map(entry => ({
+    const approvedAt=new Date().toISOString();
+    const records: SavedPayrollRecordInput[] = uploadable.map(entry => {
+      if(approveZero&&zeroIntroducedWarnings(entry).length)
+        throw new Error('未取得金額を0円にすると検算不一致が生じます。元のPDFと金額を確認してください。');
+      const prepared=prepareOptionalZeros(
+        {...entry.form,workDays:ceilWorkDays(entry.form.workDays)},
+        {missingFields:entry.parsed?.missingFields,fields:entry.parsed?.fields,
+         fieldSources:entry.parsed?.fieldSources,automaticFields:entry.autoFields},
+        approveZero,approvedAt,
+      );
+      return {
       fileName: storedPdfName(entry.form.job, entry.form.kind, entry.form.paymentDate, entry.file.name),
       originalFileName: entry.file.name,
       pdf: entry.file,
       fileHash: entry.hash,
-      form: applicablePayrollForm({ ...entry.form, workDays: ceilWorkDays(entry.form.workDays) }),
+      form: prepared.form,
+      zeroResolution: prepared.zeroResolution,
       semantics: createPayrollSemantics(entry.form,entry.parsed),
       pages: entry.pages,
       warningsAcknowledged: hasReviewIssue(entry) && isReviewed(entry),
@@ -839,7 +899,8 @@ saveButton.addEventListener("click", async () => {
         ...(entry.parsed?.missingFields.map(m => `${m.label}: ${m.reason}`) ?? []),
         ...validatePayrollForm(entry.form).warnings,
       ], reviewedAt: new Date().toISOString() } : {}),
-    }));
+      };
+    });
     const result = await saveRecordsSkippingDuplicates(records, message => {
       showSaveProgress(message);
       saveButtonLabel.textContent = '保存中…';

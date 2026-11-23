@@ -1,6 +1,7 @@
 /** Payroll v2: 保存の正本はOneDriveの暗号化保管庫だけ。旧IndexedDBはmigration専用。 */
 import {payrollPeriodKey,validatePayrollForm} from './payrollValidation';
 import {isValidPayrollSemantics,type PayrollStatementSemantics} from './payrollSemantics';
+import {isValidPayrollZeroResolution,type PayrollZeroResolutionV1} from './payrollZeroResolution';
 import {cloudVault} from '../cloud/auth';
 import type {CloudRecord} from '../cloud/vault';
 import {PayrollPartialSuccessError} from './operationError';
@@ -11,6 +12,8 @@ export interface SavedPayrollRecordInput {
  form:Record<string,string>;pages:number;warningsAcknowledged:boolean;
  /** Optional for legacy statements; no automatic data migration on read. */
  semantics?:PayrollStatementSemantics;
+ /** Optional import-time distinction: PDF zero, missing value, explicit zero approval. */
+ zeroResolution?:PayrollZeroResolutionV1;
  reviewedIssues?:string[];reviewedAt?:string;
 }
 export interface SavedPayrollRecord extends SavedPayrollRecordInput {
@@ -29,7 +32,7 @@ export interface ReplacementConflict {
 export function recordSignature(record:SavedPayrollRecord|SavedPayrollSummary):string {
  const pdfSize='pdf' in record?record.pdf.size:record.pdfSize;
  const pdfType='pdf' in record?record.pdf.type:record.pdfType;
- return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form,record.semantics??null]);
+ return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form,record.semantics??null,record.zeroResolution??null]);
 }
 const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'fileHash'|'form'>):('same-pdf'|'same-period')[]=>{
  const result:('same-pdf'|'same-period')[]=[];
@@ -40,6 +43,8 @@ const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'file
 function assertValid(input:SavedPayrollRecordInput,legacy=false):void {
  if('personId' in input||'employeeId' in input||'yearEndAssist' in input)throw new Error('第三者の年末調整データは本人用Payrollに保存できません。');
  if(input.semantics!==undefined&&!isValidPayrollSemantics(input.semantics))throw new Error('保存した明細の解析バージョン情報が不正です。');
+ if(input.zeroResolution!==undefined&&!isValidPayrollZeroResolution(input.zeroResolution,input.form))
+  throw new Error('保存した明細の0円確認情報が不正です。');
  const {errors,warnings}=validatePayrollForm(input.form);
  if(errors.length)throw new Error(errors[0]);
  if(!legacy&&warnings.length&&!input.warningsAcknowledged)throw new Error('金額の検算警告が未確認です。');
@@ -52,6 +57,8 @@ function assertValidMetadata(input:SavedPayrollSummary):void {
  const {errors,warnings}=validatePayrollForm(input.form);
  if(errors.length)throw new Error(errors[0]);
  if(warnings.length&&!input.warningsAcknowledged)throw new Error('金額の検算警告が未確認です。');
+ if(input.zeroResolution!==undefined&&!isValidPayrollZeroResolution(input.zeroResolution,input.form))
+  throw new Error('保存した明細の0円確認情報が不正です。');
  if(!Number.isSafeInteger(input.pdfSize)||input.pdfSize<1||input.pdfSize>MAX_PDF_SIZE||
    typeof input.pdfType!=='string')throw new Error('PDF原本の保存済み情報が不正です。');
 }

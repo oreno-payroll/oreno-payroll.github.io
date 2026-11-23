@@ -205,10 +205,23 @@
             <a class="save-duplicates__home" href="../index.html">確認してホームへ戻る</a>
           </div>
         </div>
-        <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>
-          <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
-          <span id="save-all-label">すべて保存</span>
-        </button>
+        <div class="save-bar__actions">
+          <div class="zero-approval" id="zero-approval" hidden>
+            <label class="zero-approval__choice" for="zero-missing-amounts">
+              <input id="zero-missing-amounts" type="checkbox" autocomplete="off">
+              <span>未取得の金額を0円として登録</span>
+            </label>
+            <div id="zero-approval-count" class="zero-approval__count" aria-live="polite"></div>
+            <details class="zero-approval__details" id="zero-approval-details">
+              <summary>対象項目を確認</summary>
+              <ul id="zero-approval-list"></ul>
+            </details>
+          </div>
+          <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>
+            <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+            <span id="save-all-label">すべて保存</span>
+          </button>
+        </div>
       </div>
     </main>
   </div>

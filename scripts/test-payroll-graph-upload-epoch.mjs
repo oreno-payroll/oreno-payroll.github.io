@@ -20,7 +20,7 @@ const make=()=>{
   pauseDownload:null,pausePut:null,putStarted:null,downloadStarted:null};
  const http=async(url,init={})=>{
   const method=(init.method??'GET').toUpperCase();
-  if(url.startsWith('https://graph.microsoft.com')&&method==='GET'){
+  if(new URL(url).origin === 'https://graph.microsoft.com'&&method==='GET'){
    state.metadata++;
    const current={id:'file-id',eTag:state.etag,size:encoder.encode(state.text).length,
     '@microsoft.graph.downloadUrl':'https://storage.example.test/download'};
@@ -28,7 +28,7 @@ const make=()=>{
    if(conditional===state.etag)return new Response(null,{status:304});
    return Response.json(current);
   }
-  if(url.startsWith('https://graph.microsoft.com')&&method==='POST')
+  if(new URL(url).origin === 'https://graph.microsoft.com'&&method==='POST')
    return Response.json({uploadUrl:'https://storage.example.test/upload'});
   if(url==='https://storage.example.test/upload'&&method==='PUT'){
    state.putStarted?.resolve();
@@ -52,8 +52,28 @@ const make=()=>{
  const parts=['payroll','statements'],name='2026.enc',limit=10_000;
  const read=()=>graph.read(parts,name,limit);
  const write=()=>graph.write(parts,name,updated,{id:'file-id',etag:original},limit);
- return {state,graph,read,write};
+ return {state,graph,http,read,write};
 };
+{
+ // Exact origin matching prevents a misleading Graph-looking host from being
+ // accepted by the in-memory mock Graph endpoint (GET and POST paths).
+ const {state,http}=make();
+ await assert.rejects(
+  http('https://graph.microsoft.com.attacker.example/v1.0/me/drive',{method:'GET'}),
+  /unexpected mock HTTP call/,
+ );
+ // A misleading URL with a Graph-looking username is still on the attacker's host.
+ // Construct it through URL so the test source contains no email-shaped literal.
+ const misleadingUserinfoUrl=new URL('https://attacker.example/v1.0/me/drive');
+ misleadingUserinfoUrl.username='graph.microsoft.com';
+ assert.equal(misleadingUserinfoUrl.hostname,'attacker.example');
+ await assert.rejects(
+  http(misleadingUserinfoUrl.href,{method:'POST'}),
+  /unexpected mock HTTP call/,
+ );
+ assert.equal(state.metadata,0,'spoofed Graph origins must never serve fake metadata');
+ console.log('PASS: mock Graph HTTP rejects misleading hostnames for GET and POST');
+}
 {
  const {state,read,write}=make();
  assert.equal((await read()).text,original);

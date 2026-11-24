@@ -26,14 +26,14 @@ const sandbox={crypto:webcrypto,Blob,URL,encodeURIComponent,BroadcastChannel:Cha
 const handoff=runInNewContext(safePdf+'\n'+strip(read('src/pdf/yearEndHandoff.ts'))+'\n({openYearEndPdf,receiveYearEndPdf})',sandbox);
 const id=webcrypto.randomUUID(),pdf=new Blob(['%PDF-1.7\nSAMPLE'],{type:'application/pdf'});
 handoff.openYearEndPdf(id,async()=>({pdf,fileName:'架空従業員.pdf'}));
-const link=links.at(-1);assert.match(link.href,/view\/index\.html\?yearend=/);
+const link=links.at(-1);assert.match(link.href,/view\/index\.html#yearend=/);
 assert.equal(link.target,'_blank');assert.match(link.rel,/noopener/);
-const ticket=new URL(link.href,'https://example.test/year-end-assist/index.html').hash.slice('#handoff='.length);
+const ticket=new URLSearchParams(new URL(link.href,'https://example.test/year-end-assist/index.html').hash.slice(1)).get('handoff');
 const got=await handoff.receiveYearEndPdf(id,ticket);
 assert.equal(got.pdf,pdf);assert.equal(got.fileName,'架空従業員.pdf');
 let proceed;
 handoff.openYearEndPdf(id,()=>new Promise(resolve=>{proceed=()=>resolve({pdf,fileName:'private.pdf'});}));
-const next=new URL(links.at(-1).href,'https://example.test/year-end-assist/index.html').hash.slice('#handoff='.length);
+const next=new URLSearchParams(new URL(links.at(-1).href,'https://example.test/year-end-assist/index.html').hash.slice(1)).get('handoff');
 const pending=handoff.receiveYearEndPdf(id,next);
 for(let i=0;i<10&&!proceed;i++)await Promise.resolve();
 assert.equal(typeof proceed,'function');
@@ -45,21 +45,23 @@ const reader={src:'',hidden:true,title:'',removeAttribute(name){if(name==='src')
 const status={hidden:false,dataset:{},children:[],classList:{add(){}},setAttribute(){},removeAttribute(){},replaceChildren(...children){this.children=children;}};
 const createElement=()=>({textContent:'',hidden:false,setAttribute(){},addEventListener(){}});
 let remoteLock,revoked='';
-const location={href:`https://example.test/view/index.html?yearend=${id}#handoff=${ticket}`,search:`?yearend=${id}`,hash:`#handoff=${ticket}`};
+const location=new URL(`https://example.test/view/index.html?yearend=${id}#handoff=${ticket}`);
 const mock={Blob,URL:class extends URL{static createObjectURL(file){assert.equal(file.type,'application/pdf');assert.notEqual(file,pdf);return 'blob:private';}static revokeObjectURL(url){revoked=url;}},
  URLSearchParams,location,navigator:{serviceWorker:{getRegistration:async()=>null}},
- window:{addEventListener(){},history:{state:null,replaceState(){}},location},
+ window:{addEventListener(){},history:{state:null,replaceState(_state,_unused,url){location.href=url;}},location},
  document:{title:'',createElement,getElementById:key=>key==='pdf-status'?status:key==='pdf-reader'?reader:null},
  createTabLockCoordinator:callback=>{remoteLock=callback;return {check:()=>true,epoch:()=>''};},
  receiveYearEndPdf:async()=>({pdf,fileName:'架空従業員.pdf'}),
  getRecord:async()=>{throw new Error('personal data should not load');},
  console,setTimeout,clearTimeout};
-const app=strip(read('src/ui/appStatus.ts'))+'\n'+safePdf+'\n'+strip(read('src/view.ts'));
+const app=strip(read('src/ui/navigationParams.ts'))+'\n'+strip(read('src/ui/appStatus.ts'))+'\n'+safePdf+'\n'+strip(read('src/view.ts'));
 runInNewContext(app,mock,{filename:'year-end-view.ts'});
 for(let i=0;i<20&&!reader.src;i++)await new Promise(resolve=>setTimeout(resolve,5));
 assert.equal(reader.src,'blob:private');
 assert.equal(reader.hidden,false);
-assert.equal(mock.document.title,'架空従業員.pdf');
+assert.equal(mock.document.title,'Payroll | PDF原本');
+assert.equal(reader.title,'PDF原本');
+assert.equal(location.search,'');assert.equal(location.hash,`#yearend=${id}`);
 remoteLock();
 assert.equal(reader.hidden,true);
 assert.equal(reader.src,'');

@@ -34,7 +34,7 @@ export function openYearEndPdf(id:string,load:()=>Promise<HandoffPdf>):void{
   })();
  };
  const link=document.createElement('a');
- link.href=`../view/index.html?yearend=${encodeURIComponent(id)}#handoff=${encodeURIComponent(ticket)}`;
+ link.href=`../view/index.html#yearend=${encodeURIComponent(id)}&handoff=${encodeURIComponent(ticket)}`;
  link.target='_blank';link.rel='noopener noreferrer';
  document.body.append(link);link.click();link.remove();
 }

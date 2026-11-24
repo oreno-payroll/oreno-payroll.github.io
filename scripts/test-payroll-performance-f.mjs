@@ -113,6 +113,9 @@ console.log('PASS F: wrong account and locked vault cannot reuse old decrypted s
 const source=read('src/storage/payrollStore.ts');
 assert.match(source,/async function cloudSummaries\(\):Promise<CloudRecord\[]> \{\s*const vault=await cloudVault\(\);return vault\.refresh\(\);/);
 assert.match(source,/await vault\.refresh\(\{forceFresh:true\}\)/);
-assert.equal(source.match(/vault\.refresh\(freshReadOnlyOptions\)/g)?.length,3);
+// Two additional live checks are required for the direct PDF viewer.
+const direct=source.slice(source.indexOf('export async function getRecord('),source.indexOf('export async function getOriginalForBatchExport('));
+assert.equal(direct.match(/vault\.refresh\(freshReadOnlyOptions\)/g)?.length,2);
+assert.equal(source.match(/vault\.refresh\(freshReadOnlyOptions\)/g)?.length,5);
 assert.doesNotMatch(source.slice(source.indexOf('export async function saveRecordsSkippingDuplicates'),source.indexOf('export async function updateRecordMetadata')),/freshReadOnlyOptions/);
 console.log('PASS F: mutation paths remain separate, and no shared persistent caches, tokens or cloud writes were added');

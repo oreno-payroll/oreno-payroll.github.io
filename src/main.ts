@@ -4,9 +4,10 @@ import { createAppStatus, type AppStatusKind } from './ui/appStatus';
 import {dashboardFreshnessLabel} from './ui/operationFeedback';
 import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
+import {readNavigationParams,replaceNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
 import { capturePdfHandoffAuthorization,captureOperationAuthorization } from './cloud/auth';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
-import { deleteRecords, getOriginalForVerifiedEdit, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
+import { deleteRecords, getOriginalForVerifiedEdit, getOriginalForBatchExport, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import {PayrollPartialSuccessError} from './storage/operationError';
 import {incompleteDeleteIncomeNotice,incompleteDeleteOriginalNotice} from './ui/deleteOutcome';
 import {PendingDeletion} from './ui/pendingDeletion';
@@ -49,7 +50,9 @@ const registrationGrid = required<HTMLElement>('#registration-grid');
 const registrationPeriod = required<HTMLElement>('#registration-period');
 const yen = (amount: number): string => `${amount.toLocaleString('ja-JP')}円`;
 // 編集ページと相互に引き継ぐ。旧リンク ?fy=2025 にも後方互換性を残す。
-const searchParams = new URLSearchParams(window.location.search);
+const periodKeys=['mode','year','fy'] as const;
+const searchParams = readNavigationParams(window.location,periodKeys);
+migrateLegacyNavigation(searchParams,periodKeys);
 let periodMode: PeriodMode = searchParams.get('mode') === 'calendar' ? 'calendar' : 'fiscal';
 function selectedYearFromUrl(): number | null {
   const raw = searchParams.get('year') ?? searchParams.get('fy');
@@ -66,11 +69,7 @@ function currentPeriodYear(): number {
   return periodMode === 'fiscal' ? currentFiscalYear() : new Date().getFullYear();
 }
 function persistPeriodSelection(): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set('mode', periodMode);
-  url.searchParams.set('year', yearSelect.value);
-  url.searchParams.delete('fy');
-  window.history.replaceState(window.history.state, '', url);
+  replaceNavigationParams(new URLSearchParams({mode:periodMode,year:yearSelect.value}),periodKeys);
 }
 function editPeriodQuery(): string {
   return `mode=${encodeURIComponent(periodMode)}&year=${encodeURIComponent(yearSelect.value)}`;
@@ -179,7 +178,7 @@ sideZipButton.addEventListener('click', async () => {
         if(index>=side.length)return;
         const item=side[index];
         try{
-          const pdf=await getOriginalForCurrentView(item.id,recordSignature(item));
+          const pdf=await getOriginalForBatchExport(item.id,recordSignature(item));
           originals[index]={...item,pdf};
           completed++;
           appStatus.loading(`PDF原本を取得中 ${completed}/${side.length}件`);
@@ -382,12 +381,12 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
     link.title = record.fileName;
     // 元タブの認証済み保管庫で原本を取得し、閲覧タブへPDF Blobだけ渡す。
     // 右クリックでURLを開いた場合などは、従来の閲覧ページへフォールバック。
-    link.href = `./view/index.html?id=${encodeURIComponent(String(record.id))}`;
+    link.href = `./view/index.html#id=${encodeURIComponent(String(record.id))}`;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     const handoffPdf = () => preparePdfHandoff(link, record.id, async () => ({
       fileName: record.fileName,
-      pdf: await getOriginalForCurrentView(record.id, recordSignature(record)),
+      pdf: await getOriginalForVerifiedEdit(record.id, recordSignature(record)),
     }), capturePdfHandoffAuthorization());
     link.addEventListener('click', event => { if (!event.defaultPrevented) handoffPdf(); });
     link.addEventListener('auxclick', event => { if (event.button === 1 && !event.defaultPrevented) handoffPdf(); });
@@ -440,7 +439,7 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
     // A verified source record supplies an untrusted *priority* hint for the
     // edit page. It is never used as an authority for writes or PDF locations.
     const hintedYear=fiscalYearOfTargetMonth(record.form.targetMonth);
-    edit.href = `./edit/index.html?id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}${hintedYear!==null?`&hintYear=${encodeURIComponent(String(hintedYear))}`:''}`;
+    edit.href = `./edit/index.html#id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}${hintedYear!==null?`&hintYear=${encodeURIComponent(String(hintedYear))}`:''}`;
     edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg>';
     edit.setAttribute('aria-label', `${record.fileName} の保存情報を編集`);
     edit.title = '保存情報を確認・編集';

@@ -50,6 +50,7 @@ const tests = [
   ['scripts/test-viewer-flow.mjs', true],
   ['scripts/test-pdf-oneclick.mjs', true],
   ['scripts/test-pdf-handoff-lock.mjs', true],
+  ['scripts/test-payroll-view-privacy.mjs', true],
   ['scripts/test-year-end-assist.mjs', true],
   ['scripts/test-year-end-audit-remediation.mjs', true],
   ['scripts/test-year-end-memo-security.mjs', true],

@@ -38,7 +38,7 @@ const common={crypto:webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Arra
 };
 const {PayrollVault}=runInNewContext(strip(src('src/cloud/vault.ts'))+'\n({PayrollVault})',common);
 let current;
-const api=runInNewContext(strip(src('src/storage/payrollStore.ts'))+'\n({getRecordSummary,getOriginalForVerifiedEdit,recordSignature})',{
+const api=runInNewContext(strip(src('src/storage/payrollStore.ts'))+'\n({getRecordSummary,getOriginalForVerifiedEdit,getRecord,recordSignature})',{
  ...common,cloudVault:async()=>current,PayrollPartialSuccessError:class extends Error{},validatePayrollForm:()=>({errors:[],warnings:[]}),
  isValidPayrollSemantics:()=>true,MAX_PDF_SIZE:50e6,toPublicIncomeRecord:()=>{},
 });
@@ -53,6 +53,9 @@ assert.equal(calls.list.length,1);assert.equal(calls.read.filter(p=>p.includes('
 reset();const b=await api.getOriginalForVerifiedEdit(2026,api.recordSignature(record));
 assert.equal(b.size,pdf.length);assert.equal(calls.list.length,2);assert.equal(calls.read.filter(p=>p.includes('statements')).length,0);
 console.log('PASS: fresh index/list before and after PDF; warm edit zero year downloads');
+reset();const direct=await api.getRecord(2026);assert.equal(direct.pdf.size,pdf.length);
+assert.equal(calls.list.length,2);assert.equal(calls.read.filter(p=>p.includes('statements')).length,0);
+console.log('PASS: warm direct viewer performs two fresh inventories with zero year body downloads');
 // Move same ID to another year with higher revision.
 put('payroll/statements/2025.enc',doc([make(2025,'2025'),make(2026,'2025',2)]));
 reset();const relocated=await api.getRecordSummary(2026,'2026');assert.equal(relocated.form.targetMonth,'2025-05');

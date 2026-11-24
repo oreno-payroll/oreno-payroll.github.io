@@ -185,10 +185,44 @@ test('year-end viewer rejects an HTML Blob handed off as a PDF', async ({page}) 
     fileName:'synthetic-only.pdf'});
   };
  },{ticket});
- await page.goto('/view/index.html?yearend='+id+'#handoff='+ticket);
+ await page.goto('/view/index.html#yearend='+id+'&handoff='+ticket);
+ await expect(page).toHaveURL(new RegExp('#yearend='+id+'$'));
+ await expect(page).toHaveTitle('Payroll | PDF原本');
  await expect(page.locator('#pdf-status')).toContainText('PDF以外のMIME形式は閲覧できません。', {timeout:15000});
  await expect(page.locator('#pdf-reader')).toBeHidden();
  await expect(page.locator('#pdf-reader')).not.toHaveAttribute('src',/blob:/);
+});
+
+test('personal PDF handoff keeps fragment ID, strips ticket and never exposes original filename in title', async ({page}) => {
+ const id=42,ticket='33333333-3333-4333-8333-333333333333';
+ await page.addInitScript(({id,ticket})=>{
+  const channel=new BroadcastChannel('payroll-pdf-handoff-v1-'+ticket);
+  window.__syntheticPdfHandoffChannel=channel;
+  channel.onmessage=event=>{
+   if(event.data?.action==='ready'&&event.data.id===id)channel.postMessage({action:'pdf',id,ticket,
+    pdf:new Blob(['%PDF-1.7\nsynthetic-only\n%%EOF'],{type:'application/pdf'}),fileName:'synthetic-private-name.pdf'});
+  };
+ },{id,ticket});
+ const navigations=[];
+ page.on('request',request=>{const url=new URL(request.url());if(request.isNavigationRequest()&&url.pathname==='/view/index.html')navigations.push(url.search);});
+ await page.goto('/view/index.html#id='+id+'&handoff='+ticket);
+ await expect(page.locator('#pdf-reader')).toHaveAttribute('src',/^blob:/);
+ await expect(page.locator('#pdf-reader')).toHaveAttribute('title','PDF原本');
+ await expect(page).toHaveTitle('Payroll | PDF原本');
+ await expect(page).toHaveURL(/\/view\/index\.html#id=42$/);
+ expect(navigations).toEqual(['']);
+});
+
+test('legacy viewer route migrates without accepting a query ticket, malformed fragments fail closed', async ({page}) => {
+ await page.goto('/view/index.html?id=0&handoff=ignored');
+ await expect(page).toHaveURL(/\/view\/index\.html#id=0$/);
+ await expect(page.locator('#pdf-status')).toContainText('PDF原本のIDが不正');
+ await expect(page.locator('#pdf-reader')).toBeHidden();
+ // Force a new document so this test exercises initialization rather than hashchange.
+ await page.goto('/view/index.html?legacy=1#id=42&id=43');
+ await expect(page.locator('#pdf-status')).toContainText('PDF原本のIDが不正');
+ await expect(page.locator('#pdf-reader')).toBeHidden();
+ await expect(page).toHaveTitle('Payroll | PDF原本');
 });
 
 // Responsive layout regression: no actual PDF is read and no OneDrive calls are made.

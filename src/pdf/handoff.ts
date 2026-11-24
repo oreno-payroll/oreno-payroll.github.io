@@ -23,7 +23,9 @@ export function preparePdfHandoff(link:HTMLAnchorElement,id:number,load:()=>Prom
  try {channel=new BroadcastChannel(PREFIX+ticket);}catch{return;}
  const original=link.href;
  const target=new URL(original);
- target.hash=`handoff=${ticket}`;
+ const params=new URLSearchParams(target.hash.slice(1));
+ params.set('handoff',ticket);
+ target.hash=params.toString();
  link.href=target.href;
  // The browser follows the updated href after the click listener; restore the
  // stable direct URL in a later task (also keeps the context-menu fallback).

@@ -28,7 +28,7 @@ for(const [name,bad] of [
  ['no pull-request trigger',workflow.replace('  pull_request:\n    branches: [main]\n','')],
  ['security job skipped',workflow.replace('    name: security','    name: security\n    if: false')],
  ['security checks renamed',workflow.replace('    name: security','    name: fake-security')],
- ['deploy detached from required security',workflow.replace('    needs: security','    needs: ignored')],
+ ['deploy detached from required security',workflow.replace('    needs: [security, private_audit]','    needs: ignored')],
  ['PR checkout to unmerged head',workflow.replace('        run: node scripts/audit-pr-target.mjs','        run: echo unmerged')],
  ['PR paths-ignore filters',workflow.replace('  pull_request:\n    branches: [main]','  pull_request:\n    branches: [main]\n    paths-ignore: ["**/*.md"]')],
  ['gitleaks archive bypass',workflow.replace('          tar -xzf "$archive" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks',

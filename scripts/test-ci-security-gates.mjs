@@ -7,7 +7,7 @@ const privacy=readFileSync(new URL('./audit-private-data.mjs',import.meta.url),'
 assert.deepEqual(auditWorkflow(workflow),[],'CI command/step structure must be verifiably safe');
 assert.match(workflow,/^  pull_request:\n    branches: \[main\]$/m,'PRs must run security before merging');
 assert.match(workflow,/^  security:\n    name: security\n    runs-on: ubuntu-latest$/m,'required check context is security');
-assert.match(workflow,/^  deploy:\n    needs: security$/m,'Pages must depend on successful security job');
+assert.match(workflow,/^  deploy:\n    needs: \[security, private_audit\]$/m,'Pages must depend on successful security job');
 assert.match(workflow,/node scripts\/audit-pr-target\.mjs/,'PR merge is checked, not just the branch tip');
 assert.doesNotMatch(workflow,/pull_request_target:/,'untrusted PRs must never use privileged pull_request_target');
 
@@ -19,6 +19,10 @@ const actionRefs=[...workflow.matchAll(/^[ \t]*uses:[ \t]*([^\s#]+)/gm)].map(mat
 const approvedActions=[
   "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
   "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+  "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+  "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+  "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+  "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
   "actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b",
   "actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa",
   "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",

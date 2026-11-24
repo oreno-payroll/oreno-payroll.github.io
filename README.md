@@ -157,13 +157,11 @@ python3 -m http.server 5000 --directory dist
 Gitleaksを導入後、`bash scripts/install-git-hooks.sh`を一度実行します。Gitの`core.hooksPath`を
 `.githooks`へ設定し、コミット前は**実際のステージング内容**を、push前はGit履歴、依存、テスト、ビルド成果物を検査します。エラー時はコミット・pushを中断します。 `git -c core.hooksPath=...` や `--no-verify` 等でローカルフックは迂回可能なので、GitHub側でもmainのルールセットによる**直接push制限と必須ステータスチェック**を設定してください。
 
-GitHub Actionsには同じ辞書を公開ファイルとして配置せず、リポジトリのActions Secret `PAYROLL_PRIVATE_TERMS_B64` としてBase64で登録します。Macで `gh` が使える場合は、次のように秘密の値を表示せず登録できます。
+GitHub Actionsの非公開辞書はリポジトリSecretに置かず、**mainのみに制限したEnvironment `payroll-private-audit`** のSecret `PAYROLL_PRIVATE_TERMS_B64` として登録します。旧リポジトリSecretは削除してください。Environmentのデプロイメントブランチは選択制、branch `main` 1件のみ、タグやPRのマージ参照を許可しません。
 
-```bash
-base64 < "$HOME/.config/payroll/private-terms.txt" | tr -d '\n' | gh secret set PAYROLL_PRIVATE_TERMS_B64 --repo oreno-payroll/oreno-payroll.github.io
-```
+同EnvironmentのSecret `PAYROLL_AUDIT_ARTIFACT_KEY_B64` とリポジトリ変数 `PAYROLL_AUDIT_CERT_B64` は、専用のRSA鍵・証明書のBase64です。秘密鍵はGit外に保持し、公開証明書のみビルドジョブに渡します。中間成果物はOpenSSL CMS（AES-256-GCM、RSA-OAEP/SHA-256）で暗号化します。非公開辞書・鍵・証明書の未設定、不正、成果物の不一致、監査失敗時はデプロイしません。鍵と証明書の更新は同時に行い、ローカルの秘密鍵はアクセス制限した場所に保管してください。ローカルの合成回帰テストにはPython 3とOpenSSL 3が必要です（MacではHomebrewのopenssl@3を利用できます）。
 
-GitHubウェブ画面から設定する場合は Repository Settings → Secrets and variables → Actions へ。**このSecretが未設定・空・不正ならCIは失敗し、デプロイしません。** 週1回の定期CI（UTC月曜00:19、日本時間月曜09:19）はnpm依存・秘密情報・全テストを再検査し、Pagesへの再デプロイは行いません。
+PRのビルド・テストには辞書を渡しません。公開リポジトリへのpush前の個別辞書監査はローカルフックで引き続き必須です。mainにマージされたコードを信頼する運用の下、独立したGitHub-hosted runnerの `private-audit` ジョブでmainのGit履歴と、暗号化して受け渡した同一成果物をデータとして検査します。依存パッケージの導入・再ビルド・キャッシュ復元・成果物の実行は行いません。平文の中間成果物は公開Actions artifactに置きません。週1回の定期CI（UTC月曜00:19、日本時間月曜09:19）は非公開辞書も含めて検査し、Pagesへの再デプロイは行いません。
 
 `scripts/audit-dist.mjs` は `dist/` の全ファイルを公開ソースとnpmリソースからの厳密な許可リストに照合し、意図しないファイル、改変されたコピー、CSP欠落、生成JSの再ビルド不一致、既知形式の秘密情報と個別禁止語句を検出します。専用検査 `scripts/audit-ci-workflow.mjs` は、レビュー済みのワークフロー構造と実行ステップ、SHA固定、検査順序を確認します。
 
@@ -176,9 +174,9 @@ Gitフック・パターン検査・Gitleaks・辞書でも任意の個人情報
 - **普段の開発では`main`を直接変更しません。** `git switch main && git pull --ff-only` で更新後、`git switch -c feat/変更名` で作業します。コミット・`git push -u origin feat/変更名` は引き続きローカルフックを通し、`gh pr create --base main --fill` でPRを開きます。
 - `.github/workflows/deploy.yml`の`security`ジョブは、`pull_request`・`main`への`push`・手動実行・週次監査で常に実行します。PR時はGitHub生成の**mainとの仮マージコミット**を検査し、秘密情報・過去履歴・依存関係・ビルド・`dist/`・全回帰テストをPASSさせます。PRからGitHub Pagesのアップロードやデプロイは行いません。
 - `security`が失敗・未実施ならマージさせないよう、GitHub Settings → Rules → Rulesets → `protect main branch` で **Require a pull request before merging（承認0件）** と **Require status checks to pass（`security`、GitHub Actions発行元、Require branches to be up to date）** を有効化します。バイパス許可者は追加しません。**最初のPRの検証が済んでからルールを有効化**し、設定後はGitHubの画面から直接push拒否も確認します。
-- デプロイは`security`成功を必要とする別の`deploy`ジョブで行います。検査ジョブが生成した**同じ`dist/`アーティファクト**だけをPagesに配信し、デプロイジョブでは再ビルドしません。週次監査とPRでは公開しません。
+- デプロイは`security`と`private-audit`の両方の成功を必要とする別の`deploy`ジョブで行います。検査済みの同じ`dist/`を暗号化中間成果物として受け渡し、個別辞書の検査後にだけPagesアーティファクトを作成します。デプロイジョブでは再ビルドしません。週次監査とPRでは公開しません。
 - ワークフロー全文の監査済みSHA-256を`scripts/audit-ci-workflow.mjs`に固定しています。CIの正当な変更でも明示的なレビューとハッシュの更新が必要です。`scripts/audit-pr-target.mjs`はPR仮マージの両親コミットを確認し、検査対象の一時Git参照を作ってGit履歴の検査漏れを防ぎます（公開リポジトリの履歴は書き換えません）。
-- Actions Secret `PAYROLL_PRIVATE_TERMS_B64`は必須。**フォークからのPRにはGitHubがこのSecretを渡さないため、検査は安全側に失敗**します。外部PRを受け付ける場合はSecretsを渡さず成立する検査体系を別途設計してください。`pull_request_target`は利用しません。
+- `pull_request_target`は利用しません。PRはSecretなしで通常の必須CIを実行し、mainでの秘密辞書検査を別途必須にします。監査コード・CI定義・環境ポリシーの変更はマージ前に必ず別途確認してください。履歴検査は到達可能な全コミットのメッセージと全パス、テキストblob、特殊ファイル・不許可形式を検査します。許可済みアイコンは既知blobに限定します。
 - GitHubの管理者にはルールセットを変更する権限があるため、悪意ある管理者まで技術的に完全封鎖する構成ではありません。これは個人開発における誤操作や検査抜けを防止する仕組みです。
 
 ### セキュリティ検査と制限

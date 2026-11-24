@@ -12,7 +12,7 @@ if(staged&&working)throw new Error('ステージ済みと作業ファイルは�
 const git=a=>execFileSync('git',a,{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024});
 const splitZ=s=>s.split('\0').filter(Boolean);
 const privateFile=process.env.PAYROLL_PRIVATE_TERMS_FILE||path.join(os.homedir(),'.config/payroll/private-terms.txt');
-// CI supplies a repository secret, local hooks use a private file outside Git.
+// The main-only audit environment supplies a secret; local hooks use a file outside Git.
 // Never log dictionary entries. A missing dictionary fails closed when required.
 const encoded=process.env.PAYROLL_PRIVATE_TERMS_B64;
 let dictionary='';
@@ -38,11 +38,13 @@ const patterns=[
 let files=staged?splitZ(git(['diff','--cached','--name-only','--diff-filter=ACMR','-z'])):working?[...new Set([...splitZ(git(['diff','--name-only','--diff-filter=ACMR','-z'])),...splitZ(git(['ls-files','--others','--exclude-standard','-z']))])]:splitZ(git(['ls-files','-z']));
 let scanned=0;
 for(const f of files){
- if(!/\.(?:ts|tsx|mjs|js|json|md|html|css|yml|yaml|xml|txt|sh|py)$/i.test(f)||f.startsWith('public/vendor/'))continue;
- let body;try{body=staged?git(['show',`:${f}`]):readFileSync(path.join(root,f),'utf8');}catch{problems.push(`ファイルの取得不可：${f}`);continue;}
+ const privatePath=privateTerms.some(term=>f.toLocaleLowerCase('ja').includes(term.toLocaleLowerCase('ja')));
+ if(privatePath)problems.push('公開予定パスに個別禁止語句が存在（値・パス非表示）');
+ if((!/\.(?:ts|tsx|mjs|cjs|js|json|md|html|css|yml|yaml|xml|txt|sh|py)$/i.test(f)&&!['.gitignore','.gitleaksignore','.githooks/pre-commit','.githooks/pre-push'].includes(f))||f.startsWith('public/vendor/'))continue;
+ let body;try{body=staged?git(['show',`:${f}`]):readFileSync(path.join(root,f),'utf8');}catch{problems.push('ファイルの取得不可（パス非表示）');continue;}
  scanned++;
- for(const [label,re] of patterns)if(re.test(body))problems.push(`${label}：${f}（値は非表示）`);
- for(const term of privateTerms)if(body.toLocaleLowerCase('ja').includes(term.toLocaleLowerCase('ja')))problems.push(`個別登録した非公開語句に一致：${f}（値は非表示）`);
+ for(const [label,re] of patterns)if(re.test(body))problems.push(`${label}（値・パス非表示）`);
+ if(privateTerms.some(term=>body.toLocaleLowerCase('ja').includes(term.toLocaleLowerCase('ja'))))problems.push('個別登録した非公開語句に一致（値・パス非表示）');
 }
 const isPublicAuthor=(name,email)=>{
  const handle=/^[a-z0-9][a-z0-9_.-]{1,39}$/i;
@@ -65,10 +67,10 @@ if(!flags.has('--no-history')){
  for(const sha of flagged)problems.push(`Git履歴の作者情報を要確認：${sha}（氏名・メール非表示）`);
  // A removed file remains reachable from prior commits, so check its content.
  // No blanket exception is made for the known root commit's file contents.
- if(privateTerms.length){
+ {
   try{
     const result=scanGitHistoryTerms(root,privateTerms);
-    console.log(`[Git履歴の禁止語句監査] テキストblob ${result.scanned}件を検査しました。`);
+    console.log(`[Git履歴の禁止語句監査] テキストblob ${result.scanned}件、パス ${result.paths}件、コミット ${result.commits}件を検査しました。`);
     problems.push(...result.findings);
   }catch(error){
     problems.push('Git履歴の過去ファイルを検査できませんでした（fail closed）。');

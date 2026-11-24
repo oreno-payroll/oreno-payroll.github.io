@@ -4,12 +4,12 @@
  * 現在月より前の未登録支給月には見込みを遡及加算しない。
  * 保存レコードの追加・更新は一切行わない。
  */
-import { monthIndex,monthStringFromIndex } from './payrollCalendar';
-import {activeEmployerSalaries} from './activeEmployer.ts';
+import { monthIndex,monthStringFromIndex } from './payrollCalendar.ts';
+import {forecastEmployerScope,type ForecastEmployerSetting} from './activeEmployer.ts';
 import {
   estimateFromSamples, estimateMainBonus,
   type AnnualForecast, type ForecastJob, type ForecastSource, type JobForecast,
-} from './annualForecast';
+} from './annualForecast.ts';
 
 const PAYMENT_DATE = /^(\d{4})-(0[1-9]|1[0-2])-([0-3]\d)$/;
 
@@ -25,7 +25,7 @@ export interface CalendarForecast extends Omit<AnnualForecast, 'fiscalYear'> {
 
 
 export function calculateCalendarForecast(
-  records: readonly ForecastSource[], selectedYear: number, today: Date, includeBonus = true,
+  records: readonly ForecastSource[], selectedYear: number, today: Date, includeBonus = true, directory:readonly ForecastEmployerSetting[] = [],
 ): CalendarForecast {
   const applicable = selectedYear === today.getFullYear();
   const start = selectedYear * 12;
@@ -36,8 +36,9 @@ export function calculateCalendarForecast(
 
   for (const job of ['main', 'side'] as const) {
     const allSalaries = records.filter(({ form }) => form.job === job && form.kind === 'salary');
-    const salaries=activeEmployerSalaries(allSalaries,todayIso);
-    const actualPaidMonths = new Set(allSalaries.flatMap(({ form }) => {
+    const scope=forecastEmployerScope(allSalaries,job,todayIso,directory);
+    const salaries=scope.samples;
+    const actualPaidMonths = new Set(scope.registered.flatMap(({ form }) => {
       const index = monthIndex(form.paymentDate?.slice(0, 7));
       return calendarYearOfPaymentDate(form.paymentDate) === selectedYear && index !== null ? [index] : [];
     }));
@@ -70,18 +71,20 @@ export function calculateCalendarForecast(
     const estimates = applicable && samples.length
       ? pendingMonths.map(month => estimateFromSamples(job, month, samples)) : [];
     const reason = !applicable ? '現在進行中の暦年以外は予測しません。'
+      : scope.inactive ? '現在の勤務先が未設定のため、見込みを計算しません。'
+      : scope.current&&!samples.length ? '現在の勤務先の直近6か月の給与実績がなく、見込みを計算できません。'
       : !pendingMonths.length ? '12月までの未登録支給月はありません。'
       : !samples.length ? '直近6か月の支給済み給与がなく、見込みを計算できません。'
       : undefined;
 
-    const actualBonusMonths = new Set(records.filter(({ form }) => form.job === 'main' && form.kind === 'bonus')
+    const actualBonusMonths = new Set(records.filter(r => r.form.job === 'main' && r.form.kind === 'bonus' && (!scope.current||r.employerId===scope.current.id||r.employerId===undefined))
       .flatMap(({ form }) => calendarYearOfPaymentDate(form.paymentDate) === selectedYear
         ? [form.paymentDate.slice(0, 7)] : []));
     const bonusCandidates = [`${selectedYear}-02`, `${selectedYear}-08`];
-    // 年内の未登録賞与は、通常給与の最終支給月より前でも補完する。
-    // 例: 10月給与まで登録されていて8月賞与が未登録なら、8月賞与は実績ではなく見込みとして加算。
-    const pendingBonusMonths = job === 'main' && applicable && includeBonus
-      ? bonusCandidates.filter(month => !actualBonusMonths.has(month)) : [];
+    // 旧方式では過去の未登録賞与も補完する。現在の勤務先を明示した場合は、
+    // いつ転職したかを推測せず、当月以降のみ見込む。
+    const pendingBonusMonths = job === 'main' && applicable && includeBonus && !scope.inactive
+      ? bonusCandidates.filter(month => !actualBonusMonths.has(month)&&(!scope.current||month>=todayIso.slice(0,7))) : [];
     // 賞与だけは通常月の直近6か月制限をかけず、最後の登録済み通常給与1件を参照。
     const latestBonusSalary = job === 'main' ? salaries
       .filter(({ form }) => form.paymentDate <= todayIso)
@@ -95,6 +98,7 @@ export function calculateCalendarForecast(
     const bonusReason = job === 'main' && pendingBonusMonths.length && !bonusEstimates.length
       ? '本業賞与の参考になる通常給与の内訳が不足しているため、見込み賞与を算出できません。' : undefined;
     jobs[job] = { job, sampleMonths, pendingMonths, estimates, bonusEstimates, pendingBonusMonths,
+      ...(scope.current ? {employerName:scope.current.name} : {}),
       ...(bonusSampleMonth ? { bonusSampleMonth } : {}),
       ...(reason ? { reason } : {}), ...(bonusReason ? { bonusReason } : {}) };
   }

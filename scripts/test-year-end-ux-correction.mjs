@@ -11,10 +11,11 @@ const start=html.indexOf('<details class="card yea-upload-panel yea-accordion" i
 const closing=html.indexOf('</details>',start);
 assert.ok(start>0&&closing>start);
 const body=html.slice(start,closing);
-assert.match(body,/<summary class="yea-upload-summary">/);
+assert.match(body,/<summary class="yea-upload-summary accordion-summary">/);
 for(const id of ['yea-pdf-dropzone','yea-drafts','yea-review-form','yea-save-all'])
   assert.ok(body.includes(`id="${id}"`), `${id} must collapse along with the whole editor`);
 assert.equal((html.match(/<details\b/g)||[]).length, 3, 'PDF editor, taxable breakdown, and income forecast accordions');
+assert.match(html,/<dialog id="yea-create-dialog"/);
 assert.match(script,/uploadAccordion\.open=data\.documents\.length===0/);
 assert.match(script,/if\(result\.data\.documents\.length\)uploadAccordion\.open=excluded\.length>0/,'show excluded-file details after successful mixed batch');
 assert.match(script,/count\.textContent=pendingCount\?`未保存/,'unsaved state visible when closed');

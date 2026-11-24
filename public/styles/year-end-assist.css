@@ -1,27 +1,23 @@
 /* Year-end support. Self-contained layout, never overrides the personal dashboard. */
-.yea-page{max-width:1140px;margin:0 auto;padding:30px 0 72px}
+.yea-page{max-width:1140px;margin:0 auto;padding:30px 0 20px}
 /* Author display rules must not override the browser's hidden attribute. */
 .yea-page [hidden]{display:none!important}
 .yea-heading{margin-bottom:14px}
 .yea-page:has(#yea-directory[hidden])>.yea-heading{display:none}
-.yea-heading h1{margin:0;font-size:clamp(23px,3vw,30px);font-weight:800;line-height:1.35}
-.yea-directory{display:grid;grid-template-columns:minmax(260px,.7fr) minmax(0,1.3fr);gap:16px;align-items:start}
+.yea-directory{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
 .yea-directory-card,.yea-panel,.yea-context{padding:23px;min-width:0}
 .yea-directory-card h2,.yea-panel h2{font-size:16px;font-weight:800;margin:0}
 .yea-person-list{display:grid;gap:8px;margin-top:17px}
 .yea-person-option{appearance:none;width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 17px;border:1px solid var(--color-border);border-radius:11px;background:var(--color-surface,#fff);color:var(--color-text);font-weight:750;font-size:14px;text-align:left;cursor:pointer;overflow-wrap:anywhere;transition:background .16s,border-color .16s}
-.yea-person-option:hover{background:var(--state-selected-bg);border-color:var(--state-selected-border)}
+.yea-person-option:not(:disabled):hover{background:var(--state-selected-bg);border-color:var(--state-selected-border)}
 .yea-person-option:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .yea-person-chevron{font-weight:600;font-size:24px;line-height:1;color:var(--color-muted);flex-shrink:0}
 .yea-empty{color:var(--color-muted);font-size:12px;line-height:1.6;margin:18px 0 4px}
 .yea-create-form{display:grid;gap:10px;margin-top:17px}
-.yea-create-form label,.yea-manage-form label,.yea-panel label,.yea-context-tools label{font-size:12px;font-weight:750;color:var(--color-text)}
+.yea-create-form label,.yea-panel label,.yea-context-tools label{font-size:12px;font-weight:750;color:var(--color-text)}
 .yea-create-form .btn{justify-self:start;margin-top:3px}
 .yea-pending{display:grid;gap:9px;margin-top:16px}
-.yea-create-card .yea-help{margin-top:13px}
-.yea-page input:not([type=file]):not([type=checkbox]):not([type=radio]),.yea-page select:not(#yea-calendar-year),.yea-manage-dialog input{width:100%;min-width:0;min-height:42px;border:1px solid var(--color-border-strong);border-radius:9px;background:#fff;color:var(--color-text);font-size:13px;padding:9px 12px}
-.yea-page button:disabled{opacity:.47;cursor:default}
-.yea-page button:not(:disabled):focus-visible,.yea-manage-dialog button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.yea-page button:not(:disabled):focus-visible,.yea-create-dialog button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .yea-main{display:grid;gap:15px;min-width:0}
 /* Compact context: same .select component as the dashboard. */
 .site-header #yea-back-directory[hidden],.site-header #yea-back-home[hidden]{display:none!important}
@@ -49,51 +45,38 @@
 .yea-month[data-state="actual"],.yea-month[data-state="loading"]{border-color:#d6dbe4;background:#f0f2f6;color:#8893a2;cursor:default}
 .yea-month[data-state="estimate"]{border-color:var(--state-selected-border);background:var(--state-selected-bg)}
 
-.yea-month input[type=number]{width:100%;min-height:35px;padding:6px 7px;font-size:12px}
-/* Upload page's .segmented-choice component is shared without redefining its checked state. */
+.yea-month input[type=number]{width:100%;min-height:var(--control-height-small);padding:6px 7px;font-size:12px}
+/* Shared .segmented-choice component is shared without redefining its checked state. */
 .yea-forecast-work{display:grid;gap:13px;margin-top:15px;min-width:0}
 .yea-forecast-toolbar{display:grid;grid-template-columns:minmax(0,1fr);align-items:end;gap:10px 20px}
 .yea-method-fieldset{min-width:0;margin:0;padding:0;border:0}
 .yea-method-fieldset legend{float:none;display:block;margin:0 0 8px;padding:0;font-size:12px;font-weight:750;color:var(--color-text)}
-.yea-method-options{grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.yea-method-options{gap:7px}
 .yea-method-options span{text-align:center;line-height:1.45;white-space:normal}
 .yea-forecast-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:2px}
 .yea-forecast-actions .btn{flex:none;min-width:140px}
 .yea-saved-note,.yea-save-hint{margin:0;color:var(--color-muted);font-size:12px;line-height:1.65}
 .yea-saved-note{padding:9px 12px;background:var(--color-surface,#fff);border:1px solid var(--color-border);border-radius:9px;white-space:pre-line}
 .yea-estimate-actions{display:flex;align-items:center;gap:8px;color:var(--color-muted);font-size:12px;white-space:nowrap;padding-bottom:8px}
-.yea-page .yea-text-action{appearance:none;background:transparent;border:0;padding:4px 0;color:var(--color-primary);font-size:12px;font-weight:750;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
-.yea-page .yea-text-action:hover{color:var(--color-text)}
 .yea-month input[type=number]:disabled{opacity:.58;background:#f4f6fa;cursor:default}
 .yea-month[data-state="draft"]{border-color:var(--state-selected-border);background:var(--state-selected-bg)}
-.yea-danger{color:var(--color-danger);background:var(--state-error-bg);border:1px solid var(--state-error-border);white-space:normal}
-.yea-manage-dialog{border:0;border-radius:15px;padding:23px;width:min(440px,calc(100vw - 28px));max-height:90dvh;margin:auto;background:#fff;color:var(--color-text);box-shadow:0 12px 50px rgba(0,0,0,.15)}
-.yea-manage-dialog:not([open]){display:none}
+.yea-create-dialog:not([open]){display:none}
 .yea-manage-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .yea-manage-head h2{font-size:17px;font-weight:800;margin:0}
-.yea-manage-form{display:grid;gap:10px;margin-top:24px}
-.yea-manage-form .btn{justify-self:start}
-.yea-manage-danger{margin-top:24px;border-top:1px solid var(--color-border);padding-top:20px}
 .yea-memo-panel{display:grid;gap:10px}
 .yea-page .yea-memo-textarea{display:block;width:100%;max-width:100%;min-height:160px;resize:vertical;border:1px solid var(--color-border-strong);border-radius:10px;background:#fff;color:var(--color-text);padding:13px 14px;font:inherit;font-size:13px;line-height:1.7;overflow-wrap:anywhere}
 .yea-memo-textarea:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .yea-memo-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .yea-memo-actions span{font-size:11px;color:var(--color-muted)}
-@media(max-width:900px){.yea-directory{grid-template-columns:1fr}}
-@media(max-width:680px){.yea-page{padding:19px 0 58px}.yea-directory-card,.yea-panel{padding:18px}.yea-context{padding:12px 14px}.yea-context h2{font-size:15px}.yea-context-tools{margin-left:auto}.yea-context-tools .select{min-width:104px;max-width:140px}.yea-stats{gap:9px}.yea-stat{padding:16px 14px}.yea-month-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.yea-fields{grid-template-columns:1fr}.yea-memo-actions{align-items:stretch;flex-direction:column}.yea-memo-actions .btn{width:100%}.yea-create-form .btn{width:100%}}
+@media(max-width:680px){.yea-page{padding:19px 0 16px}.yea-directory-card,.yea-panel{padding:18px}.yea-context{padding:12px 14px}.yea-context h2{font-size:15px}.yea-context-tools{margin-left:auto}.yea-context-tools .select{min-width:104px;max-width:140px}.yea-stats{gap:9px}.yea-stat{padding:16px 14px}.yea-month-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.yea-fields{grid-template-columns:1fr}.yea-memo-actions{align-items:stretch;flex-direction:column}.yea-memo-actions .btn{width:100%}.yea-create-form .btn{width:100%}}
 @media(max-width:400px){.yea-month-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.yea-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.yea-stat--total{grid-column:1/-1}.yea-context{gap:8px;flex-wrap:nowrap}.yea-context h2{flex:1;font-size:14px}.yea-context-tools{flex:none;margin-left:auto;gap:6px}.yea-context-tools .select{min-width:90px;width:90px;max-width:100px;font-size:12px;padding:8px 27px 8px 9px}.yea-context-tools .btn{min-height:36px;padding:8px 10px;white-space:nowrap;font-size:11px}}
 
 /* One accordion contains all editing controls; closed after saving. */
 /* All three year-end accordions share one header, border, icon and type scale. */
 .yea-accordion{padding:0!important;overflow:hidden;min-width:0}
-.yea-upload-summary{display:flex;align-items:center;gap:11px;padding:16px 20px;cursor:pointer;list-style:none;user-select:none;min-height:54px}
-.yea-upload-summary::-webkit-details-marker{display:none}
-.yea-upload-summary::marker{content:''}
+.yea-upload-summary{padding:16px 20px;user-select:none;min-height:54px}
 .yea-upload-summary strong{font-size:14px;font-weight:800}
-.yea-upload-summary:focus-visible{outline:2px solid var(--color-primary);outline-offset:-3px}
 .yea-accordion[open]>.yea-upload-summary{border-bottom:1px solid var(--color-border)}
-.yea-upload-chevron{display:block;flex:none;width:9px;height:9px;border-right:2px solid var(--color-muted);border-bottom:2px solid var(--color-muted);transform:rotate(-45deg);transition:transform .15s}
-.yea-accordion[open]>.yea-upload-summary .yea-upload-chevron{transform:rotate(45deg)}
 .yea-workspace-summary-state{margin-left:auto;color:var(--color-muted);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}
 .yea-upload-body{padding:16px;min-width:0}
 .yea-upload-workspace{display:grid;grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr);gap:18px;align-items:start}
@@ -130,8 +113,8 @@
 .yea-upload-workspace .validation-message{margin:15px 0 0}
 .yea-review-edit-actions{display:flex;align-items:center;gap:10px;margin:0 0 14px;flex-wrap:wrap}
 .yea-upload-workspace .selected-file__actions .btn .icon{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.yea-upload-savebar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:16px;padding:9px 3px 2px}
-.yea-upload-savebar span{font-size:12px;color:var(--color-muted);line-height:1.5}
+.yea-upload-savebar{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:16px}
+.yea-upload-savebar span{margin-right:auto;font-size:12px;color:var(--color-muted);line-height:1.5}
 .yea-upload-savebar .btn{flex:none;min-width:140px}
 @media(max-width:950px){.yea-upload-workspace{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:640px){
@@ -167,11 +150,7 @@
 .yea-review-kind .segmented-choice label{font-size:inherit;font-weight:inherit}
 .yea-month[data-state="draft"] input[type="number"]{background:#fff}
 /* Compact management sheet: keep short controls visible on mobile. */
-.yea-manage-dialog{width:min(390px,calc(100vw - 24px));max-height:min(440px,calc(100dvh - 24px));padding:18px;overflow-y:auto}
-.yea-manage-form{gap:8px;margin-top:15px}
-.yea-manage-form .btn{min-height:36px}
-.yea-manage-danger{margin-top:15px;padding-top:14px}
-.yea-manage-danger .btn{min-height:36px;padding:8px 12px;font-size:12px}
+.yea-create-dialog{width:min(390px,calc(100% - 32px));}
 
 /* Forecast-specific body, using the shared accordion header. */
 .yea-forecast-body{padding:18px 23px 22px;min-width:0}
@@ -199,7 +178,7 @@
 /* 保存済みPDFの一括取得は、取り込み明細一覧の補助操作として配置。 */
 .yea-upload-left .file-panel > .panel-title-row{flex-wrap:wrap}
 .yea-file-tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:5px;margin-left:auto}
-.yea-file-tools .btn{font-size:11px;line-height:1.4;min-height:28px;padding:4px 7px;white-space:nowrap}
+.yea-file-tools .btn{white-space:nowrap}
 /* Deletion drafts stay INSIDE the scrollable PDF list. No second card-height section. */
 .yea-upload-left .yea-file-pending{gap:8px;min-width:0;min-height:64px;padding:8px 9px;background:var(--color-surface,#fff)}
 .yea-upload-left .yea-file-pending:hover{background:var(--color-surface,#fff);border-color:transparent}
@@ -227,7 +206,7 @@
 .yea-taxable-table thead th{color:var(--color-muted);font-weight:700}
 .yea-taxable-table th:first-child{text-align:left}
 .yea-taxable-table__total{font-weight:800}
-@media(max-width:680px){.yea-file-tools{justify-content:flex-end}.yea-file-tools .btn{min-height:30px}}
+@media(max-width:680px){.yea-file-tools{justify-content:flex-end}}
 
 
 /* Provisional arithmetic is visible, never written to OneDrive without Save. */
@@ -237,3 +216,16 @@
 /* Invalid monthly forecasts must be visible before Save, including mobile. */
 .yea-month .yea-month__error:not([hidden]){display:block;font-size:11px;line-height:1.35;color:var(--color-danger,#b42318);overflow-wrap:anywhere}
 .yea-month input[aria-invalid="true"],.yea-forecast-bonus input[aria-invalid="true"]{border-color:var(--color-danger,#b42318);outline-color:var(--color-danger,#b42318)}
+
+.yea-directory-heading{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px}
+
+.yea-person-row{display:flex;align-items:center;gap:6px;min-width:0}
+.yea-person-row .yea-person-option{flex:1;min-width:0}
+.yea-person-row .yea-person-delete{color:var(--color-danger)}
+.yea-person-rename{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.yea-person-rename .input{flex:1;min-width:100px}
+
+.yea-directory-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:6px; }
+
+.yea-person-option:disabled{opacity:.6;cursor:default}
+#yea-year-retry{justify-self:start}

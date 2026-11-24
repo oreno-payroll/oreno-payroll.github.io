@@ -4,6 +4,7 @@
 'use strict';
 const TTL_MS = 30 * 60 * 1000;
 const sessions = new Map();
+let generation = crypto.randomUUID();
 self.onconnect = (event) => {
   const port = event.ports[0];
   port.onmessage = (message) => {
@@ -11,6 +12,13 @@ self.onconnect = (event) => {
     if (!data || typeof data.id !== 'number' || typeof data.scope !== 'string' ||
         data.scope.length > 200 || !/^[A-Za-z0-9:.-]+$/.test(data.scope)) return;
     const { id, action, scope } = data;
+    if (action === 'generation') {port.postMessage({id,result:generation});return;}
+    if (action === 'clear-all') {
+      sessions.clear();generation=crypto.randomUUID();
+      port.postMessage({id,result:true});return;
+    }
+    // A registration/lookup begun before a lock must not survive the clear.
+    if(data.generation!==generation){port.postMessage({id,result:null});return;}
     const now = Date.now();
     for (const [name, stored] of sessions) if (now - stored.updated > TTL_MS) sessions.delete(name);
     let result = null;
@@ -29,9 +37,6 @@ self.onconnect = (event) => {
       }
     } else if (action === 'clear') {
       sessions.delete(scope);
-      result = true;
-    } else if (action === 'clear-all') {
-      sessions.clear();
       result = true;
     }
     port.postMessage({id, result});

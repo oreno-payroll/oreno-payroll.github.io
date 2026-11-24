@@ -13,7 +13,7 @@ const normal = read('public/upload/index.html');
 // Activity is transient; errors remain visible until a later action.
 assert.match(html, /id="yea-status"[^>]*hidden/);
 assert.match(ui, /function showBusy\(message:string\)/);
-assert.match(ui, /if\(!failed&&appStatus\.element\.dataset\.state!=='error'\)/);
+assert.match(ui, /if\(!failed&&appStatus\.element\.dataset\.state==='loading'\)/);
 assert.doesNotMatch(ui, /が完了しました。/);
 assert.match(read('public/styles/style.css'), /\.app-status\[data-state=\"loading\"\]::before/);
 assert.match(html, /class="app-status yea-status"/);
@@ -33,11 +33,15 @@ assert.match(ui, /fileQueue=fileQueue\.filter\(x=>x!==item\)/);
 // Forecasts reuse the standard upload page's three-option radio cards.
 assert.equal((html.match(/type="radio" name="yea-method"/g)??[]).length,3);
 assert.doesNotMatch(html, /<select[^>]*id="yea-method"/);
-assert.match(css, /\.yea-page input:not\(\[type=file\]\):not\(\[type=checkbox\]\):not\(\[type=radio\]\)/);
-assert.match(html, /class="segmented-choice yea-method-options"/);
-assert.match(read('public/styles/upload.css'), /\.segmented-choice input:checked \+ span/);
+assert.match(html, /<input class="input" id="yea-new-name"/);
+assert.match(ui, /el\('input','input'\)/);
+assert.match(html, /<span class="unit-field"><input class="input" data-field="taxable"/);
+assert.match(html, /class="segmented-choice segmented-choice--three yea-method-options"/);
+assert.match(read('public/styles/style.css'), /\.segmented-choice input:checked \+ span/);
 for(const id of ['yea-select-all-months','yea-clear-months','yea-bonus-commit'])assert.doesNotMatch(html,new RegExp(`id="${id}"`));
-assert.doesNotMatch(html,/<input[^>]*type="checkbox"/);
+assert.equal((html.match(/<input[^>]*type="checkbox"[^>]*>/g)??[]).length,1);
+assert.match(html,/<input type="checkbox" id="yea-review-confirm" disabled>/);
+assert.doesNotMatch(html.slice(html.indexOf('id="yea-forecast-accordion"')),/<input[^>]*type="checkbox"/);
 assert.doesNotMatch(ui, /noPayCheck|repo\.setNoPay\(/);
 assert.match(ui, /const oldNoPay=data\.noPaymentMonths\.includes\(month\)/);
 assert.match(ui, /input\.value=oldNoPay\?'0':existing\?String\(existing\.amount\):''/);

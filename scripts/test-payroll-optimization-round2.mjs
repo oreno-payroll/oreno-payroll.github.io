@@ -26,11 +26,11 @@ const graph={
 };
 const common={crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Promise,Map,Set,WeakMap,structuredClone,performance,
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_kind,value)=>JSON.parse(value),encryptJson:async(_kind,value)=>JSON.stringify(value),decryptBytes:async()=>new Uint8Array(),
- fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),payrollPeriodKey:r=>r.paymentDate,
+ fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),
  isCollision:()=>false,beginPerfOperation:()=>({measure:async(_,fn)=>fn(),finish(){}}),
- clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
+ SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
  MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:500e6,toPublicIncomeRecord:()=>{},PayrollPartialSuccessError:class extends Error{},setTimeout};
-const {PayrollVault}=runInNewContext(strip(read('src/cloud/vault.ts'))+'\n({PayrollVault})',common);
+const {PayrollVault}=runInNewContext(strip(read('src/storage/payrollValidation.ts'))+'\n'+strip(read('src/cloud/vault.ts'))+'\n({PayrollVault})',common);
 const vault=new PayrollVault(graph);vault.key=key;vault.salt=salt;vault.index=index;
 await vault.refresh({forceFresh:true});reset();
 let commits=0;
@@ -52,8 +52,8 @@ assert.equal(calls.read.filter(p=>p==='payroll/index.enc').length,3,'each check 
 assert.ok(vault.records().some(r=>r.id===9876));
 console.log('PASS 1: saveBatch retains three fresh index + four-year ETag checks, zero unchanged annual downloads');
 // A foreign-year collision after originals are verified must block commit and not downgrade to cached data.
-const collision={...baseRecord(9999,'2024'),fileHash:'c'.repeat(64),form:{...baseRecord(9999,'2024').form,targetMonth:'2026-10',paymentDate:'2026-10-27'}};
-const candidate={...input,id:9998,fileHash:collision.fileHash,form:collision.form};
+const collision={...baseRecord(9999,'2024'),fileHash:'c'.repeat(64)};
+const candidate={...input,id:9998,fileHash:collision.fileHash};
 vault.storeOriginal=async()=>{const p='payroll/statements/2024.enc',current=JSON.parse(files.get(p).text);put(p,annual([...current.records,collision]));};
 reset();const beforeCommit=commits;
 await assert.rejects(vault.saveBatch([candidate]),/同じ明細またはID|同じ給与/);

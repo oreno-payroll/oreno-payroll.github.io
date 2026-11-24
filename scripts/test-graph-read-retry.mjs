@@ -30,7 +30,7 @@ function fixture({badFolder=0,badFile=0,notFound=false}={}) {
  const file=await graph.read(['payroll'],'2026.enc',1000);
  assert.equal(file?.text,'ciphertext-placeholder');
  assert.equal(calls.folder,3);
- assert.equal(calls.file,3);
+ assert.equal(calls.file,4); // includes post-download version check
  assert.equal(calls.nonGet,0);
 }
 {

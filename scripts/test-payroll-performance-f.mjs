@@ -47,7 +47,7 @@ const countIndex=()=>calls.read.filter(path=>path==='payroll/index.enc').length;
 const countPdf=()=>calls.read.filter(path=>path.includes('/originals/')).length;
 const common={crypto:webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Map,Set,WeakMap,Promise,console,performance,
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_kind,text)=>JSON.parse(text),encryptJson:async(_kind,data)=>JSON.stringify(data),decryptBytes:async()=>pdf,
- isCollision:()=>false,clearNavigationSnapshot:()=>{snapshot=null},rememberNavigationSnapshot:async(s,t,k,data)=>{snapshot={s,t,k,data,expires:Date.now()+120000}},
+ isCollision:()=>false,SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{snapshot=null},rememberNavigationSnapshot:async(s,t,k,data)=>{snapshot={s,t,k,data,expires:Date.now()+600000}},
  restoredNavigationSnapshot:async(s,t,k)=>snapshot&&snapshot.s===s&&snapshot.t===t&&snapshot.k===k&&snapshot.expires>Date.now()?snapshot:null,
  fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||/^emp_[0-9a-f]{32}$/.test(v),payrollPeriodKey:r=>r.form.paymentDate,
  beginPerfOperation:()=>({measure:async(_,fn)=>fn(),finish(){}}),MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:1e9,
@@ -96,7 +96,7 @@ console.log('PASS F: incomplete annual inventory aborts before any PDF export');
 const legacy={index,years:years.map(year=>[year,document([year==='2024'?{
  ...record('2024',2),form:{...form('2024'),net:'190000'},
 }:record(year)])])};
-snapshot={s:scope,t:salt,k:key,data:legacy,expires:Date.now()+120000};
+snapshot={s:scope,t:salt,k:key,data:legacy,expires:Date.now()+600000};
 const old=new PayrollVault(graph);old.setNavigationScope(scope);
 assert.equal(await old.resumeFromSnapshot(key,salt),true);current=old;reset();
 assert.equal((await api.loadRecordSummaries()).length,4);

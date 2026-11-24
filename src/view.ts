@@ -13,7 +13,8 @@ let fallbackUrl: string | undefined;
 let locked=false;
 const locks=createTabLockCoordinator(()=>{
  locked=true;
- if(reader){reader.hidden=true;reader.removeAttribute('src');}
+ document.title='Payroll | PDF原本';
+ if(reader){reader.hidden=true;reader.removeAttribute('src');reader.title='PDF原本';}
  if(fallbackUrl){URL.revokeObjectURL(fallbackUrl);fallbackUrl=undefined;}
  appStatus.error('保管庫がロックされました。このPDFは閉じてください。');
 });

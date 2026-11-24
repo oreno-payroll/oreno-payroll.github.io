@@ -55,10 +55,10 @@ function fixture({delayMs=0,force304=false,first401=false,first429=false}={}) {
 // fetch, re-read issues a conditional GET. Only the 304 branch reuses bytes.
 {
  const f=fixture();const initial=await f.read();
- assert.equal(f.stats().metaCalls,1);assert.equal(f.stats().bodyCalls,1);
+ assert.equal(f.stats().metaCalls,2);assert.equal(f.stats().bodyCalls,1);
  assert.deepEqual(initial,{id:'record',etag:'"etag-a"',text:'{"encrypted":"synthetic-A"}',size:27});
  const unchanged=await f.read();assert.deepEqual(unchanged,initial);
- assert.deepEqual(f.stats(),{metaCalls:2,bodyCalls:1,conditional:1,mutations:0,refreshes:0});
+ assert.deepEqual(f.stats(),{metaCalls:3,bodyCalls:1,conditional:1,mutations:0,refreshes:0});
  assert.ok(f.events.some(e=>e.ifNoneMatch==='"etag-a"'));
  f.change('{"encrypted":"synthetic-B"}');
  const changed=await f.read();assert.equal(changed.text,'{"encrypted":"synthetic-B"}');
@@ -86,7 +86,7 @@ console.log('PASS: unsolicited 304 and removed files fail closed; never return o
 {
  const f=fixture({delayMs:15});
  const results=await Promise.all(Array.from({length:7},()=>f.read()));
- assert.equal(results.length,7);assert.equal(f.stats().metaCalls,1);assert.equal(f.stats().bodyCalls,1);
+ assert.equal(results.length,7);assert.equal(f.stats().metaCalls,2);assert.equal(f.stats().bodyCalls,1);
  assert.ok(results.every(r=>r?.etag==='"etag-a"'));
  const strict=await f.read(5).then(()=>false,()=>true);assert.equal(strict,true,'per-call size limit is enforced even with cached data');
 }
@@ -96,9 +96,9 @@ console.log('PASS: unsolicited 304 and removed files fail closed; never return o
  const [strict,normal]=await Promise.allSettled([f.read(5),f.read(1024)]);
  assert.equal(strict.status,'rejected');assert.match(String(strict.reason),/容量|サイズ/);
  assert.equal(normal.status,'fulfilled');assert.equal(normal.value.text,'{"encrypted":"synthetic-A"}');
- assert.equal(f.stats().metaCalls,2,'different limits are never coalesced');
+ assert.equal(f.stats().metaCalls,3,'different limits are never coalesced');
 }
-console.log('PASS: seven same-file parallel requests collapse into one metadata GET plus one encrypted download; strict limits preserved');
+console.log('PASS: seven same-file parallel requests collapse into one pair of metadata GETs plus one encrypted download; strict limits preserved');
 // Every write invalidates the encrypted in-memory cache before executing the
 // non-idempotent PUT. No mutation is retried behind an optimization.
 {
@@ -126,7 +126,7 @@ console.log('PASS: writes invalidate cache; raced 304 fails closed; no plaintext
 for(const options of [{first401:true},{first429:true}]){
  const f=fixture(options);
  const v=await f.read();assert.equal(v.etag,'"etag-a"');
- assert.equal(f.stats().metaCalls,2);assert.equal(f.stats().bodyCalls,1);
+ assert.equal(f.stats().metaCalls,3);assert.equal(f.stats().bodyCalls,1);
  if(options.first401)assert.equal(f.stats().refreshes,1);
 }
 console.log('PASS: read-only Graph 401 token refresh and 429 bounded retry continue to fetch verified ciphertext');

@@ -30,7 +30,7 @@
 
   <div class="app-shell">
     <header class="site-header">
-      <a class="brand" href="./index.html" aria-label="Payroll トップページ">
+      <a class="brand" href="./index.html" aria-label="Payroll ホーム">
         <span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span>
         <span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span>
       </a>
@@ -38,7 +38,7 @@
         <a class="btn btn--secondary settings-link" href="./backup/index.html" aria-label="設定" title="設定"><svg class="icon" aria-hidden="true"><use href="#icon-settings"></use></svg></a>
         <button type="button" class="theme-toggle" data-theme-toggle aria-label="ダークモードに切り替える" title="ダークモードに切り替える" aria-pressed="false"><svg class="icon theme-icon--moon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.6 8.6 0 1 0 20.2 15.2Z"/></svg><svg class="icon theme-icon--sun" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
         <a class="btn btn--secondary year-end-header-link" href="./year-end-assist/index.html" aria-label="年末調整サポート" title="年末調整サポート"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg><span>年末調整サポート</span></a>
-        <a class="btn btn--primary" href="./upload/index.html"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span>明細をアップロード</span></a>
+        <a class="btn btn--primary" href="./upload/index.html" aria-label="PDFを追加"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg><span>PDFを追加</span></a>
 
       </div>
     </header>
@@ -46,15 +46,28 @@
     <main class="dashboard" id="main-content">
       <div class="page-heading">
         <div>
-          <p class="eyebrow">OVERVIEW</p>
           <h1>収入ダッシュボード</h1>
+        </div>
+        <div class="dashboard-sync" aria-label="最新データの確認"></div>
+      </div>
+
+      <div class="period-switcher" aria-label="表示期間の切り替え">
+        <div class="period-switcher__group">
+          <span class="period-switcher__caption">表示期間</span>
+          <div class="period-switcher__options" role="group" aria-label="集計基準">
+            <button type="button" id="mode-fiscal" disabled class="period-switcher__option" aria-pressed="true">年度（4〜3月）</button>
+            <button type="button" id="mode-calendar" disabled class="period-switcher__option" aria-pressed="false">暦年（1〜12月）</button>
+          </div>
+        </div>
+        <div class="select-field">
+          <label for="fiscal-year" id="year-label">対象年度</label>
+          <select class="select" id="fiscal-year" disabled aria-label="対象年度"></select>
         </div>
       </div>
 
       <section class="card total-card" aria-labelledby="total-heading">
         <div class="total-card__header">
           <div>
-            <p class="section-kicker">INCOME SUMMARY</p>
             <h2 id="total-heading">総収入</h2>
             <p class="section-description" id="fiscal-period"></p>
           </div>
@@ -63,7 +76,7 @@
               <input id="include-bonus" type="checkbox" checked disabled>
               <span>賞与を含む</span>
             </label>
-            <label class="check-control" for="include-forecast" title="未登録の給与と本業8月・2月賞与を概算します。副業の将来賞与は加算せず、保存データは変更しません。">
+            <label class="check-control" for="include-forecast" title="未登録の給与と本業8月・2月賞与の見込みを表示します。">
               <input id="include-forecast" type="checkbox" disabled>
               <span id="forecast-toggle-label">3月まで見込み</span>
             </label>
@@ -71,31 +84,23 @@
           </div>
         </div>
 
-        <div class="period-switcher" aria-label="集計期間の切り替え">
-          <div class="period-switcher__group">
-            <span class="period-switcher__caption">集計期間</span>
-            <div class="period-switcher__options" role="group" aria-label="集計基準">
-              <button type="button" id="mode-fiscal" class="period-switcher__option" aria-pressed="true">年度（4〜3月）</button>
-              <button type="button" id="mode-calendar" class="period-switcher__option" aria-pressed="false">暦年（1〜12月）</button>
-            </div>
-          </div>
-          <div class="select-field">
-            <label for="fiscal-year" id="year-label">対象年度</label>
-            <select class="select" id="fiscal-year" aria-label="対象年度"></select>
-          </div>
-        </div>
-        <p class="forecast-status" id="forecast-status" role="status" hidden></p>
         <div class="total-card__hero">
           <div>
-            <p class="amount-label"><span data-amount-period>年度総支給額</span> <span class="amount-label__hint">本業＋副業</span></p>
+            <p class="amount-label"><span data-amount-period>年度総支給額</span></p>
             <p class="amount amount--hero" id="total-gross">--</p>
           </div>
           <div class="hero-net">
-            <span class="hero-net__label">手取り合計</span>
+            <span class="hero-net__label">手取り</span>
             <strong class="hero-net__value" id="total-net">--</strong>
           </div>
         </div>
 
+        <details class="total-breakdown"><summary class="accordion-summary">支給・控除の内訳</summary>
+        <div class="total-card__details total-card__tax" aria-label="支給額の内訳">
+          <div class="metric"><span class="metric__label">課税支給額</span><strong class="metric__value" id="total-taxable">--</strong></div>
+          <div class="metric"><span class="metric__label">非課税支給額</span><strong class="metric__value" id="total-non-taxable">--</strong></div>
+          <div class="metric"><span class="metric__label">控除額 <span class="metric__hint">総支給額 − 手取り</span></span><strong class="metric__value" id="total-deductions">--</strong></div>
+        </div>
         <div class="total-card__details" aria-label="控除と交通費の内訳">
           <div class="metric"><span class="metric__label">所得税（年調含む）</span><strong class="metric__value" id="total-income-tax">--</strong></div>
           <div class="metric"><span class="metric__label">住民税</span><strong class="metric__value" id="total-resident-tax">--</strong></div>
@@ -103,21 +108,24 @@
           <div class="metric"><span class="metric__label">交通費 <span class="metric__hint">支給内訳</span></span><strong class="metric__value" id="total-transportation">--</strong></div>
           <div class="metric"><span class="metric__label">立替経費 <span class="metric__hint">交通費と併記の分</span></span><strong class="metric__value" id="total-reimbursed-expenses">--</strong></div>
         </div>
-        <section class="forecast-panel" id="forecast-panel" aria-label="見込みの計算根拠" hidden>
-          <h3 id="forecast-heading">3月までの見込み計算根拠</h3>
+        </details>
+        <details class="forecast-panel" id="forecast-panel" aria-label="見込みの計算根拠" hidden>
+          <summary class="accordion-summary" id="forecast-heading">3月までの見込み計算根拠</summary>
+          <p class="forecast-status" id="forecast-status" role="status" hidden></p>
           <div id="forecast-details"></div>
-        </section>
+        </details>
       </section>
 
       <div class="job-grid">
         <section class="card job-card" aria-labelledby="main-heading">
           <div class="job-card__heading">
             <div class="job-card__title-group"><span class="job-dot job-dot--main"></span><h2 id="main-heading">本業収入</h2></div>
-            <span class="tag">MAIN JOB</span>
           </div>
           <p class="amount-label"><span data-amount-period>年度総支給額</span></p>
           <p class="amount amount--job" id="main-gross">--</p>
           <dl class="details-list">
+            <div><dt>課税支給額</dt><dd id="main-taxable">--</dd></div>
+            <div><dt>非課税支給額</dt><dd id="main-non-taxable">--</dd></div>
             <div><dt>所得税（年調含む）</dt><dd id="main-income-tax">--</dd></div>
             <div><dt>住民税</dt><dd id="main-resident-tax">--</dd></div>
             <div><dt>交通費</dt><dd id="main-transportation">--</dd></div>
@@ -130,11 +138,12 @@
         <section class="card job-card" aria-labelledby="side-heading">
           <div class="job-card__heading">
             <div class="job-card__title-group"><span class="job-dot job-dot--side"></span><h2 id="side-heading">副業収入</h2></div>
-            <span class="tag">SIDE JOB</span>
           </div>
           <p class="amount-label"><span data-amount-period>年度総支給額</span></p>
           <p class="amount amount--job" id="side-gross">--</p>
           <dl class="details-list">
+            <div><dt>課税支給額</dt><dd id="side-taxable">--</dd></div>
+            <div><dt>非課税支給額</dt><dd id="side-non-taxable">--</dd></div>
             <div><dt>所得税（年調含む）</dt><dd id="side-income-tax">--</dd></div>
             <div><dt>住民税</dt><dd id="side-resident-tax">--</dd></div>
             <div><dt>交通費</dt><dd id="side-transportation">--</dd></div>
@@ -146,46 +155,47 @@
       </div>
 
       <details class="card registration-card" id="monthly-registration" aria-labelledby="registration-heading" hidden>
-        <summary class="registration-card__heading">
+        <summary class="registration-card__heading accordion-summary">
           <div>
-            <p class="section-kicker">MONTHLY STATUS</p>
             <h2 id="registration-heading">月別登録状況</h2>
             <p id="registration-period" class="registration-card__period"></p>
           </div>
-          <span class="registration-card__note">通常給与のみ・見込みは含みません</span>
-          <span class="registration-card__chevron" aria-hidden="true"></span>
         </summary>
         <div class="registration-grid" id="registration-grid" aria-label="本業と副業の月別給与登録状況"></div>
       </details>
 
       <section class="card statements-card" aria-labelledby="statements-heading">
         <div class="statements-card__header">
-          <div>
-            <p class="section-kicker">DOCUMENTS</p>
-            <h2 id="statements-heading">給与明細一覧</h2>
-          </div>
+          <h2 id="statements-heading">給与明細一覧</h2>
+          <fieldset class="statement-filter segmented-choice segmented-choice--three segmented-choice--small" aria-label="明細種別で絞り込み">
+            <legend class="sr-only">明細種別</legend>
+            <label><input type="radio" name="statement-kind" value="all" checked disabled><span>すべて</span></label>
+            <label><input type="radio" name="statement-kind" value="salary" disabled><span>給与</span></label>
+            <label><input type="radio" name="statement-kind" value="bonus" disabled><span>賞与</span></label>
+          </fieldset>
         </div>
+        <section id="pending-deletion" class="pending-deletion" aria-label="削除待ちの明細" hidden>
+          <p id="pending-deletion-status" role="status" aria-live="polite"></p>
+          <p>確定するまでは、明細・収入集計・PDF原本を変更しません。</p>
+          <ul id="pending-deletion-list"></ul>
+          <div class="pending-deletion-actions"><button type="button" class="btn btn--secondary" id="pending-deletion-undo">すべて元に戻す</button><button type="button" class="btn btn--danger-outline" id="pending-deletion-save" disabled>削除を確定</button></div>
+        </section>
         <div class="statements-grid">
           <section class="statement-column" aria-labelledby="main-list-heading">
             <div class="statement-column__heading"><h3 id="main-list-heading">本業</h3><span class="count-badge" id="main-count">0件</span></div>
             <ul class="statement-list" id="main-records"></ul>
           </section>
           <section class="statement-column" aria-labelledby="side-list-heading">
-            <div class="statement-column__heading"><h3 id="side-list-heading">副業</h3><span class="count-badge" id="side-count">0件</span><button type="button" class="btn btn--secondary side-zip-button" id="download-side-zip" disabled title="選択中の集計期間に属する副業PDF全件をZIP保存">PDFをZIP保存</button></div>
-            <p class="side-zip-status" id="side-zip-status" role="status" aria-live="polite"></p>
+            <div class="statement-column__heading"><h3 id="side-list-heading">副業</h3><span class="count-badge" id="side-count">0件</span><button type="button" class="btn btn--ghost btn--small side-zip-button" id="download-side-zip" disabled>PDFをZIP保存（全件）</button></div>
             <ul class="statement-list" id="side-records"></ul>
           </section>
         </div>
       </section>
 
       <footer class="site-footer">
-        <div class="site-footer__about">
-          <span class="site-footer__name">Payroll · 個人用給与管理ツール</span>
-          <span class="site-footer__note">PDFの解析はブラウザ内で行います</span>
-        </div>
         <div class="site-footer__actions" aria-label="保存状態の確認と保管庫操作"></div>
       </footer>
     </main>
   </div>
-<div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="./build-info.js"></script></body>
+</body>
 </html>

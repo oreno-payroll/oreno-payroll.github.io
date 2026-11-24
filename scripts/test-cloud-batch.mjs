@@ -147,7 +147,7 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
 }
 {
  const code=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
- assert.match(code,/await vault\.saveBatch\(batch,onProgress\)/,'upload entry point uses cloud batch');
+ assert.match(code,/await vault\.saveBatch\(batch,onProgress,latest\)/,'upload entry point uses cloud batch');
  assert.doesNotMatch(code,/for\(const item of accepted\)\s*\{/,'no per-record roundtrip loop');
  console.log('PASS: upload entry point routes new records into a single batch');
 }

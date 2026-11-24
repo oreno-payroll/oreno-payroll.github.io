@@ -110,9 +110,9 @@ const put=async(graph,path,text)=>{const bytes=encoder.encode(text).byteLength;g
   const index=await decryptJson('index',graph.files.get('payroll/index.enc').text,key);
   await put(graph,'payroll/index.enc',await encryptJson('index',{...index,years:['2026']},key,salt));
   const existing=Array.from({length:2000},(_,i)=>({
-   id:100000+i,fileName:`old-${i}.pdf`,originalId:crypto.randomUUID(),originalMonth:'2025-04',
-   pdfSize:10,pdfType:'application/pdf',savedAt:'2025-04-01',pages:1,warningsAcknowledged:true,
-   form:{job:'side',kind:'salary',targetMonth:'2025-04',paymentDate:'2025-04-27',gross:'100',net:'90'}
+   id:100000+i,fileName:`old-${i}.pdf`,originalId:crypto.randomUUID(),originalMonth:'2026-04',
+   pdfSize:10,pdfType:'application/pdf',savedAt:'2026-04-01',pages:1,warningsAcknowledged:true,
+   form:{job:'side',kind:'salary',targetMonth:'2026-04',paymentDate:'2026-04-27',gross:'100',net:'90'}
   }));
   await put(graph,'payroll/statements/2026.enc',await encryptJson('year',{format:'payroll-annual-v1',records:existing,deleted:[]},key,salt));
  };
@@ -122,24 +122,29 @@ const put=async(graph,path,text)=>{const bytes=encoder.encode(text).byteLength;g
 }
 {
  const store=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
- const start=store.indexOf('async function pdfSha256('),end=store.indexOf('/** 移行用：',start);
+ const start=store.indexOf('export async function inspectReplacementRestoreBaseline('),end=store.indexOf('/** 移行用：',start);
+ const recovery=readFileSync(new URL('../src/storage/uploadRecovery.ts',import.meta.url),'utf8');
+ const hashCode=recovery.slice(recovery.indexOf('export async function pdfSha256('),recovery.indexOf('export async function resolveLegacyOriginalHashes(')).replace('export async','async');
  assert.ok(start>0&&end>start);
- const code=store.slice(start,end).replace('export async function replaceAllRecords','async function replaceAllRecords');
+ const code=store.slice(start,end).replaceAll('export async function','async function');
  const contents=`const MAX_RECORDS=2000,MAX_TOTAL_PDF_BYTES=480*1024*1024;
  const cloudVault=async()=>globalThis.__fakeRestoreVault;
  const recordSignature=(record)=>JSON.stringify([record.id,record.fileHash,record.form]);
  const payrollSnapshot=records=>records.map(recordSignature).sort();
  const toSummary=record=>{const {pdf,...meta}=record;return {...meta,pdfSize:pdf.size,pdfType:pdf.type}};
  const assertValid=()=>{};
+ const physicalRestoreSnapshot=records=>JSON.stringify(records.map(recordSignature).sort());
+ const employerDirectorySignature=entries=>JSON.stringify(entries);
+ ${hashCode}
  ${code}
- export {replaceAllRecords,payrollSnapshot};`;
+ export {replaceAllRecords,inspectReplacementRestoreBaseline};`;
  const result=await build({stdin:{contents,sourcefile:'restore-preflight.ts',loader:'ts'},bundle:true,format:'esm',platform:'node',target:'es2022',write:false,logLevel:'silent'});
- const {replaceAllRecords,payrollSnapshot}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
+ const {replaceAllRecords,inspectReplacementRestoreBaseline}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
  const existing={id:123,form:{job:'main'},fileHash:undefined,pdfSize:13,pdfType:'application/pdf'};
  const back={id:123,form:{job:'side'},fileHash:undefined,pdf:new Blob(['different-pdf'])};
  let writes=0;
- globalThis.__fakeRestoreVault={refresh:async()=>[existing],original:async()=>new Blob(['old-original']),save:async()=>{writes++;},remove:async()=>{writes++;},records:()=>[existing]};
- try{await assert.rejects(replaceAllRecords([back],payrollSnapshot([existing])),/PDF原本がバックアップと異なります/);}
+ globalThis.__fakeRestoreVault={refresh:async()=>[existing],readEmployerDirectory:async()=>[],original:async()=>new Blob(['old-original']),save:async()=>{writes++;},remove:async()=>{writes++;},records:()=>[existing]};
+ try{await assert.rejects(replaceAllRecords([back],await inspectReplacementRestoreBaseline()),/PDF原本がバックアップと異なります/);}
  finally{delete globalThis.__fakeRestoreVault;}
  assert.equal(writes,0,'no records were changed before the mismatch was detected');
  console.log('PASS: missing PDF hashes cannot permit a mismatched restore on an existing ID');

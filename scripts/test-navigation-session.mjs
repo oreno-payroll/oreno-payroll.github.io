@@ -48,6 +48,7 @@ cloud.put('payroll/statements/2026.enc',await encryptJson('year',{format:'payrol
 cloud.put('payroll/index.enc',await encryptJson('index',{format:'payroll-index-v1',years:['2026'],incomeYears:[]},key,salt));
 await first.unlockWithKey(key,salt);
 assert.equal((await first.refresh({dashboardStartup:true})).length,1);
+assert.equal(SNAPSHOT_TTL_MS,600_000);
 const encrypted=tab.getItem('payroll-navigation-snapshot-v1');
 assert.ok(encrypted&&encrypted.length>100);
 assert.doesNotMatch(encrypted,/sample-not-private\.pdf|targetMonth|paymentDate/,'salary plaintext in tab cache');
@@ -64,6 +65,16 @@ assert.ok(cloud.reads>reads,'explicit refresh must use remote index and annual r
 assert.equal(returning.isShowingSnapshot(),false);
 console.log('PASS: warm navigation uses encrypted snapshot; manual refresh revalidates OneDrive');
 
+// A separate encrypted employee cache must not evict the dashboard cache.
+await rememberNavigationSnapshot(scope,salt,key,[{displayName:'Synthetic employee'}],'people');
+assert.ok(tab.getItem('payroll-yearend-navigation-snapshot-v1'));
+assert.doesNotMatch(tab.getItem('payroll-yearend-navigation-snapshot-v1'),/Synthetic employee/);
+assert.equal((await restoredNavigationSnapshot(scope,salt,key,'people')).data[0].displayName,'Synthetic employee');
+assert.ok(await restoredNavigationSnapshot(scope,salt,key));
+const pendingRead=restoredNavigationSnapshot(scope,salt,key,'people');
+invalidateNavigationSnapshot();assert.equal(await pendingRead,null);
+assert.equal(tab.getItem('payroll-yearend-navigation-snapshot-v1'),null);
+await first.refresh();
 // The index/records must be validated again after decrypting the cached snapshot.
 const second=new PayrollVault(cloud);second.setNavigationScope('client:another-account');
 assert.equal(await second.resumeFromSnapshot(key,salt),false,'different account must not reuse snapshot');
@@ -113,7 +124,7 @@ try {
  assert.equal(await restoredNavigationSnapshot(scope,salt,key),null);
  assert.equal(tab.getItem('payroll-navigation-snapshot-v1'),null);
 }finally{Date.now=originalNow;}
-console.log('PASS: strict two-minute lifetime');
+console.log('PASS: strict ten-minute lifetime');
 
 const html=readFileSync(new URL('../public/backup/index.html',import.meta.url),'utf8');
 const auth=readFileSync(new URL('../src/cloud/auth.ts',import.meta.url),'utf8');
@@ -126,7 +137,7 @@ for(const id of ['backup-cloud-status','backup-cloud-login','backup-cloud-client
 assert.match(auth,/const redirectUri=\(\)=>new URL\('\.\/auth\/redirect\.html',import\.meta\.url\)\.href/,'MSAL v5 uses a dedicated redirect bridge');
 assert.match(backup,/cloudConnectionState\(\)/,'Microsoft account status without forced unlock');
 assert.match(auth,/sessionScope\(clientId\(\),user\)/,'account-scoped keys');
-assert.match(home,/event\.persisted && \(dashboardMutationEpoch!==mutationEpoch\(\)/,'no automatic full fetch on unchanged back navigation');
+assert.match(home,/if\(event\.persisted\)\{\s*if\(dashboardHasView\)render\(\);\s*if\(!dashboardHasView\|\|dashboardStale\|\|dashboardMutationEpoch!==mutationEpoch\(\)\|\|Date\.now\(\)>=dashboardValidUntil\)void refreshDashboard\(true\)/,'no automatic full fetch on unchanged back navigation');
 assert.match(home,/refreshDashboard\(true\)/,'explicit refresh bypasses cache');
 assert.match(auth,/if\(event\.persisted && authEpoch\(\)!==pageAuthEpoch\)window\.location\.reload\(\)/,'bfcache identity change forces a new authentication context');
 console.log('PASS: backup account settings and BFCache navigation contract');

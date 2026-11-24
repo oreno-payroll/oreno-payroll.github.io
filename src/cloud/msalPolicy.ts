@@ -75,3 +75,21 @@ export function pickPayrollAccount<T extends PayrollMsalAccount>(accounts:T[],pr
  // Require an explicit selection instead of guessing.
  return undefined;
 }
+
+/** The identity of a Graph instance cannot be changed by later sign-in or unlock. */
+export interface PayrollGraphIdentity {clientId:string;accountId:string;authEpoch:string;lockEpoch:string}
+export function bindPayrollGraphIdentity(read:()=>PayrollGraphIdentity|undefined):()=>void {
+ const captured=read();
+ if(!captured)throw new MicrosoftSignInRequiredError('Microsoftの接続状態を確認できません。');
+ // Snapshot primitives, not a mutable MSAL account object.
+ const expected={...captured};
+ let retired=false;
+ return ()=>{
+  const current=retired?undefined:read();
+  if(!current||current.clientId!==expected.clientId||current.accountId!==expected.accountId||
+    current.authEpoch!==expected.authEpoch||current.lockEpoch!==expected.lockEpoch){
+   retired=true;
+   throw new MicrosoftSignInRequiredError('Microsoftアカウントまたは保管庫のロック状態が変更されました。操作を中断しました。');
+  }
+ };
+}

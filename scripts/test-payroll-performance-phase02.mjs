@@ -43,9 +43,13 @@ const graph={
 };
 const parent=['payroll','versions','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','year-end-assist'];
 let currentAccess={path:parent,key:{},salt:'synthetic-salt',graph};
+let navigationEpoch='fixture-epoch',navigationCache=null,navigationAuthorized=true;
+const navigationVault={yearEndAccess:async()=>{calls.access++;return currentAccess;},
+ readPeopleNavigation:async path=>navigationCache?.path===path.join('/')?structuredClone(navigationCache.data):null,
+ rememberPeopleNavigation:async(path,data,epoch)=>{if(epoch===navigationEpoch)navigationCache={path:path.join('/'),data:structuredClone(data)};}};
 const sandbox={
  crypto:webcrypto,Blob,TextDecoder,TextEncoder,Uint8Array,Number,Set,Map,Date,Error,JSON,Buffer,Promise,structuredClone,
- cloudVault:async()=>({yearEndAccess:async()=>{calls.access++;return currentAccess;}}),
+ cloudVault:async()=>navigationVault,mutationEpoch:()=>navigationEpoch,captureOperationAuthorization:()=>()=>navigationAuthorized,
  encryptJson:async(_,obj)=>JSON.stringify(obj),decryptJson:async(_,text)=>JSON.parse(text),
  encryptBytes:async(_,bytes)=>Buffer.from(bytes).toString('base64'),
  decryptBytes:async(_,text)=>new Uint8Array(Buffer.from(text,'base64')),
@@ -84,6 +88,26 @@ assert.equal(count(calls.meta,'/profile.enc'),3,'every profile still needs a fre
 assert.equal(count(calls.body,'/index.enc'),1,'employee index remains freshly downloaded for every directory load');
 assert.ok(reusedMs<initialMs,`mocked 24ms downloads must improve: ${initialMs.toFixed(1)}ms → ${reusedMs.toFixed(1)}ms`);
 console.log(`[Synthetic Graph] directory (3 people): profile ciphertext 3 → 0, metadata 0 → 3, elapsed ${initialMs.toFixed(1)}ms → ${reusedMs.toFixed(1)}ms`);
+// Navigation cache is separate from the ordinary fresh repository API. A new
+// page can display the validated directory after the live root scope check.
+const warmRepo=new api.YearEndRepository();reset();await warmRepo.people(true);
+assert.equal(count(calls.body,'/profile.enc'),3);
+reset();const fromNavigation=await new api.YearEndRepository().people(true);
+assert.equal(fromNavigation.length,3);assert.equal(calls.access,1);
+assert.equal(calls.body.length,0);assert.equal(calls.meta.length,0);
+fromNavigation[0].displayName='UNSAVED SYNTHETIC EDIT';
+assert.notEqual((await new api.YearEndRepository().people(true))[0].displayName,fromNavigation[0].displayName);
+reset();await new api.YearEndRepository().people(true,true);assert.equal(count(calls.body,'/index.enc'),1);
+assert.equal(count(calls.body,'/profile.enc'),3,'forced refresh bypasses list cache');
+const beforeMutation=calls.writes.length;
+await assert.rejects(warmRepo.renamePerson(id,'New synthetic name','','wrong prior name'),/従業員名が更新/);
+await assert.rejects(warmRepo.deletePerson(id,{state:'active',displayName:'wrong prior name',alias:''}),/従業員名が更新/);
+assert.equal(calls.writes.length,beforeMutation,'stale cached name cannot authorize a rename or deletion');
+navigationCache.data=[{state:'active',id:'not-a-valid-id'}];reset();await new api.YearEndRepository().people(true);
+assert.equal(count(calls.body,'/profile.enc'),3,'invalid cache falls back to authenticated live data');
+navigationAuthorized=false;await assert.rejects(new api.YearEndRepository().people(true),/接続状態/);navigationAuthorized=true;
+console.log('PASS: employee navigation cache avoids profile/index transfers; force refresh and stale-name checks use live Graph');
+
 
 reset();const previous=await repo.year(id,2026);
 assert.equal(count(calls.body,'/years/'),1);

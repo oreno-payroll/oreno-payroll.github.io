@@ -14,15 +14,59 @@
 </svg>
 <div class="app-shell"><header class="site-header"><a class="brand" href="../index.html" aria-label="Payroll ホーム"><span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span><span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span></a><div class="header-actions"><button type="button" class="theme-toggle" data-theme-toggle aria-label="ダークモードに切り替える" title="ダークモードに切り替える" aria-pressed="false"><svg class="icon theme-icon--moon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.6 8.6 0 1 0 20.2 15.2Z"/></svg><svg class="icon theme-icon--sun" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button><a class="btn btn--secondary header-back" href="../index.html"><svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg><span>ホームへ戻る</span></a></div></header>
 <main class="vault-page backup-page settings-page">
-  <div class="vault-heading settings-heading"><h1>設定</h1></div>
+  <div class="vault-heading settings-heading"><h1 id="settings-page-title" tabindex="-1">設定</h1></div>
+  <aside class="settings-sidebar">
+  <nav id="settings-menu" class="settings-menu card" aria-label="設定項目">
+    <button type="button" class="settings-menu__item" data-settings-open="auth" aria-controls="settings-auth-panel" disabled><span><strong>Microsoft接続・認証</strong></span></button>
+    <button type="button" class="settings-menu__item" data-settings-open="employers" aria-controls="settings-employers-panel" disabled><span><strong>勤務先管理</strong></span></button>
+    <button type="button" class="settings-menu__item" data-settings-open="backup" aria-controls="settings-backup-panel" disabled><span><strong>バックアップ</strong></span></button>
+    <button type="button" class="settings-menu__item" data-settings-open="maintenance" aria-controls="settings-details-panel" disabled><span><strong>メンテナンス</strong></span></button>
+  </nav>
+  <div id="settings-version" class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div>
+  </aside>
 
-  <section class="settings-group" aria-labelledby="settings-backup-title">
-    <div class="settings-group__head"><h2 id="settings-backup-title">バックアップ</h2></div>
+  <noscript><p class="vault-alert">設定を利用するにはJavaScriptを有効にしてください。</p></noscript>
+
+  <section class="settings-group" id="settings-employers-panel" aria-labelledby="settings-employers-title" hidden>
+    <div class="sr-only"><h2 id="settings-employers-title">勤務先管理</h2></div>
+    <section class="card vault-section employer-settings" aria-labelledby="employer-list-heading">
+      <div class="vault-section__head"><h3 id="employer-list-heading">登録済みの勤務先</h3><p class="vault-info">名称はPayrollの暗号化保管庫だけに保存します。勤務区分ごとに現在の勤務先を1件設定できます。過去の勤務先は履歴として保持します。</p></div>
+      <div class="settings-action-row"><button type="button" class="btn btn--secondary" id="employer-directory-load">最新データを確認</button><button type="button" class="btn btn--primary" id="employer-directory-add" disabled>勤務先を追加</button></div>
+      <p id="employer-directory-status" class="vault-info" role="status" aria-live="polite">勤務先一覧を読み込んでください。</p>
+      <ul id="employer-directory-list" class="employer-settings__list" hidden></ul>
+      <form id="employer-directory-form" class="employer-settings__form" hidden autocomplete="off">
+        <h3>勤務先の追加・編集</h3>
+        <label for="employer-directory-target" hidden>登録対象</label>
+        <select id="employer-directory-target" class="input" hidden><option value="">新しい勤務先</option></select>
+        <label for="employer-directory-name">表示名</label>
+        <input id="employer-directory-name" class="input" type="text" maxlength="100" required autocomplete="off" spellcheck="false">
+        <label for="employer-directory-role">勤務区分</label>
+        <select id="employer-directory-role" class="input"><option value="" disabled>勤務区分を選択</option><option value="main">本業</option><option value="side">副業</option></select>
+        <label class="vault-check"><input type="checkbox" id="employer-directory-current">現在の勤務先に設定する</label>
+        <p class="vault-info">既存の明細にある未登録の勤務先も名称を設定できます。ID未設定の明細には自動で割り当てません。</p>
+        <div class="settings-action-row"><button type="button" id="employer-directory-cancel" class="btn btn--secondary">キャンセル</button><button type="submit" id="employer-directory-save" class="btn btn--primary" disabled>勤務先を保存</button></div>
+      </form>
+    </section>
+    <section class="card vault-section" id="employer-bulk-panel" aria-labelledby="employer-bulk-heading" hidden>
+      <div class="vault-section__head"><h3 id="employer-bulk-heading">明細の勤務先を一括設定</h3><p class="vault-info">勤務先未設定の明細を選び、同じ勤務区分の登録済み勤務先へ紐付けます。金額やPDF原本は変更しません。</p></div>
+      <label for="employer-bulk-target">設定する勤務先</label>
+      <select id="employer-bulk-target" class="input" disabled><option value="">勤務先を選択</option></select>
+      <p id="employer-bulk-count" class="vault-info" aria-live="polite"></p>
+      <div class="employer-bulk__actions"><button type="button" id="employer-bulk-all" class="btn btn--text btn--small" disabled>すべて選択</button><button type="button" id="employer-bulk-none" class="btn btn--text btn--small" disabled>選択解除</button></div>
+      <div id="employer-bulk-list" class="employer-bulk__list" role="group" aria-label="勤務先未設定の明細"></div>
+      <p id="employer-bulk-status" class="vault-info" role="status" aria-live="polite"></p>
+      <button type="button" id="employer-bulk-save" class="btn btn--primary" disabled>選択した明細に勤務先を設定</button>
+    </section>
+  </section>
+
+  <section class="settings-group" id="settings-backup-panel" aria-label="バックアップ" hidden>
+  <section class="settings-backup-section" id="settings-personal-panel" aria-labelledby="settings-backup-title">
+    <div class="settings-group__head"><h2 id="settings-backup-title">本人のバックアップ</h2></div>
     <div class="vault-stack backup-grid">
       <section class="card vault-section" aria-labelledby="backup-export-title">
         <div class="vault-section__head">
           <h3 id="backup-export-title">本人の給与明細をバックアップ</h3>
-          <p class="vault-info">本人の給与・賞与明細と原本PDFが対象です。年末調整の従業員データは下の専用バックアップで保存してください。復元にはこのパスワードが必要です。</p>
+          <p class="vault-info">本人の給与・賞与明細、PDF原本、勤務先情報を保存します。復元にはこのパスワードが必要です。</p>
           <p id="export-summary" class="vault-info backup-export-summary" aria-live="polite">データを確認中…</p>
           <button type="button" id="backup-cloud-load" class="btn btn--secondary" hidden>OneDriveの明細を読み込む</button>
         </div>
@@ -47,22 +91,31 @@
         </div>
         <button type="button" id="verify-button" class="btn btn--secondary backup-verify" disabled>ファイルを検証</button>
         <p id="restore-preview" class="vault-info" aria-live="polite">.payroll / .zip</p>
-        <div class="backup-card__footer backup-restore-actions">
+        <div class="backup-card__footer backup-restore-actions" data-personal-restore-stage hidden>
+          <h4>不足している明細を追加復元</h4>
+          <p class="vault-info">現在の明細を上書き・削除せず、重複や判断できない明細を除外します。</p>
+          <button type="button" id="restore-add-inspect" class="btn btn--secondary" disabled>追加復元の対象を確認</button>
+          <p id="restore-add-preview" class="vault-info" aria-live="polite">ファイルを検証してから対象を確認してください。</p>
+          <label class="vault-check"><input type="checkbox" id="restore-add-ack" disabled>追加対象と除外件数を確認しました</label>
+          <button type="button" id="restore-add-button" class="btn btn--secondary" disabled>明細を追加復元</button>
+        </div>
+        <div class="backup-card__footer backup-restore-actions" data-personal-restore-stage hidden>
+          <h4>現在の明細を置き換える</h4>
           <label class="vault-check"><input type="checkbox" id="restore-ack" disabled>現在の本人明細をすべて置き換えることを確認しました</label>
-          <button type="button" id="restore-button" class="btn btn--danger-outline" disabled>復元する</button>
+          <button type="button" id="restore-button" class="btn btn--danger-outline" disabled>置き換えて復元</button>
         </div>
       </section>
     </div>
     <p id="backup-status" class="vault-status" role="status" aria-live="polite"></p>
   </section>
 
-  <section class="settings-group" aria-labelledby="settings-yearend-backup-title">
+  <section class="settings-backup-section" id="settings-yearend-panel" aria-labelledby="settings-yearend-backup-title">
     <div class="settings-group__head"><h2 id="settings-yearend-backup-title">年末調整のバックアップ</h2></div>
     <div class="vault-stack backup-grid">
       <section class="card vault-section" aria-labelledby="ye-backup-export-heading">
         <div class="vault-section__head">
           <h3 id="ye-backup-export-heading">従業員データを保存</h3>
-          <p class="vault-info">従業員情報・各年の明細・PDF原本・見込み額・年度メモを専用ファイルにまとめます。本人用のバックアップとは別です。</p>
+          <p class="vault-info">従業員情報・各年の明細・PDF原本・見込み額・年別メモを専用ファイルにまとめます。本人用のバックアップとは別です。</p>
         </div>
         <div class="backup-secret-fields">
           <label for="ye-backup-password">バックアップのパスワード（12文字以上）</label>
@@ -82,14 +135,16 @@
         <button type="button" id="ye-restore-recheck" class="btn btn--secondary" hidden disabled>OneDriveの復元状態を確認</button>
         <div id="ye-restore-diagnosis" class="vault-info ye-restore-diagnosis" role="status" aria-live="polite" hidden></div>
         <button type="button" id="ye-restore-resume" class="btn btn--secondary" hidden disabled>照合して復元を再開</button>
-        <div class="backup-card__footer backup-restore-actions"><label class="vault-check"><input id="ye-restore-ack" type="checkbox" disabled>登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加することを確認しました</label><button type="button" id="ye-restore-commit" class="btn btn--danger-outline" disabled>復元する</button></div>
+        <div class="backup-card__footer backup-restore-actions" id="ye-restore-actions" hidden><label class="vault-check"><input id="ye-restore-ack" type="checkbox" disabled>登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加することを確認しました</label><button type="button" id="ye-restore-commit" class="btn btn--secondary" disabled>従業員を追加復元</button></div>
       </section>
     </div>
     <p id="ye-backup-status" class="vault-status" role="status" aria-live="polite"></p>
   </section>
 
-  <section class="settings-group settings-auth" aria-labelledby="settings-auth-title">
-    <div class="settings-group__head"><h2 id="settings-auth-title">認証</h2></div>
+  </section>
+
+  <section class="settings-group settings-auth" id="settings-auth-panel" aria-labelledby="settings-auth-title" hidden>
+    <div class="sr-only"><h2 id="settings-auth-title">Microsoft接続・認証</h2></div>
     <div class="settings-auth-grid">
       <section class="card settings-panel backup-cloud-settings" aria-labelledby="backup-cloud-title">
         <div class="settings-panel__head"><h3 id="backup-cloud-title">Microsoftアカウントとブラウザ記憶</h3></div>
@@ -98,13 +153,14 @@
             <p class="settings-field-label">接続アカウント</p>
             <p id="backup-cloud-status" role="status" aria-live="polite">接続状態を確認中…</p>
              <p id="backup-cloud-diagnostic" class="settings-redirect" role="note" hidden></p>
-            <div class="settings-action-row"><button type="button" id="backup-cloud-reconnect" class="btn btn--secondary" hidden>Microsoftに再接続</button><button type="button" id="backup-cloud-login" class="btn btn--secondary" disabled>Microsoftにログイン</button><button type="button" id="backup-cloud-logout" class="btn btn--danger-outline" hidden disabled>サインアウト</button></div>
+            <div class="settings-action-row"><button type="button" id="backup-cloud-reconnect" class="btn btn--secondary" hidden>Microsoftに再接続</button><button type="button" id="backup-cloud-login" class="btn btn--secondary" disabled>Microsoftに接続</button><button type="button" id="backup-cloud-logout" class="btn btn--danger-outline" hidden disabled>サインアウト</button></div>
           </div>
-          <div class="backup-cloud-settings__form">
-            <label for="backup-cloud-client-id">Microsoft Entra Client ID</label>
+          <details class="backup-cloud-settings__form" id="backup-cloud-advanced" open>
+            <summary>Microsoft接続の詳細設定</summary>
+            <div class="backup-cloud-settings__fields"><label for="backup-cloud-client-id">Microsoft Entra Client ID</label>
             <div class="backup-cloud-settings__input"><input id="backup-cloud-client-id" type="text" autocomplete="off" spellcheck="false" inputmode="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"><button type="button" id="backup-cloud-save" class="btn btn--secondary">保存</button></div>
-            <p class="settings-redirect">リダイレクトURI <code id="backup-cloud-redirect-uri"></code></p>
-          </div>
+            <p class="settings-redirect">リダイレクトURI <code id="backup-cloud-redirect-uri"></code></p></div>
+          </details>
         </div>
         <div class="settings-remember-browser" aria-labelledby="remember-browser-title">
           <strong id="remember-browser-title">このブラウザを記憶</strong>
@@ -138,8 +194,8 @@
   </section>
 
 
-  <section class="settings-group settings-details" aria-labelledby="settings-details-title">
-    <div class="settings-group__head"><h2 id="settings-details-title">詳細設定</h2></div>
+  <section class="settings-group settings-details" id="settings-details-panel" aria-labelledby="settings-details-title" hidden>
+    <div class="sr-only"><h2 id="settings-details-title">メンテナンス</h2></div>
     <div class="card settings-details-grid">
       <section class="settings-details-column settings-finance-income" aria-labelledby="settings-finance-income-title">
         <h3 id="settings-finance-income-title">Finance連携用の収入データ</h3>
@@ -153,7 +209,7 @@
         <h3 id="settings-orphan-title">年度データの復旧</h3>
         <p class="settings-note">通信中断などで明細が保存されても索引に登録されなかった年度を検出します。検査は読み取り専用で、復旧には確認が必要です。</p>
         <div class="settings-action-row">
-          <button type="button" id="orphan-year-check" class="btn btn--secondary">孤立年度を検査・復旧</button>
+          <button type="button" id="orphan-year-check" class="btn btn--secondary">未登録の年度データを検査</button>
           <button type="button" id="orphan-year-recover" class="btn btn--secondary" hidden disabled>確認した年度を復旧</button>
         </div>
         <p id="orphan-year-status" class="vault-status" role="status" aria-live="polite"></p>
@@ -161,19 +217,19 @@
       <section class="settings-details-column settings-legacy" aria-labelledby="settings-legacy-title">
         <h3 id="settings-legacy-title">旧データの整理・移行</h3>
         <div class="settings-legacy-subsection" aria-labelledby="settings-local-legacy-title">
-          <h4 id="settings-local-legacy-title">この端末の旧IndexedDB</h4>
+          <h4 id="settings-local-legacy-title">旧ブラウザ保存データ</h4>
           <p class="settings-legacy-caption">削除前にOneDriveの明細とPDF原本を照合し、一致しない場合は削除を中断します。</p>
           <div class="settings-legacy-actions">
-            <button type="button" id="legacy-cleanup-check" class="btn btn--secondary">旧DBを検査</button>
+            <button type="button" id="legacy-cleanup-check" class="btn btn--secondary">旧データを検査</button>
             <button type="button" id="migrate-legacy-cloud" class="btn btn--secondary">旧データを確認・移行</button>
-            <button type="button" id="legacy-cleanup-delete" class="btn btn--danger-outline">旧DBを削除</button>
+            <button type="button" id="legacy-cleanup-delete" class="btn btn--danger-outline">旧データを削除</button>
           </div>
           <p id="migrate-legacy-cloud-status" class="vault-status" role="status" aria-live="polite"></p>
           <p id="legacy-cleanup-status" class="vault-status" role="status" aria-live="polite"></p>
         </div>
         <div class="settings-legacy-subsection" aria-labelledby="settings-cloud-legacy-title">
           <h4 id="settings-cloud-legacy-title">OneDriveの旧暗号データ</h4>
-          <p class="settings-legacy-caption">現行データを照合して旧世代をごみ箱へ移動します。Finance互換の旧incomeは保持します。</p>
+          <p class="settings-legacy-caption">現在のデータを照合して、旧暗号データをごみ箱へ移動します。</p>
           <div class="settings-legacy-actions">
             <button type="button" id="cloud-cleanup-check" class="btn btn--secondary">削除対象を確認</button>
             <button type="button" id="cloud-cleanup-delete" class="btn btn--danger-outline" hidden disabled>旧暗号データをごみ箱へ移動</button>
@@ -183,14 +239,14 @@
       </section>
       <section class="settings-details-column settings-detached-originals" aria-labelledby="settings-detached-title">
         <h3 id="settings-detached-title">未参照PDF原本の管理</h3>
-        <p class="settings-note">削除済み明細や保存中断により、現在の明細から参照されない原本を探します。PDFは回収して再取込できます。削除前の編集内容を戻すにはバックアップが必要です。</p>
+        <p class="settings-note">明細に紐付いていないPDF原本を確認・整理します。編集済みの明細情報を復元するにはバックアップが必要です。</p>
         <div class="settings-action-row">
           <button type="button" id="detached-original-check" class="btn btn--secondary">未参照の原本を検査</button>
-          <a href="../upload/" class="btn btn--secondary">PDFを再取込する</a>
+          <a href="../upload/" class="btn btn--secondary">PDFを追加</a>
         </div>
         <p id="detached-original-status" class="vault-status" role="status" aria-live="polite"></p>
         <ul id="detached-original-list" class="detached-original-list" aria-label="未参照PDF原本一覧"></ul>
       </section>
     </div>
   </section>
-</main></div><div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="../build-info.js"></script></body></html>
+</main></div><script defer src="../build-info.js"></script></body></html>

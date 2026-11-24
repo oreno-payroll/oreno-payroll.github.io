@@ -13,7 +13,7 @@ assert.ok(login && unlock,'separate sign-in and password forms');
 assert.match(login,/autocomplete="off"/);
 assert.match(login,/<label for="payroll-client-id">Client ID<\/label>/);
 assert.match(login,/id="payroll-client-id"[^>]*form="payroll-cloud-login-form"/);
-assert.match(login,/id="payroll-login" type="submit"[^>]*>Microsoftアカウントに接続<\/button>/);
+assert.match(login,/id="payroll-login" type="submit"[^>]*>Microsoftに接続<\/button>/);
 assert.doesNotMatch(login,/Microsoft接続設定を変更|初回のみ|パスフレーズ/);
 assert.match(unlock,/autocomplete="on"/);
 assert.match(unlock,/id="payroll-passphrase" type="password" name="password" autocomplete="current-password"/);

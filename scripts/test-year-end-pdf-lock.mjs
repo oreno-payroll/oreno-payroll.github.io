@@ -42,13 +42,14 @@ await assert.rejects(pending,/ロック/);
 
 // Exercise the actual PDF view controller with a stand-in DOM.
 const reader={src:'',hidden:true,title:'',removeAttribute(name){if(name==='src')this.src='';}};
-const status={hidden:false,textContent:'',dataset:{},classList:{add(){}},setAttribute(){},removeAttribute(){}};
+const status={hidden:false,dataset:{},children:[],classList:{add(){}},setAttribute(){},removeAttribute(){},replaceChildren(...children){this.children=children;}};
+const createElement=()=>({textContent:'',hidden:false,setAttribute(){},addEventListener(){}});
 let remoteLock,revoked='';
 const location={href:`https://example.test/view/index.html?yearend=${id}#handoff=${ticket}`,search:`?yearend=${id}`,hash:`#handoff=${ticket}`};
 const mock={Blob,URL:class extends URL{static createObjectURL(file){assert.equal(file.type,'application/pdf');assert.notEqual(file,pdf);return 'blob:private';}static revokeObjectURL(url){revoked=url;}},
  URLSearchParams,location,navigator:{serviceWorker:{getRegistration:async()=>null}},
  window:{addEventListener(){},history:{state:null,replaceState(){}},location},
- document:{title:'',getElementById:key=>key==='pdf-status'?status:key==='pdf-reader'?reader:null},
+ document:{title:'',createElement,getElementById:key=>key==='pdf-status'?status:key==='pdf-reader'?reader:null},
  createTabLockCoordinator:callback=>{remoteLock=callback;return {check:()=>true,epoch:()=>''};},
  receiveYearEndPdf:async()=>({pdf,fileName:'架空従業員.pdf'}),
  getRecord:async()=>{throw new Error('personal data should not load');},
@@ -63,5 +64,5 @@ remoteLock();
 assert.equal(reader.hidden,true);
 assert.equal(reader.src,'');
 assert.equal(revoked,'blob:private');
-assert.match(status.textContent,/ロック/);
+assert.match(status.children[0].textContent,/ロック/);
 console.log('PASS: one-use year-end PDF handoff, no naked blob tab, lock during transfer, viewer iframe teardown');

@@ -76,7 +76,7 @@ html[data-theme="dark"] .btn--primary { background:#4268ce; color:#fff; }
 html[data-theme="dark"] .btn--primary:hover { background:#527ae0; color:#fff; }
 html[data-theme="dark"] .btn--soft { background:var(--color-primary-soft); color:var(--color-primary); }
 html[data-theme="dark"] .btn--soft:hover { background:#2f4770; }
-html[data-theme="dark"] .btn--danger { background:#452b39; color:var(--color-danger); }
+html[data-theme="dark"] .btn--danger { background:var(--state-error-bg); color:var(--color-danger); border-color:var(--state-error-border); }
 html[data-theme="dark"] .btn--danger-outline { background:var(--color-surface); color:var(--color-danger); border-color:#86505e; }
 html[data-theme="dark"] .btn--danger-outline:hover { background:#3c2936; }
 html[data-theme="dark"] .tag,
@@ -130,8 +130,7 @@ html[data-theme="dark"] .file-list__item.is-selected,
 html[data-theme="dark"] .file-list__item.is-selected:hover { background:var(--state-selected-bg); border-color:var(--state-selected-border); }
 html[data-theme="dark"] .file-status--confirmed { color:#9dbdff; }
 html[data-theme="dark"] .file-panel__foot,
-html[data-theme="dark"] .selected-file,
-html[data-theme="dark"] .save-bar { background:#1c2c40; border-color:var(--color-border); }
+html[data-theme="dark"] .selected-file { background:#1c2c40; border-color:var(--color-border); }
 html[data-theme="dark"] .progress-track,
 html[data-theme="dark"] .save-feedback__track { background:#33455b; }
 html[data-theme="dark"] .read-result { background:#243853; color:#bcd3fa; }
@@ -152,10 +151,13 @@ html[data-theme="dark"] .field--missing .field__label { color:var(--color-warnin
 html[data-theme="dark"] .field--missing .input { background:#302b29; border-color:#987245; }
 html[data-theme="dark"] .review-panel .field--auto .input { background:#243655; border-color:#5578b2; }
 html[data-theme="dark"] .review-panel .field--manual .input { background:var(--color-surface); border-color:var(--color-border-strong); }
+html[data-theme="dark"] .field-source-note__sample { background:var(--color-surface); border-color:var(--color-border-strong); }
+html[data-theme="dark"] .field-source-note__sample--auto { background:#243655; border-color:#5578b2; }
+html[data-theme="dark"] .field-source-note__sample--missing { background:#302b29; border-color:#987245; }
 html[data-theme="dark"] .review-panel .field--auto .field__label::after { color:#a9c6ff; }
 html[data-theme="dark"] .review-panel .field--manual .field__label::after { color:var(--color-muted); }
 html[data-theme="dark"] .diagnostic-dialog,
-html[data-theme="dark"] .yea-manage-dialog { background:var(--color-surface); color:var(--color-text); }
+html[data-theme="dark"] .yea-create-dialog { background:var(--color-surface); color:var(--color-text); }
 html[data-theme="dark"] .diagnostic-dialog__textarea,
 html[data-theme="dark"] .diagnostic-dialog__details pre { background:#101d2e; color:var(--color-text); border-color:var(--color-border-strong); }
 html[data-theme="dark"] .diagnostic-dialog__close:hover { background:#2d3c50; }
@@ -170,16 +172,12 @@ html[data-theme="dark"] .settings-page .vault-file-input { background:var(--colo
 html[data-theme="dark"] .vault-file-input::file-selector-button { background:var(--color-primary-soft); color:var(--color-primary); }
 html[data-theme="dark"] .vault-danger { background:#403124; color:var(--color-warning); border-color:#80563f; }
 html[data-theme="dark"] .vault-alert { background:#452b39; color:var(--color-danger); border-color:#925365; }
-html[data-theme="dark"] .vault-bottom { background:rgba(24,37,54,.97); }
-html[data-theme="dark"] .raw-details pre { background:#101927; color:#dce8f9; }
 html[data-theme="dark"] .payroll-cloud-dialog input { background:#121e2d; color:var(--color-text); }
 html[data-theme="dark"] .payroll-cloud-login { background:#243954; color:var(--color-primary); }
 html[data-theme="dark"] .payroll-cloud-error { background:#462e3a; border-color:#8e5061; color:var(--color-danger); }
 
 /* Year-end: selected months remain distinct, confirmed ones remain clearly inactive. */
 html[data-theme="dark"] .yea-person-option:hover { background:#263953; border-color:#5b7da9; }
-html[data-theme="dark"] .yea-page input:not([type=file]):not([type=checkbox]):not([type=radio]),
-html[data-theme="dark"] .yea-page select,
 html[data-theme="dark"] .yea-page textarea,
 html[data-theme="dark"] .yea-page .yea-memo-textarea { background-color:#141f2f; color:var(--color-text); border-color:var(--color-border-strong); }
 html[data-theme="dark"] .yea-stat--total { background:#263c58; border-color:#55739c; }
@@ -192,7 +190,6 @@ html[data-theme="dark"] .yea-month[data-state="draft"] { background:#253b59; bor
 html[data-theme="dark"] .yea-month[data-state="actual"] input,
 html[data-theme="dark"] .yea-month[data-state="loading"] input,
 html[data-theme="dark"] .yea-month input[type="number"]:disabled { background:#263143; color:#95a6bd; }
-html[data-theme="dark"] .yea-danger { background:var(--state-error-bg); color:var(--color-danger); border-color:var(--state-error-border); }
 html[data-theme="dark"] .yea-month[data-state="draft"] input[type="number"] { background:#152439; }
 
 /* Native calendar/number controls follow the current explicitly selected theme. */
@@ -209,3 +206,6 @@ html[data-theme="dark"] select.select {
   background-position:right 11px center;
   background-size:16px 16px;
 }
+
+html[data-theme="dark"] .app-status[data-state="warning"]::before,html[data-theme="dark"] .app-status[data-state="partial"]::before{background:var(--state-warning-bg);color:var(--state-warning-text)}
+html[data-theme="dark"] .app-status[data-state="info"]::before{background:var(--color-primary-soft);color:var(--color-primary)}

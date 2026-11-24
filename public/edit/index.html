@@ -19,15 +19,15 @@
 <div class="vault-heading"><h1>保存済み明細を編集</h1><p>PDF原本は変更せず、OneDriveに暗号化保存された入力値を確認・修正します。</p></div>
 <div id="edit-error" class="vault-alert" role="alert" hidden></div>
 <div id="editor" hidden>
-<div class="saved-file card"><div><strong id="record-name"></strong><p id="record-details"></p></div><div class="saved-file__actions"><a id="original-pdf" class="btn btn--secondary" target="_blank" rel="noopener noreferrer">原本を見る</a><a id="download-pdf" class="btn btn--icon" title="原本PDFをダウンロード" aria-label="原本PDFをダウンロード"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></a><button id="edit-delete" type="button" class="btn btn--danger-outline" title="明細を削除（PDF原本はOneDriveに保持）" aria-label="明細を削除（PDF原本はOneDriveに保持）"><svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>削除</button></div></div>
+<div class="saved-file card"><div><strong id="record-name"></strong><p id="record-details"></p></div><div class="saved-file__actions"><a id="original-pdf" class="btn btn--secondary" target="_blank" rel="noopener noreferrer">原本を見る</a><a id="download-pdf" class="btn btn--secondary btn--square" title="原本PDFをダウンロード" aria-label="原本PDFをダウンロード"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></a><button id="edit-delete" type="button" class="btn btn--danger-outline" title="削除待ちにする（確定まではPDF原本はOneDriveに保持）" aria-label="明細を削除待ちにする"><svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>削除</button></div></div>
 <section class="card review-panel saved-editor-panel" aria-label="保存データの編集">
 
             <form id="review-form" novalidate>
               <section class="form-section">
                 <div class="form-section__heading"><span class="form-section__number">01</span><h3>明細の基本情報</h3></div>
                 <div class="form-grid form-grid--two">
-                  <fieldset class="field field--choice"><legend class="field__label">勤務先 <span class="field__required">*</span></legend>
-                    <div class="segmented-choice" role="group" aria-label="勤務先">
+                  <fieldset class="field field--choice"><legend class="field__label">勤務区分 <span class="field__required">*</span></legend>
+                    <div class="segmented-choice" role="group" aria-label="勤務区分">
                       <label><input type="radio" name="job" value="main" required><span>本業</span></label>
                       <label><input type="radio" name="job" value="side" required><span>副業</span></label>
                     </div>
@@ -38,16 +38,17 @@
                       <label><input type="radio" name="kind" value="bonus" required><span>賞与</span></label>
                     </div>
                   </fieldset>
-                  <div class="field employer-identity" aria-label="独立した勤務先ID">
-                    <label class="field__label" for="employer-id">勤務先ID <span class="field__optional">任意・会社が変われば別ID</span></label>
+                  <div class="field employer-identity" aria-label="勤務先の選択">
+                    <label class="field__label" for="employer-id">勤務先</label>
                     <div class="employer-identity__row">
-                      <input class="input" id="employer-id" type="text" maxlength="36" pattern="emp_[0-9a-f]{32}" autocomplete="off" spellcheck="false" placeholder="未設定（従来どおり）">
-                      <button class="btn btn--secondary btn--small" id="employer-create" type="button">新しいIDを発行</button>
+                      <select class="input" id="employer-id" disabled><option value="">未設定</option></select>
                     </div>
-                    <small class="employer-identity__help">同じ会社では発行済みIDを貼り付けて再利用。会社名や社員番号は入力しないでください。過去明細には自動設定しません。</small>
+                    <small class="employer-identity__help">勤務先の追加・変更は設定から行えます。</small>
+                    <small class="employer-identity__help" id="employer-status" role="status" aria-live="polite"></small>
                   </div>
                   <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" name="targetMonth" type="month" required></label>
-                  <label class="field"><span class="field__label">実際の支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
+                  <label class="field"><span class="field__label">支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
+                  <label class="field" data-salary-only><span class="field__label">出勤日数</span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
                 </div>
               </section>
 
@@ -55,14 +56,13 @@
                 <div class="form-section__heading"><span class="form-section__number">02</span><h3>支給額</h3></div>
                 <div class="form-grid form-grid--two">
                   <label class="field"><span class="field__label">総支給額 <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="gross" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
-                  <label class="field"><span class="field__label">差引支給額（手取り） <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="net" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
-                  <label class="field"><span class="field__label">課税支給額 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="taxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" ><span>円</span></span></label>
-                  <label class="field"><span class="field__label">非課税支給額 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="nonTaxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
-                  <label class="field" data-bonus-only><span class="field__label">賞与額・賞与手当 <span class="field__optional">賞与のみ・任意</span></span><span class="unit-field"><input class="input" name="bonusBase" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
-                  <label class="field" data-bonus-only><span class="field__label">業績手当 <span class="field__optional">賞与のみ・任意</span></span><span class="unit-field"><input class="input" name="performanceBonus" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field"><span class="field__label">手取り <span class="field__required">*</span></span><span class="unit-field"><input class="input" name="net" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" required><span>円</span></span></label>
+                  <label class="field"><span class="field__label">課税支給額</span><span class="unit-field"><input class="input" name="taxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力" ><span>円</span></span></label>
+                  <label class="field"><span class="field__label">非課税支給額</span><span class="unit-field"><input class="input" name="nonTaxable" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-bonus-only><span class="field__label">賞与額・賞与手当</span><span class="unit-field"><input class="input" name="bonusBase" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
+                  <label class="field" data-bonus-only><span class="field__label">業績手当</span><span class="unit-field"><input class="input" name="performanceBonus" type="number" min="0" step="1" placeholder="未入力"><span>円</span></span></label>
                   <label class="field"><span class="field__label">交通費 <span class="field__optional">支給内訳</span></span><span class="unit-field"><input class="input" name="transportation" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
                   <label class="field" data-salary-only><span class="field__label">立替経費 <span class="field__optional">通勤手当と併記時のみ</span></span><span class="unit-field"><input class="input" name="reimbursedExpenses" type="number" min="0" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
-                  <label class="field" data-salary-only><span class="field__label">出勤日数 <span class="field__optional">任意</span></span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
                 </div>
               </section>
 
@@ -81,8 +81,14 @@
                 </div>
               </section>
             </form>
+<p id="edit-current-review" class="review-current" role="status" aria-live="polite"></p>
+<section class="review-confirmation" id="edit-review-confirmation" aria-label="原本との照合確認" hidden>
+  <h3>原本との照合が必要です</h3><ul data-review-warnings></ul><dl data-review-rows></dl>
+  <label class="review-confirmation__check"><input type="checkbox" id="confirm-diff" disabled>原本と照合し、この内容で保存することを確認しました。</label>
 </section>
-<details class="card raw-details"><summary>内部保存データを確認（ID・日時・全フィールド・PDF情報）</summary><p>こちらは読み取り専用のJSON表示です。実際の保存内容を確認できます。PDF本体は表示せず、サイズなどの情報を示します。</p><pre id="raw-state"></pre></details>
-<div class="vault-bottom"><div class="vault-bottom__status"><p id="edit-status" role="status" aria-live="polite"></p><label class="vault-check"><input type="checkbox" id="confirm-diff">金額の検算警告を原本と照合して確認しました</label></div><button class="btn btn--primary" id="edit-save" type="button">変更を保存</button></div>
+<details id="edit-review-history" class="review-history" hidden><summary>最後に記録した確認内容</summary><p>過去の確認記録です。現在の検算結果や今回の保存承認とは異なります。</p><p data-review-history-date></p><ul></ul></details>
+</section>
+<div class="record-diagnostic-entry"><button class="btn btn--text btn--small" id="record-diagnostic-open" type="button" disabled>詳細診断</button></div>
+<div class="vault-bottom"><div class="vault-bottom__status"><p id="edit-status" role="status" aria-live="polite"></p></div><button class="btn btn--primary" id="edit-save" type="button">変更を保存</button></div>
 </div>
-</main></div><div class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div><script defer src="../build-info.js"></script></body></html>
+</main></div></body></html>

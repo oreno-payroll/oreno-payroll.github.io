@@ -54,7 +54,7 @@ export function validatePayrollForm(input: PayrollForm): FormValidation {
   const form = applicablePayrollForm(input);
   const errors: string[] = [];
   const warnings: string[] = [];
-  if (form.job !== 'main' && form.job !== 'side') errors.push('勤務先を選択してください。');
+  if (form.job !== 'main' && form.job !== 'side') errors.push('勤務区分を選択してください。');
   if (form.kind !== 'salary' && form.kind !== 'bonus') errors.push('明細種別を選択してください。');
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(form.targetMonth ?? '')) errors.push('対象年月が不正です。');
   if (!validDate(form.paymentDate ?? '')) errors.push('支給日が不正です。');
@@ -118,6 +118,20 @@ export function validatePayrollForm(input: PayrollForm): FormValidation {
 }
 
 /** 1つの勤務先・種類・対象月につき1件を標準とする。賞与の同月複数回も確認が必要。 */
-export function payrollPeriodKey(form: PayrollForm): string {
-  return `${form.job ?? ''}|${form.kind ?? ''}|${form.targetMonth ?? ''}`;
+export function payrollPeriodKey(form: PayrollForm, employerId?:string): string {
+  const period=`${form.job ?? ''}|${form.kind ?? ''}|${form.targetMonth ?? ''}`;
+  return employerId===undefined?period:`${period}|${employerId}`;
+}
+export interface PayrollPeriodIdentity {form:PayrollForm;employerId?:string}
+/** Legacy IDs are unknown, not an alias for any particular employer. */
+export function payrollPeriodRelation(a:PayrollPeriodIdentity,b:PayrollPeriodIdentity):'same'|'ambiguous'|'different' {
+  if(payrollPeriodKey(a.form)!==payrollPeriodKey(b.form))return 'different';
+  if(a.employerId===b.employerId)return 'same';
+  return a.employerId===undefined||b.employerId===undefined?'ambiguous':'different';
+}
+export function payrollPeriodsConflict(a:PayrollPeriodIdentity,b:PayrollPeriodIdentity):boolean {
+  return payrollPeriodRelation(a,b)!=='different';
+}
+export class PayrollEmployerConfirmationError extends Error {
+  constructor(){super('同じ勤務区分・年月・種別に勤務先が未設定の明細があります。既存明細と今回の明細の勤務先を確認してください。自動で除外・上書きはしません。');this.name='PayrollEmployerConfirmationError';}
 }

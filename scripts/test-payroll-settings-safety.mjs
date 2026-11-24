@@ -12,7 +12,7 @@ const partial=operationFeedback('削除',{status:'partial',message:''});
 assert.equal(success.kind,'success');
 assert.equal(error.kind,'error');
 assert.equal(error.message,'アクセス権限がありません');
-assert.equal(partial.kind,'error');
+assert.equal(partial.kind,'partial');
 assert.match(partial.message,/一部完了/);
 assert.equal(operationFeedback('削除',null).kind,'error');
 assert.equal(operationFeedback('削除',{status:'success',message:'できません'}).kind,'success','user-visible text must never decide success');
@@ -22,7 +22,7 @@ assert.match(backup,/operationResult:OperationResult\|null=null/);
 assert.match(backup,/finishOperation\('partial'\)/,'partial operations are marked explicitly');
 console.log('PASS: explicit success/partial/error, unknown fails closed, wording cannot change status');
 const entry=backup.slice(backup.indexOf("cloudLogin.addEventListener('click'"),backup.indexOf('let logoutRedirectReady=false;'));
-const consent=entry.indexOf('window.confirm('),disable=entry.indexOf('cloudLogin.disabled=true'),switchAccount=entry.indexOf('chooseMicrosoftAccount()');
+const consent=entry.indexOf('await approveSettings('),disable=entry.indexOf('cloudLogin.disabled=true'),switchAccount=entry.indexOf('chooseMicrosoftAccount()');
 assert.ok(consent>=0 && disable>consent && switchAccount>consent,'confirmation must precede any account switch');
 assert.match(entry,/すべてのタブをロック/);
 assert.match(entry,/未保存/);
@@ -79,7 +79,7 @@ async function switchScenario(approve){
  const events=[];let click;
  const cloudLogin={disabled:false,addEventListener:(_type,callback)=>{click=callback;}};
  const context={
-  cloudLogin,busy:false,window:{confirm:()=>{events.push('confirm');return approve;}},
+  cloudLogin,busy:false,approveSettings:async(_request,guard)=>{events.push('confirm');return approve&&guard();},
   chooseMicrosoftAccount:async()=>{events.push('switch');},
   cloudState:{textContent:'',dataset:{}},cloudDiagnostic:{hidden:true,textContent:''},
   microsoftDiagnostic:()=>({message:'synthetic failure',code:'AUTH_INITIALIZE'}),navigator:{onLine:true},
@@ -100,13 +100,13 @@ const transition=backup.slice(backup.indexOf('function reportStatusTransition(){
 assert.ok(transition.startsWith('function reportStatusTransition(){'));
 function testTransition(result){
  const shown=[];
- const appStatus={clear:()=>shown.push(['clear']),loading:m=>shown.push(['loading',m]),success:m=>shown.push(['success',m]),error:m=>shown.push(['error',m])};
+ const appStatus={clear:()=>shown.push(['clear']),loading:m=>shown.push(['loading',m]),success:m=>shown.push(['success',m]),error:m=>shown.push(['error',m]),show:(kind,m)=>shown.push([kind,m])};
  const context={busy:false,wasBusy:true,currentOperation:{label:'旧DBを削除',result:'legacy-cleanup-status'},operationResult:result,operationCancelled:false,appStatus,operationFeedback};
  vm.runInNewContext(transition+'\nglobalThis.fire=reportStatusTransition;',context);
  context.fire();return shown;
 }
 assert.equal(testTransition({status:'success',message:'できませんでしたと表示されても明示成功'})[0][0],'success');
 assert.equal(testTransition({status:'error',message:'アクセス権限がありません'})[0][0],'error');
-assert.equal(testTransition({status:'partial',message:''})[0][0],'error');
+assert.equal(testTransition({status:'partial',message:''})[0][0],'partial');
 assert.equal(testTransition(null)[0][0],'error');
 console.log('PASS: actual transition uses the typed result, not the message body');

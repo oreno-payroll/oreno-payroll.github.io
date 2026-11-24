@@ -8,11 +8,12 @@ const sharedStatus=fs.readFileSync(new URL('../src/ui/appStatus.ts',import.meta.
 const safePdf=fs.readFileSync(new URL('../src/pdf/safePdf.ts',import.meta.url),'utf8');
 const runnable=stripTypeScriptTypes(sharedStatus.replace(/^export /gm,'')+'\n'+safePdf.replace(/^export /gm,'')+'\n'+source.replace(/^import .*?;\s*$/gm,''),{mode:'strip'});
 const pdf=new Blob(['%PDF-1.4\ncloud-test\n'],{type:'application/pdf'});
-const reader={hidden:true,src:'',title:''};const status={hidden:false,textContent:'',dataset:{},classList:{add(){}},setAttribute(){},removeAttribute(){}};
+const reader={hidden:true,src:'',title:''};const status={hidden:false,dataset:{},children:[],classList:{add(){}},setAttribute(){},removeAttribute(){},replaceChildren(...children){this.children=children;}};
+const createElement=()=>({textContent:'',hidden:false,setAttribute(){},addEventListener(){}});
 let unregistered=false;
 const ctx={
  window:{addEventListener(){},isSecureContext:true},
- document:{title:'',getElementById(id){return id==='pdf-status'?status:id==='pdf-reader'?reader:null;}},
+ document:{title:'',createElement,getElementById(id){return id==='pdf-status'?status:id==='pdf-reader'?reader:null;}},
  location:{href:'https://payroll.example/view/index.html?id=7',search:'?id=7'},
  navigator:{serviceWorker:{async getRegistration(){return {active:{scriptURL:'https://payroll.example/view/pdf-sw.js'},async unregister(){unregistered=true;}};}}},
  URL:class extends URL{static createObjectURL(blob){assert.equal(blob.type,'application/pdf');assert.notEqual(blob,pdf);return 'blob:cloud-payroll-pdf';}static revokeObjectURL(){}},
@@ -28,5 +29,5 @@ assert.equal(reader.src,'blob:cloud-payroll-pdf');
 assert.equal(ctx.document.title,'給与明細.pdf');
 assert.equal(reader.hidden,false);assert.equal(status.hidden,false);
 assert.equal(status.dataset.state,'success');
-assert.match(status.textContent,/PDFを表示しました/);
+assert.match(status.children[0].textContent,/PDFを表示しました/);
 console.log('OK: OneDrive復号PDFをBlob URLで閲覧・旧Workerを解除');

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
+import {navigationFeedback} from '../src/ui/navigationNotice.ts';
 import {dashboardFreshnessLabel,describePayrollSaveProgress} from '../src/ui/operationFeedback.ts';
 const src=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const sequences=[
@@ -32,18 +33,18 @@ const dashboard=src('src/main.ts'),upload=src('src/upload.ts'),edit=src('src/edi
 const store=src('src/storage/payrollStore.ts');
 assert.match(dashboard,/dashboardHasView/);
 assert.match(dashboard,/dashboardStale/);
-assert.match(dashboard,/if\(!hadView\)registrationPanel\.hidden = true/,'a recheck must not erase a previously verified screen');
+assert.match(dashboard,/if\(!hadView\)\{registrationPanel\.hidden = true/,'a recheck must not erase a previously verified screen');
 assert.match(dashboard,/if\(!hadView\)periodLabel\.textContent=message/,'background progress cannot replace a visible date range');
 assert.match(dashboard,/dashboardHasView\?'stale':'unavailable'/);
 assert.match(dashboard,/dashboardLoading\|\|dashboardStale/,'mutation gate must reject saving while rechecking or stale');
-assert.match(dashboard,/sideZipButton\.disabled = exportingSideZip \|\| side\.length === 0 \|\| dashboardLoading \|\| dashboardStale/);
+assert.match(dashboard,/sideZipButton\.disabled = exportingSideZip \|\| exportCount === 0 \|\| dashboardLoading \|\| dashboardStale/);
 assert.match(upload,/describePayrollSaveProgress\(message\)/);
 assert.match(upload,/if\(view\.phase>=savePhase\)/,'parallel upload progress must not regress');
 assert.match(upload,/saveProgress\.removeAttribute\('aria-valuenow'\)/,'unknown progress is indeterminate, never a fake percent');
 assert.match(upload,/saveGuidance\.textContent='OneDriveの保存済み一覧を確認してから再試行してください/);
 assert.match(store,/onProgress\?\:\(stage:string\)=>void/,'metadata-only edit exposes progress callback without fetching PDF');
 assert.match(store,/await vault\.save\(\{\.\.\.record,revision:\(prior\.revision\?\?0\)\+1\},onProgress,/);
-assert.match(edit,/updateRecordMetadata\(updated, conflicts, recordSignature\(record\),stage=>appStatus\.loading\(stage\)\)/);
+assert.match(edit,/updateRecordMetadata\(updated, conflicts, recordSignature\(record\),stage=>appStatus\.loading\(stage\),employerDirectorySignature\(employerDirectory\)\)/);
 assert.doesNotMatch(dashboard,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
 assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
 
@@ -63,40 +64,54 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
   setAttribute(k,v){this.attributes.set(k,v);},removeAttribute(k){this.attributes.delete(k);}};
  const registrationPanel={hidden:false};
  const yearSelect={disabled:false,value:'2026'},bonusToggle={disabled:false},forecastToggle={disabled:false};
- const sideZipButton={disabled:false};
- let tries=0;
+ const sideZipButton={disabled:false},fiscalModeButton={disabled:false},calendarModeButton={disabled:false};
+ const radios=[{disabled:false},{disabled:false},{disabled:false}];
+ const periodControls=[yearSelect,bonusToggle,forecastToggle,fiscalModeButton,calendarModeButton,...radios];
+ let tries=0,failInitial=true,renders=0;
+ const notifications=[];let nextNotice={operation:'upload-saved',count:3};
  const ctx={
-  dashboardFreshnessLabel,registrationPanel,periodLabel,yearSelect,bonusToggle,forecastToggle,sideZipButton,
+  dashboardFreshnessLabel,registrationPanel,periodLabel,yearSelect,bonusToggle,forecastToggle,sideZipButton,fiscalModeButton,calendarModeButton,
   selectedPeriodRecords:()=>[{form:{job:'side'}}],exportingSideZip:false,
-  deletingRecordIds:new Set(),initialYear:2026,currentPeriodYear:()=>2026,
-  saved:[],mutatingSnapshot:null,
-  document:{getElementById:()=>indicator,querySelector:()=>refresh,querySelectorAll:()=>[button]},
-  appStatus:{loading(){},success(){},error(){}},
+  deletionBusy:()=>false,renderPendingDeletion(){},renderList(){},initialYear:2026,currentPeriodYear:()=>2026,
+  saved:[],employerDirectory:[],legacyDirectory:[],legacyEmployers:()=>[],employerFilter:{disabled:true},mutatingSnapshot:null,
+  document:{getElementById:()=>indicator,querySelector:()=>refresh,querySelectorAll:selector=>selector.includes("statement-kind")?radios:[button]},
+  appStatus:{loading(m){notifications.push(['loading',m]);},success(m){notifications.push(['success',m]);},error(m){notifications.push(['error',m]);},show(k,m){notifications.push([k,m]);}},
+  authEpoch:()=> 'fixture-epoch',takeNavigationNotice:()=>{const n=nextNotice;nextNotice=null;return n;},navigationFeedback,
   loadRecordSummaries:async opts=>{
+   if(failInitial)throw new Error('synthetic initial failure');
    tries++;opts.onProgress?.('模擬: OneDrive読込中');
    if(tries===2)throw new Error('synthetic HTTP 503');
+   opts.onEmployerDirectory?.([{id:'fixture',name:tries===1?'Synthetic old':'Synthetic new',role:'side',current:true}]);
    return [{id:17,form:{job:'side'}}];
   },
-  updateYearOptions(){},render(){registrationPanel.hidden=false;periodLabel.textContent='2026年度の前回確認済みデータ';},
+  updateYearOptions(){},render(){renders++;registrationPanel.hidden=false;periodLabel.textContent='2026年度の前回確認済みデータ';},
   mutationEpoch:()=> 'fixture-epoch',summaryCacheInfo:async()=>({cached:tries===1,deadline:Date.now()+120_000}),
   console:{error(){}},
  };
  runInNewContext(body,ctx);
  await ctx.phase5Refresh();
- assert.equal(ctx.phase5State().dashboardHasView,true);
+ assert.equal(ctx.phase5State().dashboardHasView,false);assert.equal(renders,0,'unavailable records must never be aggregated');
+ assert.ok(periodControls.every(x=>x.disabled));assert.equal(sideZipButton.disabled,true);assert.equal(indicator.dataset.freshness,'unavailable');assert.equal(refresh.disabled,false);
+ failInitial=false;
+ await ctx.phase5Refresh();
+ assert.ok(periodControls.every(x=>!x.disabled));
+ assert.equal(ctx.phase5State().dashboardHasView,true);assert.equal(ctx.employerDirectory[0].name,'Synthetic old');
+ assert.deepEqual(notifications.at(-1),['success','明細3件を保存しました。Finance連携データも更新済みです。']);
+ assert.equal(nextNotice,null,'one-time handoff consumed after successful load');
  assert.match(indicator.textContent,/表示専用/);
  assert.equal(registrationPanel.hidden,false);assert.equal(button.disabled,false);
  const priorLabel=periodLabel.textContent;
  await ctx.phase5Refresh(true);
- assert.equal(ctx.phase5State().dashboardStale,true);
+ assert.equal(ctx.phase5State().dashboardStale,true);assert.equal(ctx.employerDirectory[0].name,'Synthetic old');
  assert.equal(registrationPanel.hidden,false,'recheck error must not blank the previous complete screen');
  assert.equal(periodLabel.textContent,priorLabel,'recheck progress must not destroy visible fiscal period');
  assert.match(indicator.textContent,/変更操作は停止/);
  assert.equal(button.disabled,true,'a failed recheck disables deletion');
  assert.equal(sideZipButton.disabled,true,'a failed recheck disables bulk PDF ZIP');
  assert.equal(yearSelect.disabled,false,'local year filtering remains available');
- await ctx.phase5Refresh(true);
- assert.equal(ctx.phase5State().dashboardStale,false);
+ await ctx.phase5Refresh(true,{kind:'partial',message:'削除完了・連携未同期'});
+ assert.deepEqual(notifications.at(-1),['partial','削除完了・連携未同期'],'refresh cannot overwrite operation outcome');
+ assert.equal(ctx.phase5State().dashboardStale,false);assert.equal(ctx.employerDirectory[0].name,'Synthetic new');
  assert.equal(button.disabled,false,'successful Graph confirmation restores mutation controls');
  assert.equal(sideZipButton.disabled,false);
  assert.equal(indicator.textContent,'OneDrive確認済み');

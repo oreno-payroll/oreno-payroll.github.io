@@ -46,6 +46,7 @@ await assert.rejects(api.readYearEndBackup(zip.writeZip([{name:'manifest.json',d
 const remote=new Map();let writes=0,serial=0;
 const path=(parts,name)=>[...parts,name].join('/');
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(parts,name){const r=remote.get(path(parts,name));return r?{...r}:null;},
  async metadata(parts,name){const r=remote.get(path(parts,name));return r?{etag:r.etag,id:r.id}:null;},
  async write(parts,name,text,prior){const key=path(parts,name),old=remote.get(key);

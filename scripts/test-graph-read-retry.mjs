@@ -23,7 +23,7 @@ function fixture({badFolder=0,badFile=0,notFound=false}={}) {
   }
   throw new Error('予想外のURL種別');
  };
- return {graph:new PayrollGraph('fake-token',fake),calls};
+ return {graph:new PayrollGraph('fake-token',fake, undefined, undefined, undefined, false),calls};
 }
 {
  const {graph,calls}=fixture({badFolder:2,badFile:2});

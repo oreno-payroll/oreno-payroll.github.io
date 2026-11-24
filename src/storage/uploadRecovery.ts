@@ -11,6 +11,7 @@ export interface UploadRecoveryVault<T extends UploadRecoveryRecord> {
  inspectDetachedUploadMatches(report:DetachedOriginalReport,attempt:readonly UploadRecoveryAttempt[]):Promise<readonly {targetMonth:string;fileHash:string}[]>;
  inspectIncomeConsistency(years:ReadonlySet<string>):Promise<string[]>;
  original(record:T):Promise<Blob>;
+ legacyOriginalDigest(record:T):Promise<string>;
 }
 export interface UploadRecoveryReport {saved:number;attempted:number;originalsVerified:number;detached:number;incomeUnsyncedYears:string[]}
 export function uploadRecoveryAttempt(record:{fileHash?:string;form:Record<string,string>;employerId?:string}):UploadRecoveryAttempt {
@@ -23,9 +24,12 @@ export async function pdfSha256(blob:Blob):Promise<string>{
  const digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
  return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
 }
-export async function resolveLegacyOriginalHashes<T extends UploadRecoveryRecord>(vault:{original(record:T):Promise<Blob>},records:readonly T[]):Promise<Map<number,string>>{
+export async function resolveLegacyOriginalHashes<T extends UploadRecoveryRecord>(vault:{legacyOriginalDigest(record:T):Promise<string>},records:readonly T[]):Promise<Map<number,string>>{
  const hashes=new Map<number,string>();
- for(const record of records)if(!record.fileHash)hashes.set(record.id,await pdfSha256(await vault.original(record)));
+ for(const record of records){
+  if(!record.fileHash)hashes.set(record.id,await vault.legacyOriginalDigest(record));
+  else if(!/^[a-f0-9]{64}$/.test(record.fileHash))throw new Error('PDF原本のSHA-256が不正です。');
+ }
  return hashes;
 }
 export async function inspectUploadRecovery<T extends UploadRecoveryRecord>(

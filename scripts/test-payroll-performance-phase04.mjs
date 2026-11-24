@@ -44,7 +44,7 @@ function fixture({delayMs=0,force304=false,first401=false,first429=false}={}) {
  };
  const graph=new PayrollGraph(async()=>token,http,()=>{mutations++;},{
    invalidate(){},async refresh(){refreshes++;return (token='token-B');},
- });
+ }, undefined, false);
  const read=(limit=1024)=>graph.read(['payroll'],'2026.enc',limit);
  return {graph,read,events,stats:()=>({metaCalls,bodyCalls,conditional,mutations,refreshes}),
    change(text){body=text;tag='"etag-b"';},remove(){exists=false;},
@@ -133,7 +133,9 @@ console.log('PASS: read-only Graph 401 token refresh and 429 bounded retry conti
 // Static confidentiality and mutation invariants deliberately cover non-Graph paths.
 const {readFileSync}=await import('node:fs');
 const src=readFileSync(new URL('../src/cloud/graph.ts',import.meta.url),'utf8');
-assert.match(src,/if\(!readonly\)\{this\.clearEncryptedReadCache\(\);this\.onMutation\(\);\}/);
+assert.match(src,/if\(!readonly&&!lockControl\)\{this\.requireWriteOwner\(\);this\.clearEncryptedReadCache\(\);this\.onMutation\(\);\}/);
+assert.match(src,/if\(!readonly&&!lockControl\)\{await this\.verifyWriteOwner\(\);if\(this\.writeOwner\)this\.writeAttempted=true;\}/);
+assert.match(src,/if\(name!==PAYROLL_WRITE_LOCK_NAME&&!parts\.includes\('originals'\)\)this\.rememberEncryptedRead\(/);
 assert.match(src,/readonly&&accept304&&r\.status===304/);
 assert.match(src,/!parts\.includes\('originals'\)/);
 assert.match(src,/await this\.readMetadata<Item>\(metadataPath,'年度暗号ファイル情報の照会',cached\.file\.etag\)/);

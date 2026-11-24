@@ -67,5 +67,5 @@ try{
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 assert.match(read('src/upload.ts'),/function notice\(kind:Exclude<AppStatusKind,'loading'>,message: string\): void \{\s*appStatus\.show\(kind,message\);/);
 assert.match(read('src/edit.ts'),/rememberNavigationNotice\(\{operation:'edit-saved'\},operationEpoch\)/);
-assert.match(read('src/year-end-assist.ts'),/if\(result.cleanupPending\)appStatus.partial/);
+assert.match(read('src/year-end-assist.ts'),/if\(result.cleanupPending\)appStatus.success/);
 console.log('PASS: actual toast states, explicit kinds, persistent error/partial, dismissal and timer isolation');

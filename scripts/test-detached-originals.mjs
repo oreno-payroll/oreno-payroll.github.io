@@ -16,6 +16,7 @@ async function fixture(){
  const state={yearEtag:'y1',indexEtag:'i1',otherYear:false,referenceOrphan:false,deletes:[],reads:0};
  const index={format:'payroll-index-v1',years:['2026'],incomeYears:[]};
  const graph={
+ async withWriteLock(operation){return operation();},
   async listFolder(p){if(p.at(-1)==='statements')return [{name:'2026.enc',folder:false,etag:state.yearEtag},...(state.otherYear?[{name:'2025.enc',folder:false,etag:'orphan-year'}]:[])];throw new Error('unexpected listFolder');},
   async read(p,name){assert.deepEqual(p,path);assert.equal(name,`${orphan}.enc`);state.reads++;return {id:'cloud-orphan',etag:'o1',size:cipher.length,text:cipher};},
   async metadata(_,name){assert.equal(name,'2026.enc');return {id:'year-file',etag:state.yearEtag};},

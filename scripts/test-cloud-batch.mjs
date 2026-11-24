@@ -17,6 +17,7 @@ const result=await build({
 const {PayrollVault,GraphError,encryptJson,decryptJson,decryptBytes}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
 const encoder=new TextEncoder();
 class FakeGraph {
+ async withWriteLock(operation){return operation();}
  files=new Map();reads=new Map();writes=new Map();activeOriginals=0;maxOriginals=0;
  hooks={};
  path(parts,name){return [...parts,name].join('/');}

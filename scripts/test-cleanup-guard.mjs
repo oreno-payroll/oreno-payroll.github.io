@@ -8,6 +8,7 @@ const root=new URL('../',import.meta.url).pathname;
 const built=await build({stdin:{contents:"export {PayrollVault} from './src/cloud/vault.ts'; export {GraphError} from './src/cloud/graph.ts';",resolveDir:root,sourcefile:'test-cleanup.ts',loader:'ts'},bundle:true,platform:'node',format:'esm',target:'es2022',write:false,logLevel:'silent'});
 const {PayrollVault,GraphError}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].contents).toString('base64'));
 class CloudMock {
+ async withWriteLock(operation){return operation();}
   files=new Map(); reads=[];deleted=[]; changed=false;
   key(parts,name){return [...parts,name].join('/');}
   async read(parts,name){const k=this.key(parts,name);this.reads.push(k);return this.files.has(k)?{...this.files.get(k)}:null;}

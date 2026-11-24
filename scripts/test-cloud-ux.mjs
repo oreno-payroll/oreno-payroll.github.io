@@ -54,7 +54,7 @@ const remote=async (url)=>{
  if(url.includes(':/2026.enc')){fileCalls++;return new Response('',{status:404});}
  throw new Error('未定義の模擬アクセス: '+url.split('?')[0]);
 };
-const store=new graph.PayrollGraph('test-token',remote);
+const store=new graph.PayrollGraph('test-token',remote, undefined, undefined, undefined, false);
 assert.equal(await store.read(['payroll','statements'],'2026.enc',100),null);
 assert.equal(await store.read(['payroll','statements'],'2026.enc',100),null);
 assert.equal(rootCalls,1);

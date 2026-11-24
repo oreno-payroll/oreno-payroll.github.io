@@ -12,7 +12,7 @@ const css=read('public/styles/upload.css');
 const readme=read('README.md');
 assert.match(edit,/title="削除待ちにする（確定まではPDF原本はOneDriveに保持）"/);
 assert.doesNotMatch(edit,/保存済みの明細とPDF原本を削除/);
-assert.match(editor,/未参照になった暗号化PDF原本をごみ箱へ移動します/);
+assert.match(editor,/暗号化PDF原本は保全します/);
 assert.match(setup,/Finance連携用の収入データ/);
 assert.match(setup,/Financeでの取得・自動同期には、Finance側での初回連携が必要/);
 assert.match(readme,/### Financeへの収入連携（実装済み）/);

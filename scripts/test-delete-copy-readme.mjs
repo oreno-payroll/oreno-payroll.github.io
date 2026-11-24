@@ -9,10 +9,10 @@ const vault = source('src/cloud/vault.ts');
 
 assert.match(main,/remove\.title = '[^']*PDF原本はOneDriveに保持/);
 assert.match(main,/解析・入力情報とFinance連携用の収入情報から選択した明細を除外します/);
-assert.match(main,/未参照になった暗号化PDF原本をごみ箱へ移動します/);
+assert.match(main,/暗号化PDF原本は保全します/);
 assert.doesNotMatch(main,/入力情報とPDF原本を両方削除します|明細とPDF原本を削除/);
 assert.match(edit,/保存済みの入力情報とFinance連携用の収入情報から除外します/);
-assert.match(edit,/未参照になった暗号化PDF原本をごみ箱へ移動します/);
+assert.match(edit,/暗号化PDF原本は保全します/);
 assert.doesNotMatch(edit,/入力情報とPDF原本が削除されます|件を完全に削除/);
 assert.match(vault,/async remove\(id:number,expectedMatch\?:\(current:CloudRecord\)=>boolean,checkConflicts\?:\(records:readonly CloudRecord\[\],year:string\)=>void\):Promise<void>\s*\{/);
 assert.match(vault,/PDF原本は事故時の復元と監査のためOneDriveに保持/);

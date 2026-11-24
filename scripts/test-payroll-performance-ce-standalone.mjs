@@ -21,6 +21,7 @@ for(const year of years)put(`payroll/statements/${year}.enc`,doc([make(Number(ye
 put('payroll/originals/2026/05/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.enc','pdf-cipher-placeholder');
 const calls={read:[],meta:[],list:[]};
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(parts,name){const p=[...parts,name].join('/');calls.read.push(p);return files.get(p)??null},
  async metadata(parts,name){const p=[...parts,name].join('/');calls.meta.push(p);const row=files.get(p);return row?{id:row.id,etag:row.etag,size:row.size}:null},
  async listFolder(parts){const prefix=parts.join('/')+'/';calls.list.push(prefix);return [...files.entries()].filter(([p])=>p.startsWith(prefix)&&!p.slice(prefix.length).includes('/')).map(([p,v])=>({id:v.id,name:p.slice(prefix.length),etag:v.etag,size:v.size,folder:false}))},

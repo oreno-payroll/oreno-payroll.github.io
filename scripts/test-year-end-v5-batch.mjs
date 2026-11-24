@@ -9,6 +9,7 @@ const strip=src=>stripTypeScriptTypes(src.replace(/^import\s+[\s\S]*?\s+from\s+[
 const files=new Map();let seq=0,annualWrites=0,originalWrites=0,originalReads=0;
 const key=(path,name)=>[...path,name].join('/');
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(path,name){const row=files.get(key(path,name));if(name.endsWith('.enc')&&path.includes('originals'))originalReads++;return row?{...row}:null;},
  async write(path,name,text,prior){const k=key(path,name),row=files.get(k);
   if(prior ? !row||row.etag!==prior.etag : row)throw new Error('ETag collision');

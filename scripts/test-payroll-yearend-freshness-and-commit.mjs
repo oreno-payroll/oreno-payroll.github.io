@@ -23,6 +23,7 @@ const profile=(yearFiles)=>({format:'payroll-year-end-person-v1',id,displayName:
 const originalProfile=()=>profile({'2025':yearFile2025,'2026':yearFile2026});
 let readYearHook=null;
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(parts,name){const item=get(parts,name);if(name==='index.enc')counts.index++;else if(name==='profile.enc')counts.profile++;else if(parts.includes('years')){counts.year++;if(readYearHook)await readYearHook(parts,name);}
   return item?{...item}:null;},
  async metadata(parts,name){counts.meta++;const item=get(parts,name);return item?{id:item.id,etag:item.etag,size:item.size}:null;},

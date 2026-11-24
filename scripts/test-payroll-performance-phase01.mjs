@@ -19,6 +19,7 @@ const {PayrollVault,GraphError,encryptJson,decryptJson,beginPerfOperation,observ
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const encoder=new TextEncoder();
 class GraphMock {
+ async withWriteLock(operation){return operation();}
   files=new Map();
   body=0;metadataCount=0;yearReads=0;yearMetadata=0;writes=0;delayBody=0;delayMeta=0;hook=null;
   path(parts,name){return [...parts,name].join('/');}

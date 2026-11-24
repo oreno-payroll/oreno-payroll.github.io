@@ -15,6 +15,7 @@ const bundle=await build({stdin:{contents:[
 const {PayrollVault,GraphError,encryptJson,decryptJson}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].contents).toString('base64'));
 const encoder=new TextEncoder();
 class Graph {
+ async withWriteLock(operation){return operation();}
  files=new Map();writes=new Map();hooks={};
  path(parts,name){return [...parts,name].join('/');}
  async read(parts,name){const path=this.path(parts,name);await this.hooks.read?.(path,this);return this.files.get(path)??null;}

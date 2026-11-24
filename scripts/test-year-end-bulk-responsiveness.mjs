@@ -13,6 +13,7 @@ const wait=ms=>new Promise(done=>setTimeout(done,ms));
 const root=['payroll','versions','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','year-end-assist'];
 const key=(path,name)=>[...path,name].join('/');
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(path,name){
   if(name==='profile.enc'){profileActive++;maxProfile=Math.max(profileActive,maxProfile);await wait(5);profileActive--;}
   if(path.includes('originals'))originalReads++;

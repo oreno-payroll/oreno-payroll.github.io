@@ -10,6 +10,7 @@ const files=new Map(),root=['payroll','versions','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaa
 const key=(p,n)=>[...p,n].join('/');
 let etag=0,originalWrites=0,yearWrites=0;
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(p,n){return files.get(key(p,n))??null;},
  async write(p,n,text,prior){const k=key(p,n),old=files.get(k);if(prior?old?.etag!==prior.etag:!!old)throw new Error('ETag collision');
   files.set(k,{text,etag:`e${++etag}`});if(p.includes('originals'))originalWrites++;if(p.includes('years'))yearWrites++;},
@@ -58,7 +59,7 @@ const after=await repo.year(id,2026);
 assert.equal(after.documents[0].taxable,999999,'explicit acknowledgement permits intentional unusual record');
 assert.ok(after.noPaymentMonths.includes('2026-08'));
 const deleted=await repo.deleteDocument(id,2026,after.documents[0].id);
-assert.equal(deleted.cleanupPending,false);
+assert.equal(deleted.cleanupPending,true);
 const final=await repo.year(id,2026);
 assert.ok(final.noPaymentMonths.includes('2026-08'));
 const history=final.history.filter(e=>e.documentId===after.documents[0].id);

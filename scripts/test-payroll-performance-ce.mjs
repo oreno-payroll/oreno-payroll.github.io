@@ -27,6 +27,7 @@ const make=(id,year,revision=1)=>({id,fileName:`synthetic-${year}.pdf`,originalF
  originalId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',originalMonth:'2026-05',savedAt:'2026-06-01T00:00:00Z',revision,pages:1,warningsAcknowledged:true,form:form(year)});
 const path=(parts,name)=>[...parts,name].join('/');
 class FakeGraph{
+ async withWriteLock(operation){return operation();}
  files=new Map();seq=0;calls={index:0,annual:0,inventory:0,metadata:0,original:0,write:0};
  onOriginal=null;onAnnual=null;onInventory=null;
  put(parts,name,text){const key=path(parts,name);this.files.set(key,{id:key,etag:`e-${++this.seq}`,size:encoder.encode(text).length,text});}

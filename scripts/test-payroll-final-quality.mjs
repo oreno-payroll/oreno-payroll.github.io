@@ -70,7 +70,7 @@ const node=()=>({hidden:true,disabled:false,textContent:'',dataset:{},value:'',s
   if(id===failId)return new Response('',{status:404});
   if(notModified&&new Headers(init.headers).get('if-none-match')===`tag-${id}`)return new Response(null,{status:304});
   return Response.json({id,eTag:`tag-${id}`,size:oversize?9999:content.length,'@microsoft.graph.downloadUrl':signed});
- },()=>{},undefined,()=>{if(!authorized)throw new Error('fixture authorization revoked');});
+ },()=>{},undefined,()=>{if(!authorized)throw new Error('fixture authorization revoked');}, false);
  const files=await Promise.all([a,b].map(id=>graph.read(['persons',id],'profile.enc',1000,true)));
  assert.deepEqual(files.map(x=>x.id),[a,b]);assert.ok(files.every(x=>x.text===content));
  assert.equal(requests.filter(x=>new URL(x).pathname.endsWith('/items/root:/persons')).length,1);assert.equal(requests.length,8);

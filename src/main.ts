@@ -116,7 +116,7 @@ deletionSave.addEventListener('click',async()=>{
  const approved=await confirmOperation({title:'削除待ちの明細を確定',subject:`給与明細 ${targets.length}件`,tone:'danger',acceptLabel:'明細を削除',details:[
   ...targets.map(t=>{const record=saved.find(r=>r.id===t.id);return record?deletionLabel(record):t.label;}),
   '解析・入力情報とFinance連携用の収入情報から選択した明細を除外します。',
-  '明細とFinance連携の確認後、未参照になった暗号化PDF原本をごみ箱へ移動します。別の明細が参照している原本は保持します。他の端末・タブで保存中でないことを確認してください。',
+  '明細とFinance連携を更新し、暗号化PDF原本は保全します。不要な原本は設定の未参照PDF原本の管理から別途整理できます。',
   '復元には削除前のバックアップなどが必要です。',
  ]},guard);
  confirmingDeletion=false;
@@ -127,7 +127,7 @@ deletionSave.addEventListener('click',async()=>{
  let completion:{kind:AppStatusKind;message:string};
  try{
   await deleteRecords(targets);
-  completion={kind:'success',message:`明細 ${targets.length}件を削除しました。Finance連携と未参照になったPDF原本の整理も確認済みです。`};
+  completion={kind:'success',message:`明細 ${targets.length}件を削除しました。Finance連携を確認しました。暗号化PDF原本は保全しています。`};
  }catch(error){
   if(error instanceof PayrollPartialSuccessError&&error.stage==='income-sync'){
    completion={kind:'partial',message:incompleteDeleteIncomeNotice()};

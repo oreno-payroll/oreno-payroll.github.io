@@ -424,7 +424,7 @@ restoreButton.addEventListener('click', async () => {
   const snapshot = {...initialSnapshot};
   const authorized=captureOperationAuthorization();
   const count=currentCount,sourceSnapshot=initialSnapshot;
-  if (!await approveSettings({title:'本人用バックアップを置き換えて復元',subject:`現在 ${count}件 → バックアップ ${data.records.length}件`,details:['現在の明細を削除し、バックアップの全件で完全に置き換えます。','全明細とFinance連携の照合後、置換対象外の未参照PDF原本をごみ箱へ移動します。共有原本は保持します。旧暗号世代は別途確認して整理します。','現在のデータを別途バックアップしたことを確認してください。'],tone:'danger',acceptLabel:'置き換えて復元'},()=>!busy&&preview===data&&ack.checked&&initialSnapshot===sourceSnapshot&&currentCount===count,authorized)) return;
+  if (!await approveSettings({title:'本人用バックアップを置き換えて復元',subject:`現在 ${count}件 → バックアップ ${data.records.length}件`,details:['現在の明細を削除し、バックアップの全件で完全に置き換えます。','全明細とFinance連携を照合します。置換対象外の暗号化PDF原本は保全し、設定から別途整理できます。','現在のデータを別途バックアップしたことを確認してください。'],tone:'danger',acceptLabel:'置き換えて復元'},()=>!busy&&preview===data&&ack.checked&&initialSnapshot===sourceSnapshot&&currentCount===count,authorized)) return;
   busy = true; updateButtons(); info('全件復元中です。操作完了を確認してください…');
   try {
     await replaceAllRecords(data.records, snapshot,data.employers,authorized);finishOperation('success');

@@ -131,6 +131,7 @@ const tests = [
   ['scripts/test-payroll-final-quality.mjs', true],
   ['scripts/test-payroll-final-security.mjs', true],
   ['scripts/test-payroll-private-audit.mjs', true],
+  ['scripts/test-payroll-cloud-write-lock.mjs', true],
 ];
 const failures = [];
 let passed = 0;

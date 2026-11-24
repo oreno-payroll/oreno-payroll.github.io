@@ -12,6 +12,7 @@ const data=new Map(),calls={indexRead:0,profileRead:0,indexMeta:0,profileMeta:0,
 let revision=0,makeIndexDeleting=false,makeProfileMoved=false,changeGeneration=false,generationCalls=0,collision=false;
 const stableKey={},rootPath=root.join('/');
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(path,name){
   const key=k(path,name),v=data.get(key);
   if(name==='index.enc'&&path.join('/')===rootPath)calls.indexRead++;

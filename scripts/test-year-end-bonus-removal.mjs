@@ -9,6 +9,7 @@ const strip=src=>stripTypeScriptTypes(src.replace(/^import\s+[\s\S]*?\s+from\s+[
 const store=new Map();let seq=0,writes=0;
 const key=(p,n)=>[...p,n].join('/');
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(p,n){const v=store.get(key(p,n));return v?{...v}:null;},
  async write(p,n,text,prior){const k=key(p,n),old=store.get(k);
   if(prior?old?.etag!==prior.etag:!!old)throw new Error('ETag collision');

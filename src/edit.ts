@@ -206,7 +206,7 @@ saveButton.addEventListener('click', async () => {
       const lines = conflicts.map(c => `・${employerDisplayName(employerDirectory,c.employerId,c.period.split('|')[0])} / ${c.fileName}（${c.period.split('|').slice(0,3).join(' / ')}）`).join('\n');
       if(!await confirmOperation({title:'重複する明細を整理',subject:`残す明細：${employerDisplayName(employerDirectory,updated.employerId,updated.form.job)} / ${updated.fileName}`,tone:'danger',acceptLabel:'保存して重複明細を除外',details:[
         `一覧・収入情報から除外する明細：${conflicts.length}件\n${lines}`,
-        '明細とFinance連携の確認後、除外対象の未参照PDF原本をごみ箱へ移動します。共有原本は保持します。旧暗号世代の原本は別途確認した整理操作の対象になります。',
+        '明細とFinance連携を更新します。除外対象の暗号化PDF原本は保全し、設定から別途整理できます。',
       ]},authorized)||!authorized()) {
         saving=false;appStatus.clear();updateUI();return;
       }
@@ -256,7 +256,7 @@ async function commitPendingDeletion():Promise<void>{
   deletionConfirming=true;updateUI();
   const approved=await confirmOperation({title:'給与明細を削除',subject:`${job} / ${employerDisplayName(employerDirectory,target.employerId,target.form.job)} / ${target.form.targetMonth}分 / ${kind}\n${target.fileName}`,tone:'danger',acceptLabel:'明細を削除',details:[
     '保存済みの入力情報とFinance連携用の収入情報から除外します。',
-    '明細とFinance連携の確認後、未参照になった暗号化PDF原本をごみ箱へ移動します。別の明細が参照している原本は保持します。他の端末・タブで保存中でないことを確認してください。',
+    '明細とFinance連携を更新し、暗号化PDF原本は保全します。不要な原本は設定の未参照PDF原本の管理から別途整理できます。',
     '編集中の未保存内容も破棄されます。復元には削除前のバックアップなどが必要です。',
   ]},()=>authorized()&&deletionPending&&record===target);
   deletionConfirming=false;

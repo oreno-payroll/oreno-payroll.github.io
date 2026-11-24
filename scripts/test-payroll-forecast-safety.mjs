@@ -20,7 +20,7 @@ assert.match(repo,/return method==='manual'&&old&&old\.amount===nextEstimate\.am
 assert.match(repo,/estimates:updatedSalaryEstimates/);
 assert.match(handoff,/requirePdfMime\(message\.pdf\)/);
 assert.match(view,/requirePdfMime\(payload\.pdf\)/);
-assert.equal((workflow.match(/run: node scripts\/audit-dist\.mjs --require-private-terms/g)||[]).length,2);
+assert.equal((workflow.match(/run: node scripts\/audit-dist\.mjs$/gm)||[]).length,2);
 assert.ok(workflow.indexOf('Headless Chromium end-to-end regression tests')<
  workflow.indexOf('Re-audit Pages distribution immediately before artifact upload'));
 assert.ok(workflow.indexOf('Re-audit Pages distribution immediately before artifact upload')<

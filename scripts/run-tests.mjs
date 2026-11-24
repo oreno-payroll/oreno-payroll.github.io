@@ -129,6 +129,7 @@ const tests = [
   ['scripts/verify-calendar-feature.mjs', true],
   ['scripts/test-payroll-final-quality.mjs', true],
   ['scripts/test-payroll-final-security.mjs', true],
+  ['scripts/test-payroll-private-audit.mjs', true],
 ];
 const failures = [];
 let passed = 0;

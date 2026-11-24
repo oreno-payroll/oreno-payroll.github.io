@@ -31,6 +31,7 @@ const required = [
   'scripts/audit-ci-workflow.mjs',
   'scripts/audit-pr-target.mjs',
   'scripts/audit-dist.mjs',
+  'scripts/audit-private-artifact.py',
   'scripts/install-git-hooks.sh',
   '.githooks/pre-commit',
   '.githooks/pre-push',
@@ -46,6 +47,7 @@ const allowed = (file) => [
   || file === 'public/view/pdf-sw.js'
   || file === 'public/payroll-cloud-session.js'
   || file === 'public/frame-guard.js'
+  || file === 'scripts/audit-private-artifact.py'
   || /^scripts\/[a-zA-Z0-9_-]+\.(?:mjs|js|cjs|sh)$/.test(file);
 const problems = [];
 const indexEntries = execFileSync('git',['ls-files','--stage','-z'],{cwd:root})

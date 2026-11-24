@@ -3,7 +3,7 @@ import { amountOrMissing } from '../storage/payrollValidation.ts';
 import { isZeroIfMissingSummaryKey } from './missingPolicy.ts';
 import type { SavedPayrollSummary } from '../storage/payrollStore.ts';
 import type { MonthEstimate } from './annualForecast.ts';
-export type SummaryKey = 'gross' | 'net' | 'incomeTax' | 'residentTax' | 'socialInsurance' | 'transportation' | 'reimbursedExpenses' | 'workDays';
+export type SummaryKey = 'gross' | 'net' | 'taxable' | 'nonTaxable' | 'incomeTax' | 'residentTax' | 'socialInsurance' | 'transportation' | 'reimbursedExpenses' | 'workDays';
 export interface Summary {
   sums: Record<SummaryKey, number>;
   observed: Record<SummaryKey, boolean>;
@@ -11,7 +11,7 @@ export interface Summary {
   /** 欠損している明細の件数。複数の社会保険項目が空欄でも1明細につき1件。 */
   missingCounts: Record<SummaryKey, number>;
 }
-const KEYS: SummaryKey[] = ['gross', 'net', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses', 'workDays'];
+const KEYS: SummaryKey[] = ['gross', 'net', 'taxable', 'nonTaxable', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses', 'workDays'];
 const zeros = (): Record<SummaryKey, number> => Object.fromEntries(KEYS.map(k => [k, 0])) as Record<SummaryKey, number>;
 export function summary(records: readonly SavedPayrollSummary[]): Summary {
   const sums = zeros();
@@ -32,6 +32,9 @@ export function summary(records: readonly SavedPayrollSummary[]): Summary {
       sums[key] += parsed ?? 0;
     };
     for (const key of ['gross', 'net', 'residentTax', 'transportation', 'reimbursedExpenses'] as const) add(key, valueFor(key));
+    // 課税・非課税の未取得は、0円の賞与でも暗黙に0円へ変換しない。
+    add('taxable', form.taxable);
+    add('nonTaxable', form.nonTaxable);
     add('incomeTax', valueFor('incomeTax'));
     const yearEnd = amountOrMissing(form.yearEndAdjustment);
     if (yearEnd !== null) {

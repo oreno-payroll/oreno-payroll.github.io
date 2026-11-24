@@ -25,21 +25,21 @@ assert.match(ui,/\$\('yea-total-missing'\)\.hidden=true/,'reset stale warning wh
 assert.match(css,/\.yea-total-missing/);
 console.log('PASS: missing months are shown alongside annual total without changing the calculation, and reset on year loading');
 
-const exit=ui.slice(ui.indexOf('function checkDetailExit():boolean{'),ui.indexOf('const displayPerson='));
-assert.ok(exit.startsWith('function checkDetailExit():boolean{'));
-function checkExit({memo=false,edits=false,forecast=false,bonus=false,accept=true}={}){
+const exit=ui.slice(ui.indexOf('async function checkDetailExit(guard:()=>boolean):Promise<boolean>{'),ui.indexOf('const displayPerson='));
+assert.ok(exit.startsWith('async function checkDetailExit(guard:()=>boolean):Promise<boolean>{'));
+async function checkExit({memo=false,edits=false,forecast=false,bonus=false,accept=true}={}){
  const messages=[];
- const ctx={memoDirty:memo,forecastDirty:forecast,bonusDirty:bonus,pendingEdits:()=>edits,window:{confirm:(message)=>{messages.push(message);return accept;}}};
+ const ctx={memoDirty:memo,forecastDirty:forecast,bonusDirty:bonus,pendingEdits:()=>edits,approveYearEnd:async(request,guard)=>{messages.push(request.subject+' '+request.details.join(' '));return accept&&guard();}};
  const fn=runInNewContext(stripTypeScriptTypes(exit,{mode:'strip'})+'\ncheckDetailExit',ctx);
- return {result:fn(),messages};
+ return {result:await fn(()=>true),messages};
 }
-let result=checkExit({memo:true,edits:true,forecast:true,bonus:true});
+let result=await checkExit({memo:true,edits:true,forecast:true,bonus:true});
 assert.equal(result.result,true);assert.equal(result.messages.length,1);
-for(const target of ['明細','給与・賞与の見込み','年度メモ'])assert.ok(result.messages[0].includes(target));
-result=checkExit({memo:true,edits:true,forecast:true,accept:false});
+for(const target of ['明細','給与・賞与の見込み','年別メモ'])assert.ok(result.messages[0].includes(target));
+result=await checkExit({memo:true,edits:true,forecast:true,accept:false});
 assert.equal(result.result,false);assert.equal(result.messages.length,1,'a rejected exit asks only once');
-assert.equal(checkExit().messages.length,0);
-assert.equal(checkExit({edits:true}).messages.length,1);
+assert.equal((await checkExit()).messages.length,0);
+assert.equal((await checkExit({edits:true})).messages.length,1);
 console.log('PASS: one exit confirmation lists every unsaved area; cancel preserves the current screen');
 
 const backup=read('src/backup.ts'),repository=read('src/yearEnd/repository.ts'),vaultCss=read('public/styles/vault.css');
@@ -49,6 +49,6 @@ assert.match(repository,/\.normalize\('NFKC'\)\.trim\(\)/);
 assert.match(repository,/同名の別データが追加されます/);
 assert.match(backup,/同名注意/);
 assert.match(backup,/state\.dataset\.nameCollision='true'/);
-assert.match(backup,/同名の別データが\$\{yearEndPlan\.sameNameCollisions\}名追加されます/);
+assert.match(backup,/同名の別データが\$\{plan\.sameNameCollisions\}名追加されます/);
 assert.match(vaultCss,/data-name-collision="true"/);
 console.log('PASS: name-collision warning appears in employee preview and final confirmation; UUID identity remains unchanged');

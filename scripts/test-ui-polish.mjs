@@ -16,7 +16,8 @@ assert.doesNotMatch(home, /本業と副業の収入を、ひとつの場所で�
 const dashboardCss = source('public/styles/dashboard.css');
 assert.match(dashboardCss, /\.header-actions \.settings-link \.icon \{ display: block;/);
 assert.match(dashboardCss, /\.period-switcher__options \{ box-sizing: border-box; height: 44px; padding: 3px; \}/);
-assert.match(dashboardCss, /\.period-switcher \.select-field \.select \{ height: 44px; min-height: 44px; \}/);
+assert.match(shared, /--control-height: 44px;/);
+assert.match(dashboardCss, /\.period-switcher \.select-field \.select \{ height: var\(--control-height\); min-height: var\(--control-height\); \}/);
 assert.match(dashboardCss, /\.period-switcher__caption,[\s\S]*?\.period-switcher \.select-field label \{ display: block; margin: 0; line-height: 14px; \}/);
 assert.doesNotMatch(home, /<use href="#icon-backup"/);
 const back = /<a class="btn btn--secondary header-back" href="\.\.\/index\.html">\s*<svg class="icon" aria-hidden="true"><use href="#icon-arrow"><\/use><\/svg>\s*<span>ホームへ戻る<\/span>\s*<\/a>/;

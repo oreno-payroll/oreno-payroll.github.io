@@ -1,5 +1,6 @@
 /** Isolated encrypted third-party namespace. Never calls payrollStore or income publication. */
-import {cloudVault} from '../cloud/auth';
+import {cloudVault,captureOperationAuthorization} from '../cloud/auth';
+import {mutationEpoch} from '../cloud/snapshot';
 import {encryptJson,decryptJson,encryptBytes,decryptBytes} from '../cloud/crypto';
 import {isCollision,type RemoteFile} from '../cloud/graph';
 import {beginPerfOperation} from '../cloud/perf';
@@ -64,7 +65,7 @@ export class YearEndRepository {
   * ETag, item identity and size must all match; any failure aborts instead of
   * serving old data. The result never includes a reusable write ETag. */
  private async readOnlyJson<T>(a:Access,kind:'profile'|'year',path:string[],name:string,max:number,
-  validate:(value:T)=>T,captureVerified?:(entry:VerifiedRead)=>void):Promise<T|null>{
+  validate:(value:T)=>T,captureVerified?:(entry:VerifiedRead)=>void,directChild=false):Promise<T|null>{
   this.checkReadOnlyScope(a);
   const scope=this.readOnlyScope;
   const cache=kind==='profile'?this.readOnlyProfiles:this.readOnlyYears;
@@ -85,7 +86,7 @@ export class YearEndRepository {
   // A new file, changed ETag, or missing cache requires a full authenticated
   // decrypt+schema validation, never a metadata-only result.
   cache.delete(cacheKey);
-  const fresh=await this.readJson<T>(a,kind,path,name,max);
+  const fresh=await this.readJson<T>(a,kind,path,name,max,directChild);
   if(scope!==this.readOnlyScope)throw new Error('保管庫の接続先または鍵が変更されました。読み直してください。');
   if(!fresh)return null;
   const validated=validate(fresh.value);
@@ -110,8 +111,8 @@ export class YearEndRepository {
  }
  private async access():Promise<Access> {const vault=await cloudVault();return vault.yearEndAccess();}
  private personPath(a:Access,id:PersonId):string[]{return [...a.path,'persons',id];}
- private async readJson<T>(a:Access,kind:Exclude<Kind,'original'>,path:string[],name:string,max:number):Promise<Read<T>|null>{
-  const file=await a.graph.read(path,name,max);if(!file)return null;
+ private async readJson<T>(a:Access,kind:Exclude<Kind,'original'>,path:string[],name:string,max:number,directChild=false):Promise<Read<T>|null>{
+  const file=directChild?await a.graph.read(path,name,max,true):await a.graph.read(path,name,max);if(!file)return null;
   return {value:await decryptJson<T>(kinds[kind],file.text,a.key),file};
  }
  private async writeJson(a:Access,kind:Exclude<Kind,'original'>,path:string[],name:string,value:unknown,prior:RemoteFile|null,max:number):Promise<RemoteFile>{
@@ -133,29 +134,55 @@ export class YearEndRepository {
   if(unexpected?.length)throw new Error('暗号化された従業員フォルダーがありますが索引がありません。自動初期化を拒否しました。');
   return {value:emptyIndex(),file:null};
  }
- async people():Promise<Array<PersonProfile & {state:'active'|'deleting'}>>{
+ async people(useNavigation=false,forceFresh=false,onProgress?:(done:number,total:number)=>void):Promise<Array<PersonProfile & {state:'active'|'deleting'}>>{
   const perf=yearEndPerf('yearend-people');let success=false;
   try{
-  const a=await perf.measure('yearend-access',()=>this.access());
+  const vault=useNavigation?await cloudVault():null;
+  const epoch=useNavigation?mutationEpoch():'',authorized=useNavigation?captureOperationAuthorization():()=>true;
+  const a=await perf.measure('yearend-access',()=>vault?vault.yearEndAccess():this.access());
+  const guard=()=>authorized()&&(!useNavigation||epoch===mutationEpoch());
+  if(vault&&!forceFresh){
+   const cached=await vault.readPeopleNavigation(a.path);
+   if(!guard())throw new Error('接続状態が変更されました。読み直してください。');
+   if(Array.isArray(cached)&&cached.length<=2000){
+    try{
+     const ids=new Set<string>();
+     const list=cached.map(row=>{
+      if(!row||!['active','deleting'].includes(row.state)||ids.has(row.id))throw new Error('invalid employee cache');
+      const profile=validateProfile(row,asPersonId(row.id));ids.add(profile.id);
+      return {...profile,state:row.state as 'active'|'deleting'};
+     });
+     success=true;return list;
+    }catch{/* Fall back to authenticated live profiles. */}
+   }
+  }
   const idx=await perf.measure('yearend-index',()=>this.readIndex(a));
   const rows=idx.value.persons.filter(row=>row.state!=='deleted');
   const result:Array<PersonProfile & {state:'active'|'deleting'}|undefined>=new Array(rows.length);
   // Profile GETs are independent. Limit concurrency to avoid Graph throttling, and
   // publish the list only after every profile passes its existing validation.
-  let cursor=0;
+  let cursor=0,completed=0;
+  onProgress?.(0,rows.length);
   const worker=async():Promise<void>=>{
    while(cursor<rows.length){
     const position=cursor++,row=rows[position];
     const profile=await perf.measure('yearend-profile',()=>this.readOnlyJson<PersonProfile>(a,'profile',this.personPath(a,row.id),'profile.enc',MAX_PROFILE,
-     value=>validateProfile(value,row.id)));
+     value=>validateProfile(value,row.id),undefined,true));
     if(!profile){
      if(row.state!=='deleting')throw new Error('従業員プロフィールが存在しません。');
      result[position]={format:'payroll-year-end-person-v1',id:row.id,displayName:'削除未完了',alias:'',createdAt:row.createdAt,updatedAt:row.updatedAt,yearFiles:{},state:'deleting'};
     }else result[position]={...profile,state:row.state==='active'?'active':'deleting'};
+    if(!guard())throw new Error('接続状態が変更されました。読み直してください。');
+    onProgress?.(++completed,rows.length);
    }
   };
   await Promise.all(Array.from({length:Math.min(5,rows.length)},()=>worker()));
   const list=result.map(profile=>{if(!profile)throw new Error('従業員一覧の取得が完了しませんでした。');return profile;}).sort((x,y)=>x.createdAt.localeCompare(y.createdAt));
+  if(vault){
+   if(!guard())throw new Error('接続状態が変更されました。読み直してください。');
+   await vault.rememberPeopleNavigation(a.path,list,epoch);
+   if(!guard())throw new Error('接続状態が変更されました。読み直してください。');
+  }
   success=true;return list;
   }finally{perf.finish(success);}
  }
@@ -175,7 +202,7 @@ export class YearEndRepository {
  private async profile(a:Access,id:PersonId):Promise<Read<PersonProfile>>{
   return (await this.activeProfile(a,id)).profile;
  }
- async createPerson(displayName:string,alias=''):Promise<PersonId>{
+ async createPerson(displayName:string,alias=''):Promise<PersonProfile>{
   if(!safeText(displayName)||alias.length>80||/[\u0000-\u001f]/.test(alias))throw new Error('表示名・補助識別名の形式が不正です。');
   const a=await this.access(),id=randomPersonId(),at=new Date().toISOString();
   // Establish an empty encrypted index before placing any person profile in the folder.
@@ -189,16 +216,17 @@ export class YearEndRepository {
   for(let attempt=0;attempt<4;attempt++){
    const idx=await this.readIndex(a);if(idx.value.persons.some(p=>p.id===id))throw new Error('従業員IDが重複しました。');
    const next:PersonIndex={...idx.value,persons:[...idx.value.persons,{id,state:'active',createdAt:at,updatedAt:at}]};
-   try{await this.writeJson(a,'index',a.path,'index.enc',next,idx.file,MAX_INDEX);return id;}
+   try{await this.writeJson(a,'index',a.path,'index.enc',next,idx.file,MAX_INDEX);return profile;}
    catch(error){if(isCollision(error))continue;throw error;}
   }
   throw new Error('従業員登録が競合しました。再実行してください。孤立したプロフィールは自動削除しません。');
  }
- async renamePerson(id:PersonId,name:string,alias:string):Promise<void>{
+ async renamePerson(id:PersonId,name:string,alias:string,expectedName?:string):Promise<PersonProfile>{
   asPersonId(id);if(!safeText(name)||alias.length>80||/[\u0000-\u001f]/.test(alias))throw new Error('表示名が不正です。');
   const a=await this.access(),current=await this.profile(a,id);
+  if(expectedName!==undefined&&(current.value.displayName!==expectedName||current.value.alias!==alias))throw new Error('従業員名が更新されました。最新の一覧を確認してください。');
   const next={...current.value,displayName:clean(name),alias:clean(alias),updatedAt:new Date().toISOString()};
-  await this.assertActive(a,id);await this.writeJson(a,'profile',this.personPath(a,id),'profile.enc',next,current.file,MAX_PROFILE);
+  await this.assertActive(a,id);await this.writeJson(a,'profile',this.personPath(a,id),'profile.enc',next,current.file,MAX_PROFILE);return next;
  }
  private async yearContext(a:Access,id:PersonId,year:number,create:boolean):Promise<{profile:Read<PersonProfile>;activeIndex:Read<PersonIndex>;data:YearData;file:RemoteFile|null;yearFile:string|null}>{
   asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
@@ -1134,10 +1162,17 @@ export class YearEndRepository {
   return new Blob([new Uint8Array(bytes)],{type:'application/pdf'});
  }
  /** Tombstone before trash: any stale client is refused by assertActive(). */
- async deletePerson(id:PersonId):Promise<{trashed:number;otherVersions:number}> {
+ async deletePerson(id:PersonId,expected?:{state:'active'|'deleting';displayName:string;alias:string}):Promise<{trashed:number;otherVersions:number}> {
   asPersonId(id);const a=await this.access();let index=await this.readIndex(a);
   let person=index.value.persons.find(p=>p.id===id);if(!person||person.state==='deleted')throw new Error('対象の従業員は登録されていません。');
+  if(expected&&person.state!==expected.state)throw new Error('従業員の削除状態が更新されました。最新の一覧を確認してください。');
   if(person.state==='active'){
+   if(expected){
+    const live=await this.readJson<PersonProfile>(a,'profile',this.personPath(a,id),'profile.enc',MAX_PROFILE);
+    if(!live)throw new Error('従業員プロフィールが見つかりません。');
+    const p=validateProfile(live.value,id);
+    if(p.displayName!==expected.displayName||p.alias!==expected.alias)throw new Error('従業員名が更新されました。最新の一覧を確認してください。');
+   }
    const next:PersonIndex={...index.value,persons:index.value.persons.map(p=>p.id===id?{...p,state:'deleting',updatedAt:new Date().toISOString()}:p)};
    await this.writeJson(a,'index',a.path,'index.enc',next,index.file,MAX_INDEX);
    index=await this.readIndex(a);person=index.value.persons.find(p=>p.id===id);

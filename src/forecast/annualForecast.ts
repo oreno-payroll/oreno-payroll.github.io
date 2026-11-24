@@ -5,13 +5,13 @@
 import { amountOrMissing } from '../storage/payrollValidation.ts';
 import { isZeroIfMissingSummaryKey } from './missingPolicy.ts';
 import { monthIndex, targetMonthOf, salaryPaymentLag, monthStringFromIndex } from './payrollCalendar.ts';
-import {activeEmployerSalaries} from './activeEmployer.ts';
+import {forecastEmployerScope,type ForecastEmployerSetting} from './activeEmployer.ts';
 
 export type ForecastJob = 'main' | 'side';
 export type ForecastKind = 'salary' | 'bonus';
-export type ForecastKey = 'gross' | 'net' | 'incomeTax' | 'residentTax' | 'socialInsurance' | 'transportation' | 'reimbursedExpenses' | 'workDays';
+export type ForecastKey = 'gross' | 'net' | 'taxable' | 'nonTaxable' | 'incomeTax' | 'residentTax' | 'socialInsurance' | 'transportation' | 'reimbursedExpenses' | 'workDays';
 export const FORECAST_KEYS: readonly ForecastKey[] = [
-  'gross', 'net', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses', 'workDays',
+  'gross', 'net', 'taxable', 'nonTaxable', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses', 'workDays',
 ];
 const SOCIAL_KEYS = [
   'healthInsurance', 'careInsurance', 'childcareSupport', 'pension', 'employmentInsurance',
@@ -40,6 +40,7 @@ export interface JobForecast {
   bonusSampleMonth?: string;
   bonusReason?: string;
   reason?: string;
+  employerName?: string;
 }
 export interface AnnualForecast {
   fiscalYear: number;
@@ -77,6 +78,15 @@ export function estimateFromSamples(job: ForecastJob, month: string, samples: Fo
       if ((key === 'gross' || key === 'net') && part.value !== null) {
         // 交通費は中央値による見込み対象とするが、経費精算は単発費用として除外する。
         return { ...part, value: part.value - (amountOrMissing(form.reimbursedExpenses) ?? 0) };
+      }
+      if (key === 'nonTaxable' && part.value !== null) {
+        // 経費の非課税区分を明細内訳で確認できる場合だけ、見込みから除く。
+        const expenses = amountOrMissing(form.reimbursedExpenses) ?? 0;
+        const taxable = amountOrMissing(form.taxable);
+        const gross = amountOrMissing(form.gross);
+        if (expenses > 0 && (part.value < expenses || taxable === null || gross === null || taxable + part.value !== gross))
+          return {value:null,incomplete:true};
+        return {...part,value:part.value-expenses};
       }
       return part;
     });
@@ -147,6 +157,12 @@ export function estimateMainBonus(month: string, samples: ForecastSource[]): Mon
     } else if (key === 'net') {
       values[key] = adjusted.net;
       if (adjusted.incomplete) incomplete[key] = true;
+    } else if (key === 'taxable' || key === 'nonTaxable') {
+      // 賞与モデルは交通費・経費を除く。課税内訳に根拠がある場合だけ推計する。
+      const taxable = amountOrMissing(latest.form.taxable);
+      const known = !adjusted.incomplete && taxable !== null && taxable === adjusted.gross;
+      values[key] = known ? (key === 'taxable' ? adjusted.gross : 0) : null;
+      if (!known) incomplete[key] = true;
     } else if (key === 'transportation' || key === 'reimbursedExpenses' || key === 'workDays') {
       values[key] = 0;
     } else {
@@ -168,7 +184,7 @@ export function estimateMainBonus(month: string, samples: ForecastSource[]): Mon
  * 副業の賞与は一切推計しない。賞与表示OFFなら本業の賞与も推計しない。
  */
 export function calculateAnnualForecast(
-  records: readonly ForecastSource[], selectedYear: number, today: Date, includeBonus = true,
+  records: readonly ForecastSource[], selectedYear: number, today: Date, includeBonus = true, directory:readonly ForecastEmployerSetting[] = [],
 ): AnnualForecast {
   const currentMonth = today.getFullYear() * 12 + today.getMonth();
   const currentFiscalYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
@@ -178,9 +194,10 @@ export function calculateAnnualForecast(
   const jobs = {} as Record<ForecastJob, JobForecast>;
   for (const job of ['main', 'side'] as const) {
     const allSalaries = records.filter(({ form }) => form.job === job && form.kind === 'salary');
-    const paidMonths = new Set(allSalaries.map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
     const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    const salaries=activeEmployerSalaries(allSalaries,todayIso);
+    const scope=forecastEmployerScope(allSalaries,job,todayIso,directory);
+    const salaries=scope.samples;
+    const paidMonths = new Set(scope.registered.map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
     // 本業は「10月対象→11月支給」、副業は「10月対象→10月支給」など、
     // 保存済み給与から各勤務先の通常の支給タイミングを推定する。
     // 未支給の対象月を見込みから落とさないようにするための補正。
@@ -218,15 +235,17 @@ export function calculateAnnualForecast(
     const estimates = applicable && samples.length
       ? pendingMonths.map(month => estimateFromSamples(job, month, samples)) : [];
     const reason = !applicable ? '現在進行中の年度以外は予測しません。'
+      : scope.inactive ? '現在の勤務先が未設定のため、見込みを計算しません。'
+      : scope.current&&!samples.length ? '現在の勤務先の直近6か月の給与実績がなく、見込みを計算できません。'
       : !pendingMonths.length ? '見込み対象の未登録月はありません。'
       : !samples.length ? '直近6か月に通常給与の実績がなく、予測できません。'
       : undefined;
 
     const bonusMonths = [`${selectedYear}-08`, `${selectedYear + 1}-02`];
-    const paidBonusMonths = new Set(records.filter(({ form }) => form.job === 'main' && form.kind === 'bonus')
+    const paidBonusMonths = new Set(records.filter(r => r.form.job === 'main' && r.form.kind === 'bonus' && (!scope.current||r.employerId===scope.current.id||r.employerId===undefined))
       .map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
-    const pendingBonusMonths = job === 'main' && applicable && includeBonus
-      ? bonusMonths.filter(month => !paidBonusMonths.has(month)) : [];
+    const pendingBonusMonths = job === 'main' && applicable && includeBonus && !scope.inactive
+      ? bonusMonths.filter(month => !paidBonusMonths.has(month)&&(!scope.current||month>=todayIso.slice(0,7))) : [];
     // 給与の通常月見込みは「直近6か月・最大3件」。賞与だけは最後の登録済み通常給与1件を使う。
     // 賞与見込みが古い給与からでも算出できるよう、通常月見込みのサンプルとは独立させる。
     const latestBonusSalary = job === 'main' ? salaries
@@ -242,6 +261,7 @@ export function calculateAnnualForecast(
       ? '本業賞与の参考になる通常給与の内訳が不足しているため、見込み賞与を算出できません。' : undefined;
 
     jobs[job] = { job, sampleMonths, pendingMonths, estimates, bonusEstimates, pendingBonusMonths,
+      ...(scope.current ? {employerName:scope.current.name} : {}),
       ...(bonusSampleMonth ? { bonusSampleMonth } : {}),
       ...(reason ? { reason } : {}), ...(bonusReason ? { bonusReason } : {}) };
   }

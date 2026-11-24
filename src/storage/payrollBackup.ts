@@ -3,9 +3,10 @@ import type { SavedPayrollRecord } from './payrollStore';
 import { readZip, writeZip, type ZipFile } from './zipArchive';
 import { verifyPdfBytes, verifyPdfWithPdfJs } from './pdfIntegrity';
 import { assertStorageLimits, MAX_RECORDS, MAX_MANIFEST_BYTES, MAX_ARCHIVE_BYTES } from './storageLimits';
-import { payrollPeriodKey, validatePayrollForm } from './payrollValidation';
+import { payrollPeriodRelation, validatePayrollForm } from './payrollValidation';
 import { isValidPayrollZeroResolution } from './payrollZeroResolution';
 import {validEmployerId} from './employerIdentity';
+import {validateEmployerDirectory,type EmployerEntry} from './employerDirectory';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -18,7 +19,8 @@ interface ManifestEntry {
 }
 interface BackupManifest {
   app: 'Payroll';
-  schemaVersion: 1;
+  schemaVersion: 1|2;
+  employers?: EmployerEntry[];
   exportedAt: string;
   records: ManifestEntry[];
 }
@@ -62,9 +64,10 @@ function validateMetadata(raw: unknown, used: Set<number>): Omit<SavedPayrollRec
   return raw as unknown as Omit<SavedPayrollRecord, 'pdf'>;
 }
 
-export async function createBackup(records: SavedPayrollRecord[]): Promise<Blob> {
+export async function createBackup(records: SavedPayrollRecord[], employers?: readonly EmployerEntry[]): Promise<Blob> {
   assertStorageLimits(records);
-  const manifest: BackupManifest = { app: 'Payroll', schemaVersion: 1, exportedAt: new Date().toISOString(), records: [] };
+  const directory=employers===undefined?undefined:validateEmployerDirectory(employers);
+  const manifest: BackupManifest = { app: 'Payroll', schemaVersion: directory===undefined?1:2, exportedAt: new Date().toISOString(), records: [], ...(directory===undefined?{}:{employers:directory}) };
   const files: ZipFile[] = [];
   const used = new Set<number>();
   for (const [index, record] of records.entries()) {
@@ -91,6 +94,7 @@ export async function createBackup(records: SavedPayrollRecord[]): Promise<Blob>
 
 export interface LoadedBackup {
   exportedAt: string;
+  employers?: EmployerEntry[];
   records: SavedPayrollRecord[];
   bytes: number;
   unreviewedWarnings: number;
@@ -102,13 +106,14 @@ export async function readBackup(file: Blob): Promise<LoadedBackup> {
   const bytes = files.get('manifest.json');
   assert(bytes && bytes.length <= MAX_MANIFEST_BYTES, 'manifest.jsonが見つからないか、大きすぎます。');
   const manifest: unknown = JSON.parse(decoder.decode(bytes));
-  assert(isObject(manifest) && manifest.app === 'Payroll' && manifest.schemaVersion === 1, 'Payroll専用バックアップではないか、未対応のバージョンです。');
+  assert(isObject(manifest) && manifest.app === 'Payroll' && (manifest.schemaVersion === 1||manifest.schemaVersion===2), 'Payroll専用バックアップではないか、未対応のバージョンです。');
+  assert(manifest.schemaVersion!==1||!Object.hasOwn(manifest,'employers'),'旧バックアップの勤務先一覧が不正です。');
+  const employers=manifest.schemaVersion===2?validateEmployerDirectory(manifest.employers):undefined;
   assert(typeof manifest.exportedAt === 'string' && Number.isFinite(Date.parse(manifest.exportedAt)), 'バックアップ作成日時が不正です。');
   assert(Array.isArray(manifest.records) && manifest.records.length <= MAX_RECORDS, '明細件数が不正です。');
   assert(files.size === manifest.records.length + 1, 'ZIP内に予期しないファイルがあります。');
   const usedIds = new Set<number>();
   const usedPaths = new Set<string>();
-  const usedPeriods = new Set<string>();
   const usedHashes = new Set<string>();
   const records: SavedPayrollRecord[] = [];
   let total = 0;
@@ -121,9 +126,7 @@ export async function readBackup(file: Blob): Promise<LoadedBackup> {
     assert(typeof entry.sha256 === 'string' && /^[a-f0-9]{64}$/.test(entry.sha256), 'PDFハッシュ形式が不正です。');
     const metadata = validateMetadata(entry.metadata, usedIds);
     if (!metadata.warningsAcknowledged && validatePayrollForm(metadata.form).warnings.length) unreviewedWarnings++;
-    const period = payrollPeriodKey(metadata.form);
-    if (usedPeriods.has(period) || usedHashes.has(entry.sha256)) legacyDuplicates++;
-    usedPeriods.add(period);
+    if (records.some(record=>payrollPeriodRelation(record,metadata)!=='different') || usedHashes.has(entry.sha256)) legacyDuplicates++;
     usedHashes.add(entry.sha256);
     const data = files.get(entry.pdfPath);
     assert(data, `PDFが見つかりません: ${entry.pdfPath}`);
@@ -144,5 +147,5 @@ export async function readBackup(file: Blob): Promise<LoadedBackup> {
     records.push({ ...metadata, pdf });
   }
   assertStorageLimits(records);
-  return { exportedAt: manifest.exportedAt, records, bytes: total, unreviewedWarnings, legacyDuplicates };
+  return { exportedAt: manifest.exportedAt, records, bytes: total, unreviewedWarnings, legacyDuplicates, ...(employers===undefined?{}:{employers}) };
 }

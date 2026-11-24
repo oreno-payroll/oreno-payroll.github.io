@@ -62,7 +62,7 @@ const sandbox={
  structuredClone,performance,
  envelopeSalt:()=> 'synthetic-salt',parseEnvelope:()=>({salt:'synthetic-salt'}),
  encryptJson:async(_,data)=>JSON.stringify(data),decryptJson:async(_,value)=>JSON.parse(value),
- clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
+ SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
  isCollision:error=>error?.message==='ETag collision',
  fiscalYearOfTargetMonth:month=>Number(month.slice(0,4)),isValidPayrollSemantics:()=>true,
   payrollPeriodKey:r=>r.form.paymentDate,toPublicIncomeRecord:undefined,validEmployerId:value=>value===undefined||/^emp_[0-9a-f]{32}$/.test(value),
@@ -153,9 +153,12 @@ console.log('PASS: ETag changed between directory listing and file download fail
 initial();unlock();await vault.refresh({forceFresh:true});reset();
 const indexWithExtra={...info,years:[...yearList,'2027']};
 put(['payroll'],'index.enc',indexWithExtra);
-replaceYear('2027',[salary(5000,'2026-09')]);
-await vault.syncIncome(new Set(['2026']));
-assert.deepEqual(JSON.parse(files.get('payroll/income/2026.enc').text).records.map(r=>r.id),[2026,5000]);
+replaceYear('2027',[salary(5000,'2027-05')]);
+// A valid fiscal-year record paid in a different calendar year also contributes.
+const latePayment=salary(2026,'2026-12');latePayment.form.paymentDate='2027-01-27';
+replaceYear('2026',[latePayment]);
+await vault.syncIncome(new Set(['2027']));
+assert.deepEqual(JSON.parse(files.get('payroll/income/2027.enc').text).records.map(r=>r.id),[2026,5000]);
 assert.equal(calls.read.filter(k=>k.endsWith('2027.enc')&&k.includes('statements')).length,1);
 console.log('PASS: newly indexed source year is fetched and its payroll income is included');
 

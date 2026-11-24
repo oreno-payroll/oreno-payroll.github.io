@@ -2,7 +2,7 @@
 .upload-page { padding: 25px 0 30px; }
 .upload-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 23px; }
 .upload-heading .eyebrow, .panel-title-row .section-kicker { margin: 0 0 5px; color: var(--color-primary); font-size: 10px; font-weight: 800; letter-spacing: .15em; }
-.upload-heading h1 { font-size: clamp(24px, 3vw, 29px); font-weight: 850; margin: 0; }
+
 .upload-heading__description { margin: 7px 0 0; color: var(--color-muted); font-size: 13px; }
 .notice--privacy { align-items: center; gap: 12px; padding: 13px 17px; margin-bottom: 18px; }
 .notice--privacy .icon { margin: 0; width: 19px; height: 19px; color: var(--color-primary); }
@@ -29,7 +29,7 @@
 
 .workspace { display: grid; grid-template-columns: minmax(0,.86fr) minmax(0,1.14fr); gap: 18px; align-items: start; }
 /* PDF未選択時はアップロード操作だけを表示し、空の一覧・確認欄を隠す。 */
-.workspace.is-empty { grid-template-columns: minmax(0,1fr); max-width: 760px; margin-inline: auto; }
+.workspace.is-empty { grid-template-columns: minmax(0,1fr); width: 100%; }
 .workspace.is-empty .file-panel, .workspace.is-empty .review-panel { display: none; }
 .save-bar.is-empty { display: none; }
 .file-panel, .review-panel { min-width: 0; }
@@ -37,9 +37,7 @@
 .panel-title-row h2 { font-size: 17px; font-weight: 850; margin: 0; display: flex; align-items: center; gap: 10px; }
 .file-panel { padding: 25px 0 0; overflow: hidden; }
 .file-panel > .panel-title-row { margin: 0 23px 17px; }
-.count-badge { display: inline-flex; align-items: center; justify-content: center; padding: 2px 9px; border-radius: 999px; background: #eef2f7; color: var(--color-muted); font-size: 11px; font-weight: 800; white-space: nowrap; }
-.btn--small { padding: 7px 10px; min-height: 34px; font-size: 11px; }
-.btn--small .icon { width: 14px; height: 14px; }
+
 .file-list-empty { display: flex; flex-direction: column; align-items: center; text-align: center; justify-content: center; gap: 7px; padding: 48px 27px 52px; min-height: 304px; }
 .file-list-empty__icon { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 17px; background: #f1f4f9; color: #96a6bc; margin-bottom: 9px; }
 .file-list-empty__icon .icon { width: 27px; height: 27px; }
@@ -94,9 +92,7 @@
 .form-grid { display: grid; gap: 13px 15px; }
 .form-grid--two { grid-template-columns: repeat(2, minmax(0,1fr)); }
 .review-panel .field > .select { width: 100%; }
-.unit-field { display: flex; align-items: center; position: relative; }
-.unit-field input { padding-right: 30px; font-variant-numeric: tabular-nums; }
-.unit-field > span { position: absolute; right: 12px; color: var(--color-faint); font-size: 11px; pointer-events: none; }
+
 .review-actions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 9px; margin-top: 22px; }
 .review-actions__note { font-size: 10px; color: var(--color-faint); max-width: 260px; }
 .review-actions .btn .icon { width: 15px; height: 15px; }
@@ -133,7 +129,6 @@
   .form-grid { gap: 13px 9px; }
   .form-grid--two { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .field__label { font-size: 11px; }
-  .review-panel .select, .review-panel .input { min-height: 40px; font-size: 12px; }
 }
 @media (max-width: 390px) { .form-grid--two { grid-template-columns: 1fr; } }
 
@@ -195,20 +190,7 @@
   .file-list__current { min-width: 48px; padding-inline: 6px; }
 }
 /* 勤務先と給与/賞与は、選択状態が一目で分かるラジオ型セグメントにする */
-.field--choice { min-width: 0; padding: 0; margin: 0; border: 0; }
-.field--choice .field__label { display: block; margin-bottom: 6px; }
-.segmented-choice { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
-.segmented-choice label { cursor: pointer; min-width: 0; }
-.segmented-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.segmented-choice span {
-  display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 7px 9px;
-  border: 1px solid var(--color-border-strong); border-radius: 9px;
-  background: #fff; color: #53647a; font-size: 12px; font-weight: 750;
-  transition: background .16s ease, border-color .16s ease;
-}
-.segmented-choice label:hover span { background: #f6f9ff; border-color: #9bb1e3; }
-.segmented-choice input:checked + span { color: var(--color-primary); border-color: var(--color-primary); background: var(--color-primary-soft); box-shadow: inset 0 0 0 1px var(--color-primary); }
-.segmented-choice input:focus-visible + span { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
 /* 自動解析の警告を単なる一文ではなく、各項目の不足理由として並べる */
 .analysis-issues { margin: -5px 0 22px; padding: 13px 15px; border-radius: 11px; background: var(--state-warning-bg); border: 1px solid var(--state-warning-border); }
 .analysis-issues__head { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 7px; color: var(--state-warning-text); font-size: 12px; }
@@ -238,7 +220,7 @@
     padding: 17px 0 12px;
   }
   .upload-page > .upload-heading { flex: none; margin-bottom: 13px; }
-  .upload-page .upload-heading h1 { font-size: 24px; }
+
   .upload-page .upload-heading__description { margin-top: 2px; font-size: 11px; }
   .upload-page > .notice--privacy { flex: none; padding: 8px 13px; margin-bottom: 12px; font-size: 11px; }
   .upload-page .workspace {
@@ -289,21 +271,17 @@
 
 /* ホームボタンと見間違えないよう、保存を画面最下部に固定する */
 .save-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 20px; flex: none; margin-top: 12px; padding: 13px 17px;
-  border: 1px solid var(--color-border); border-radius: 15px;
-  background: #fff; box-shadow: 0 -3px 20px rgba(26,47,83,.035);
+  flex: none; margin-top: 12px;
 }
 .save-bar__status { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .save-bar__status > #save-status { font-size: 11px; color: var(--color-muted); font-weight: 700; line-height: 1.6; }
-.save-bar__button { min-width: 145px; flex: none; min-height: 45px; font-weight: 800; }
+.save-bar__button { min-width: 145px; flex: none; font-weight: 700; }
 .save-bar__button .icon { width: 17px; height: 17px; }
-.save-bar__button:disabled { background: #aab6cb; color: #fff; border-color: transparent; opacity: 1; }
 
 @media (max-width: 860px) {
   .upload-page { display: flex; flex-direction: column; height: calc(100dvh - 74px); overflow: hidden; padding-top: 15px; padding-bottom: 9px; }
   .upload-page > .upload-heading { flex: none; margin-bottom: 9px; }
-  .upload-page .upload-heading h1 { font-size: 21px; }
+
   .upload-page .upload-heading__description { display: none; }
   .upload-page > .notice--privacy { flex: none; margin-bottom: 10px; padding: 7px 10px; font-size: 10px; }
   .upload-page > .notice--privacy .icon { width: 14px; height: 14px; }
@@ -327,8 +305,8 @@
   .upload-left .file-list-empty { flex: 1; min-height: 0; padding: 6px; }
   .upload-left .file-list-empty__icon { display: none; }
   .workspace .review-panel { min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 15px 13px; }
-  .save-bar { flex: none; margin-top: 8px; padding: 9px 10px; gap: 8px; }
-  .save-bar__button { min-width: 110px; min-height: 41px; padding: 7px 10px; font-size: 12px; }
+  .save-bar { flex: none; margin-top: 8px; }
+  .save-bar__button { min-width: 110px; padding: 7px 10px; }
   .save-bar__status > #save-status { font-size: 10px; }
 }
 @media (max-width: 450px) {
@@ -357,6 +335,10 @@
 .progress-copy #progress-text { max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 
 .field-source-note { margin: -12px 0 17px; color: var(--color-muted); font-size: 10px; line-height: 1.6; }
+.field-source-note__sample { display:inline-block; width:12px; height:12px; vertical-align:middle; border:1px solid #c6d2df; border-radius:3px; background:#fff; margin-right:3px; }
+.field-source-note__sample--auto { border-color:#8ea9dc; background:#f6f9ff; }
+.field-source-note__sample--missing { border-color:#e6b65d; background:#fffdf8; }
+.field-source-note__sample:not(:first-child) { margin-left:8px; }
 
 
 /* 低い画面やスマホ横向きでは固定ビューポートの二重スクロールを解除する。 */
@@ -439,9 +421,6 @@
 @media (min-width: 861px) {
   .upload-page .workspace.is-empty {
     grid-template-columns: minmax(0, 1fr);
-    width: min(100%, 760px);
-    max-width: 760px;
-    margin-inline: auto;
     align-items: start;
   }
   .upload-page .workspace.is-empty .upload-left { width: 100%; }
@@ -462,8 +441,6 @@
   .upload-page .workspace.is-empty {
     flex: 1;
     grid-template-columns: minmax(0, 1fr);
-    width: min(100%, 760px);
-    margin-inline: auto;
     align-items: start;
   }
   .upload-page .workspace.is-empty .upload-left {
@@ -476,10 +453,7 @@
 }
 
 /* PAYROLL-UPLOAD-FOOTER-FIT-20261123
- * The build-info footer is a direct child of body, OUTSIDE .app-shell.
- * Previously main took 100dvh - header, then footer added its own height,
- * producing a small unintended whole-document scroll on desktop/tablet.
- * Flex distributes the viewport between header, content and visible footer.
+ * Flex distributes the viewport between header and content.
  * Intentionally allow natural scrolling on narrow or short viewports.
  */
 @media (min-width: 641px) and (min-height: 621px) {
@@ -503,12 +477,8 @@
     height: auto;
     min-height: 0;
   }
-  body.payroll-upload-viewport > .build-info { flex: 0 0 auto; }
 }
 
-/* Build/version text is decorative, not an interactive footer. Never let it
- * intercept clicks on review inputs at a constrained desktop viewport. */
-body.payroll-upload-viewport > .build-info { pointer-events: none; }
 
 /* Round 4: explicit opt-in for unresolved amounts, adjacent to the save action. */
 .save-bar__actions { display:flex; flex:none; align-items:center; justify-content:flex-end; gap:14px; min-width:0; }
@@ -539,7 +509,26 @@ body.payroll-upload-viewport > .build-info { pointer-events: none; }
 
 /* Independent employer identity, deliberately outside the historical form fields. */
 .employer-identity__row { display:flex; gap:8px; align-items:center; min-width:0; }
-.employer-identity__row .input { min-width:0; flex:1; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+.employer-identity__row .input { min-width:0; flex:1; font-size:inherit; }
 .employer-identity__row .btn { flex:none; }
 .employer-identity__help { display:block; margin-top:5px; color:var(--color-muted); font-size:11px; line-height:1.5; }
 @media(max-width:430px) { .employer-identity__row {flex-wrap:wrap;} .employer-identity__row .btn {width:100%;} }
+
+/* Shared explicit review, used by all three statement editors. */
+.review-confirmation { margin:16px 0 0; padding:14px; border:1px solid var(--state-warning-border); border-radius:11px; background:var(--state-warning-bg); color:var(--state-warning-text); font-size:12px; line-height:1.6; }
+.review-confirmation h3 { font-size:13px; margin:0 0 8px; }
+.review-confirmation ul { margin:0 0 10px; padding-left:18px; }
+.review-confirmation dl { margin:8px 0; }
+.review-confirmation dl > div { display:flex; flex-wrap:wrap; gap:4px 12px; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--state-warning-border); }
+.review-confirmation dd { margin:0; font-weight:700; font-variant-numeric:tabular-nums; }
+.review-confirmation__check { display:flex; align-items:flex-start; gap:9px; cursor:pointer; padding-top:6px; font-weight:650; }
+.review-confirmation__check input { flex:none; width:17px; height:17px; margin-top:2px; accent-color:var(--color-primary); }
+.review-confirmation__check:has(input:disabled) { opacity:.65; cursor:default; }
+
+.review-current{margin-top:16px;font-size:13px;color:var(--color-text);line-height:1.6}
+.review-history{margin-top:12px;font-size:12px;color:var(--color-text);line-height:1.6;overflow-wrap:anywhere}
+.review-history summary{cursor:pointer;font-weight:650}
+.review-history ul{padding-left:18px}
+.review-confirmation__check[hidden]{display:none!important}
+
+#employer-status:empty { display:none; }

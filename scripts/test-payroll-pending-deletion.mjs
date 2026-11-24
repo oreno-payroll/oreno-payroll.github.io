@@ -1,0 +1,21 @@
+/** Page-local selection, stale target detection, and UI mutation boundary. */
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {PendingDeletion} from '../src/ui/pendingDeletion.ts';
+const q=new PendingDeletion();const a={id:1,signature:'a',label:'synthetic A'},b={id:2,signature:'b',label:'synthetic B'};
+q.toggle(a);q.toggle(b);assert.equal(q.size,2);assert.ok(q.has(1));assert.ok(q.matches([a,b]));
+a.signature='changed';assert.equal(q.matches([a,b]),false);assert.equal(q.matches([b]),false);
+const snapshot=q.snapshot();snapshot[0].signature='changed';assert.equal(q.snapshot()[0].signature,'a');
+q.toggle(a);assert.equal(q.size,1);assert.ok(q.matches([b]));q.remove(2);assert.equal(q.size,0);
+q.toggle(a);q.clear();assert.equal(q.size,0);
+const source=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
+const main=source('src/main.ts'),edit=source('src/edit.ts'),html=source('public/index.html');
+assert.match(main,/pendingDeletion\.toggle\(/);assert.match(main,/await deleteRecords\(targets\)/);
+assert.match(main,/if\(!approved\|\|!guard\(\)\)/);
+assert.match(main,/pendingDeletion\.clear\(\);deletionAuthorization=undefined;deletingRecordIds\.clear\(\)/);
+assert.match(main,/window\.addEventListener\('beforeunload'/);
+assert.match(edit,/if\(deletionPending\)\{await commitPendingDeletion\(\);return;\}/);
+assert.match(edit,/deletionNeedsReload=true/);
+assert.match(html,/id="pending-deletion-save" disabled/);
+assert.doesNotMatch(source('src/ui/pendingDeletion.ts'),/localStorage|sessionStorage|indexedDB|fetch\(/);
+console.log('PASS: page-local deletion intent, immutable target snapshots, cancellation, stale guard and explicit commit');

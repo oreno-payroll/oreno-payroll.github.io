@@ -1,7 +1,6 @@
 /* 保存済み編集・バックアップの画面共通部品 */
 .vault-page { max-width: 930px; margin: 0 auto; padding: 25px 0 72px; }
 .vault-heading { margin-bottom: 22px; }
-.vault-heading h1 { font-size: clamp(23px,3vw,30px); font-weight: 850; }
 .vault-heading p { margin: 6px 0 0; color: var(--color-muted); font-size: 13px; }
 .vault-stack { display: grid; gap: 18px; }
 .vault-section { padding: 26px 29px; }
@@ -27,11 +26,7 @@
 .edit-page .review-panel { height: auto !important; max-height: none !important; overflow: visible !important; padding: 26px; }
 .edit-page .review-panel .form-section:first-child { margin-top: 0; }
 .edit-page .review-panel .form-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-.raw-details { padding: 18px 23px; margin-top: 18px; }
-.raw-details summary { cursor: pointer; font-weight: 800; font-size: 13px; }
-.raw-details p { margin: 11px 0; font-size: 11px; color: var(--color-muted); }
-.raw-details pre { max-height: 360px; overflow: auto; padding: 16px; background: #142036; color: #f2f5fb; border-radius: 10px; font-size: 11px; line-height: 1.7; }
-.vault-bottom { position: sticky; bottom: 9px; z-index: 2; display: flex; gap: 20px; align-items: center; justify-content: space-between; padding: 15px 20px; background: rgba(255,255,255,.97); border: 1px solid var(--color-border); border-radius: 15px; box-shadow: 0 4px 22px rgba(25,41,72,.08); margin-top: 15px; }
+.vault-bottom { position: sticky; bottom: 9px; z-index: 2; margin-top: 15px; }
 .vault-bottom__status { min-width: 0; }
 .vault-bottom__status p { margin: 0 0 8px; font-size: 12px; color: var(--color-muted); }
 .vault-bottom__status .vault-check { margin: 0; font-size: 11px; }
@@ -42,21 +37,19 @@
   .saved-file { flex-wrap: wrap; padding: 16px; }
   .edit-page .review-panel { padding: 16px; }
   .edit-page .review-panel .form-grid { grid-template-columns: 1fr; }
-  .vault-bottom { position: static; flex-direction: column; align-items: stretch; padding: 14px; }
+  .vault-bottom { position: static; flex-direction: column; align-items: stretch; }
   .vault-bottom .btn { width: 100%; }
 }
 
 /* 設定: バックアップ / 認証 / 旧データ移行の3区分。 */
-.settings-page { max-width: none; width: 100%; padding-top: 26px; }
+.settings-page { max-width: none; width: 100%; padding-top: 26px; --settings-gap:18px; }
 .settings-page .vault-heading { margin-bottom: 19px; }
-.settings-page .vault-heading h1 { font-size: clamp(24px, 3vw, 29px); font-weight: 800; }
 .settings-group { min-width: 0; }
-.settings-group + .settings-group { margin-top: 28px; }
 .settings-group__head { margin: 0 0 12px; }
 .settings-group__head h2 { font-size: 16px; font-weight: 800; margin: 0; }
-.settings-page .backup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; align-items: stretch; }
+.settings-page .backup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--settings-gap); align-items: stretch; }
 .settings-page .vault-section, .settings-page .settings-panel {
-  min-width: 0; padding: 22px 24px; border-radius: 14px; box-shadow: none;
+  min-width: 0; padding: 22px 24px; border-radius: var(--radius-sm); box-shadow: none;
 }
 .settings-page .vault-section { display: flex; flex-direction: column; gap: 15px; }
 .settings-page .vault-section__head { display: grid; gap: 5px; margin: 0; }
@@ -68,17 +61,19 @@
 .settings-page .settings-field-label { font-size: 12px; font-weight: 700; color: var(--color-text); }
 .settings-page .backup-grid .backup-secret-fields label:not(:first-child) { margin-top: 4px; }
 .settings-page .password-field { display: flex; align-items: stretch; min-width: 0; gap: 7px; }
-.settings-page .password-field > input { flex: 1; min-width: 0; width: 0; min-height: 42px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 9px; color: var(--color-text); background: var(--color-surface); font: inherit; font-size: 13px; }
+.settings-page .password-field > input { flex: 1; min-width: 0; width: 0; min-height: var(--control-height); padding: 9px 12px; border: 1px solid var(--color-border-strong); border-radius: 9px; color: var(--color-text); background: var(--color-surface); font: inherit; font-size: 13px; }
 .settings-page .password-field > input:focus-visible, .settings-page .backup-cloud-settings__input input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .settings-page .password-visibility { flex: none; min-width: 49px; padding: 0 8px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-surface); color: var(--color-primary); font-size: 12px; font-weight: 700; cursor: pointer; }
 .settings-page .password-visibility:hover { background: var(--color-primary-soft); }
 .settings-page .backup-file-control { display: grid; gap: 8px; min-width: 0; }
 .settings-page .vault-file-label { margin: 0; }
-.settings-page .vault-file-input { width: 100%; min-width: 0; min-height: 43px; margin: 0; padding: 7px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 9px; font-size: 12px; }
+.settings-page .vault-file-input { width: 100%; min-width: 0; min-height: var(--control-height); margin: 0; padding: 7px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 9px; font-size: 12px; }
 .settings-page .vault-file-input::file-selector-button { border: 1px solid var(--color-border); border-radius: 7px; padding: 6px 9px; margin-right: 9px; background: var(--color-bg); color: var(--color-text); font-weight: 650; cursor: pointer; }
 .settings-page .backup-verify { align-self: flex-start; }
 .settings-page .backup-card__footer { display: grid; gap: 11px; margin-top: 0; padding-top: 8px; }
 .settings-page .backup-restore-actions { padding-top: 2px; }
+.settings-page .backup-restore-actions + .backup-restore-actions { border-top: 1px solid var(--color-border); padding-top: 14px; }
+.settings-page .backup-restore-actions > h4 { margin: 0; font-size: 13px; font-weight: 750; }
 .settings-page .backup-card__footer > .btn { width: 100%; white-space: normal; }
 /* 本人・従業員の保存カードは同じ「説明 → 入力 → 保存」構造にする。 */
 .settings-page .backup-save-button { width: 100%; white-space: normal; }
@@ -89,7 +84,7 @@
 .settings-page .vault-status { margin: 10px 0 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .settings-page .vault-status:empty { display: none; }
 .settings-page .settings-panel { margin-top: 0; }
-.settings-page .settings-auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; align-items: stretch; }
+.settings-page .settings-auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--settings-gap); align-items: stretch; }
 .settings-page .settings-panel__head { display: flex; align-items: baseline; gap: 8px 14px; flex-wrap: wrap; margin-bottom: 16px; }
 .settings-page .backup-cloud-settings { display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
 .settings-page .backup-cloud-settings .settings-panel__head { margin-bottom: 0; }
@@ -107,10 +102,11 @@
 .settings-page .settings-field-label { margin: 0; }
 .settings-page #backup-cloud-status { color: var(--color-muted); margin: 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .settings-page #backup-cloud-status[data-error="true"] { color: var(--color-danger); }
-.settings-page .backup-cloud-settings__form { display: grid; align-content: start; gap: 9px; min-width: 0; }
-.settings-page .backup-cloud-settings__form > label { font-size: 12px; font-weight: 700; }
+.settings-page .backup-cloud-settings__form { min-width: 0; }
+.settings-page .backup-cloud-settings__fields { display:grid; align-content:start; gap:9px; min-width:0; }
+.settings-page .backup-cloud-settings__fields > label { font-size: 12px; font-weight: 700; }
 .settings-page .backup-cloud-settings__input { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
-.settings-page .backup-cloud-settings__input input { flex: 1; min-width: 0; padding: 9px 11px; border: 1px solid var(--color-border-strong); border-radius: 9px; color: var(--color-text); background: var(--color-surface); font-size: 13px; }
+.settings-page .backup-cloud-settings__input input { flex: 1; min-width: 0; min-height: var(--control-height); padding: 9px 11px; border: 1px solid var(--color-border-strong); border-radius: 9px; color: var(--color-text); background: var(--color-surface); font-size: 13px; }
 .settings-page .settings-redirect { margin: 0; font-size: 11px; line-height: 1.5; color: var(--color-muted); overflow-wrap: anywhere; }
 .settings-page .settings-redirect code { font-size: 11px; overflow-wrap: anywhere; }
 @media (max-width: 830px) {
@@ -140,11 +136,12 @@
 }
 
 
-/* Detailed settings: four independent functions in one responsive 2x2 card. */
+/* Maintenance: four independent functions in one vertically ordered card. */
 .settings-page .settings-details-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0,1fr);
   align-items: stretch;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   box-shadow: none;
 }
@@ -156,8 +153,7 @@
   min-width: 0;
   padding: 22px 24px;
 }
-.settings-page .settings-details-column:nth-child(even) { border-left: 1px solid var(--color-border); }
-.settings-page .settings-details-column:nth-child(n+3) { border-top: 1px solid var(--color-border); }
+.settings-page .settings-details-column + .settings-details-column { border-top: 1px solid var(--color-border); }
 .settings-page .settings-details-column h3 {
   margin: 0;
   font-size: 15px;
@@ -203,10 +199,7 @@
 }
 .settings-page .settings-details-column .vault-status { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 850px) {
-  .settings-page .settings-details-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-page .settings-details-column { padding: 20px; }
-  .settings-page .settings-details-column:nth-child(even) { border-left: 0; }
-  .settings-page .settings-details-column + .settings-details-column { border-top: 1px solid var(--color-border); }
 }
 @media (max-width: 480px) {
   .settings-page .settings-details-column .settings-action-row > .btn,
@@ -257,3 +250,45 @@
  .settings-page .settings-connection-account>.settings-action-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr);justify-content:stretch}
  .settings-page .settings-connection-account>.settings-action-row>.btn{width:100%;min-width:0;white-space:normal;justify-content:center}
 }
+
+/* Settings overview and detail views: the underlying forms remain mounted. */
+.settings-page .settings-menu { overflow: hidden; padding: 0; box-shadow: none; border-radius:var(--radius-sm); }
+.settings-page .settings-menu__item { display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%; padding: 12px 14px; text-align: left; color: var(--color-text); background: var(--color-surface); border: 0; cursor: pointer; }
+.settings-page .settings-menu__item + .settings-menu__item { border-top: 1px solid var(--color-border); }
+.settings-page .settings-menu__item > span:first-child { display: grid; gap: 4px; min-width: 0; }
+.settings-page .settings-menu__item strong { font-size: 15px; font-weight: 750; }
+.settings-page .settings-menu__item:not(:disabled):hover { background: var(--color-primary-soft); }
+.settings-page .settings-menu__item:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -3px; }
+.settings-page .settings-menu__item:disabled { opacity: .6; cursor: default; }
+.settings-page .settings-group__head h2:focus { outline: none; }
+
+.employer-settings__list { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.employer-settings__list[hidden],.employer-settings__form[hidden] { display:none; }
+.employer-settings__list li { display:flex; gap:12px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--color-border); padding:8px 0; overflow-wrap:anywhere; }
+.employer-settings__form { display:grid; gap:8px; max-width:520px; }
+.employer-settings__form .input { width:100%; min-width:0; }
+.employer-settings__form .btn { justify-self:start; }
+
+#employer-bulk-panel[hidden] { display:none; }
+.employer-bulk__actions { display:flex; flex-wrap:wrap; gap:8px; }
+.employer-bulk__list { display:grid; gap:6px; max-height:360px; overflow-y:auto; }
+.employer-bulk__list label { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--color-border); overflow-wrap:anywhere; }
+.employer-bulk__list input { flex-shrink:0; margin-top:4px; }
+
+.record-diagnostic-entry { display:flex; justify-content:flex-end; margin:16px 0; }
+.record-diagnostic__raw { max-height: min(40vh,360px); overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; border:1px solid var(--color-border); border-radius:8px; font-size:12px; line-height:1.6; }
+
+.backup-cloud-settings__form summary{cursor:pointer;font-weight:700;margin-bottom:10px}
+
+/* Settings categories are persistent side navigation, not separate pages. */
+.settings-page{display:grid;grid-template-columns:minmax(190px,240px) minmax(0,1fr);gap:0 24px;align-items:start}
+.settings-page>.settings-heading,.settings-page>noscript{grid-column:1/-1}
+.settings-page>.settings-sidebar{grid-column:1;grid-row:2;min-width:0}
+.settings-page>.settings-group{grid-column:2;grid-row:2;min-width:0;margin:0}
+.settings-page .settings-group{display:grid;gap:var(--settings-gap);align-content:start}
+.settings-page .settings-backup-section{min-width:0}
+.settings-page .vault-info:empty{display:none}
+.settings-page .settings-menu__item[aria-current="true"]{background:var(--state-selected-bg);color:var(--color-primary);box-shadow:inset 3px 0 var(--color-primary)}
+.settings-page .settings-sidebar .build-info{overflow-wrap:anywhere;text-align:left;padding:10px 0}
+@media(max-width:760px){.settings-page{display:block}.settings-page>.settings-sidebar{margin-bottom:18px}.settings-page .settings-menu{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.settings-page .settings-menu__item{min-width:0;padding:10px;overflow-wrap:anywhere;border:1px solid var(--color-border)}.settings-page .settings-menu__item strong{font-size:12px}.settings-page .settings-sidebar .build-info{padding:8px 0}}
+@media(min-width:761px) and (max-width:1060px){.settings-page .backup-grid{grid-template-columns:minmax(0,1fr)}}

@@ -54,16 +54,19 @@ assert.equal(pending.value,'111111','auto switch fills only unsaved, untouched m
 assert.equal(redrawCount,2,'both mode switches update the forecast preview');
 assert.doesNotMatch(html,/id="yea-method-help"/);
 assert.match(ui,/\$<HTMLButtonElement>\('yea-discard-edit'\)\.hidden=!changed/);
-const save=ui.slice(ui.indexOf('async function saveAllDocuments()'),ui.indexOf('async function refreshPeopleKeepSelection()'));
+const save=ui.slice(ui.indexOf('async function saveAllDocuments()'),ui.indexOf('function bind()'));
 assert.match(save,/await repo\.saveDocumentsBatch/);
 assert.match(save,/data=result\.data/);
 assert.doesNotMatch(save,/await loadYear\(|await refreshPeopleKeepSelection\(/);
-assert.match(save,/if\(acknowledged&&!window\.confirm/, 'only confirmed monetary contradictions prompt');
+assert.match(save,/if\(changedDrafts\.some\(requiresAmountApproval\)\)/, 'every changed draft must be approved before save');
+assert.match(save,/const acknowledged=changedDrafts\.some\(d=>documentAmountWarnings\(d\)\.length>0\)/);
+assert.doesNotMatch(save,/approveYearEnd\(/,'live approval replaces the save-time dialog');
 assert.match(save,/forecastSnapshot/);
-const remove=ui.slice(ui.indexOf("$<HTMLButtonElement>('yea-delete-person').addEventListener"),ui.indexOf("memoInput.addEventListener('input'"));
-assert.match(remove,/if\(dialog\.open\)dialog\.close\(\)/);
-assert.ok(remove.indexOf('dialog.close()')<remove.indexOf('await repo.deletePerson(id)'));
-assert.match(css,/\.yea-manage-dialog\{width:min\(390px/);
+const remove=ui.slice(ui.indexOf("remove.addEventListener('click'"),ui.indexOf('row.append(button,rename,remove)'));
+assert.match(remove,/requiredText:name,acceptLabel:'従業員を削除'/);
+assert.ok(remove.indexOf('await approveYearEnd')<remove.indexOf('await repo.deletePerson(id,p)'));
+assert.match(remove,/authorized\(\)&&!busy&&!selected&&people\.includes\(p\)/);
+assert.match(css,/\.yea-create-dialog\{width:min\(390px/);
 assert.match(repo,/for\(let i=0;i<pending\.length;i\+=3\)/);
 assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile,context\)/);
 // Exercise exact adapter with synthetic side-bonus and guard for non-taxable rows.

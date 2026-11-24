@@ -1,10 +1,18 @@
-/** テスト実行を1カ所に統一。監査パッチ未適用のソースにも対応する。 */
+/** 必須回帰テストを全件実行し、失敗をまとめて報告する。 */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = [
+  ['scripts/test-payroll-pending-deletion.mjs', true],
+  ['scripts/test-payroll-employer-directory.mjs', true],
+  ['scripts/test-payroll-employer-selection.mjs', true],
+  ['scripts/test-payroll-employer-forecast.mjs', true],
+  ['scripts/test-payroll-operation-dialog.mjs', true],
+  ['scripts/test-payroll-review-consent.mjs', true],
+  ['scripts/test-payroll-settings-diagnostic.mjs', true],
+  ['scripts/test-payroll-notification-outcomes.mjs', true],
   ['scripts/test-ci-security-gates.mjs', true],
   ['scripts/test-security-pipeline.mjs', true],
   ['scripts/test-pr-merge-target.mjs', true],
@@ -26,7 +34,7 @@ const tests = [
   ['scripts/test-low-priority.mjs', true],
   ['scripts/test-missing-indicator.mjs', true],
   ['scripts/test-optional-zero.mjs', true],
-  ['scripts/test-audit-fixes.mjs', false],
+  ['scripts/test-audit-fixes.mjs', true],
   ['scripts/test-bonus-latest.mjs', true],
   ['scripts/test-calendar-year.mjs', true],
   ['scripts/test-home-registration-status.mjs', true],
@@ -79,6 +87,7 @@ const tests = [
   ['scripts/test-payroll-msal-reconnect.mjs', true],
   ['scripts/test-payroll-settings-safety.mjs', true],
   ['scripts/test-payroll-upload-recovery.mjs', true],
+  ['scripts/test-payroll-p1-p7.mjs', true],
   ['scripts/test-msal-v5-bridge.mjs', true],
   ['scripts/test-frame-guard.mjs', true],
   ['scripts/test-browser-remembered-key.mjs', true],
@@ -101,6 +110,7 @@ const tests = [
   ['scripts/test-payroll-employer-identity.mjs', true],
   ['scripts/test-payroll-performance-phase04.mjs', true],
   ['scripts/test-payroll-performance-phase05.mjs', true],
+  ['scripts/test-payroll-dashboard-selection.mjs', true],
   ['scripts/test-cloud-startup.mjs', true],
   ['scripts/test-navigation-session.mjs', true],
   ['scripts/test-key-rotation-backup.mjs', true],
@@ -117,17 +127,29 @@ const tests = [
   ['scripts/test-income-publication-v132.mjs', true],
   ['scripts/verify-three-features.mjs', true],
   ['scripts/verify-calendar-feature.mjs', true],
+  ['scripts/test-payroll-final-quality.mjs', true],
+  ['scripts/test-payroll-final-security.mjs', true],
 ];
+const failures = [];
+let passed = 0;
+const registered = new Set(tests.map(([name])=>name));
+if (registered.size !== tests.length) throw new Error('回帰テストの重複登録があります。');
+for (const name of readdirSync(path.join(root,'scripts'))) {
+  if (/^(?:test|verify)-.+\.mjs$/.test(name) && !registered.has(`scripts/${name}`)) failures.push(`scripts/${name}: 実行一覧に未登録です`);
+}
 for (const [relative, required] of tests) {
   const target = path.join(root, relative);
+  console.log(`\n▶ ${relative}`);
   if (!existsSync(target)) {
-    if (required) throw new Error(`必須テストがありません: ${relative}`);
-    console.log(`SKIP (監査パッチ未適用): ${relative}`);
+    failures.push(`${relative}: ${required?'必須テストがありません':'テストがありません'}`);
     continue;
   }
-  console.log(`\n▶ ${relative}`);
   const result = spawnSync(process.execPath, ['--experimental-transform-types', target], { cwd: root, stdio: 'inherit' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status || 1);
+  if (result.error || result.status !== 0) failures.push(`${relative}: ${result.error?.message??result.signal??result.status}`);
+  else passed++;
 }
-console.log('\n✅ Payroll 全回帰テスト完了');
+console.log(`\n回帰テスト: ${passed}/${tests.length} PASS, ${failures.length} FAIL`);
+if (failures.length) {
+  for (const failure of failures) console.error(`[FAIL] ${failure}`);
+  process.exitCode = 1;
+} else console.log('✅ Payroll 全回帰テスト完了');

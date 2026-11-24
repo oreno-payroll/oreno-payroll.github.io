@@ -28,8 +28,8 @@ const graph={
 };
 const common={crypto:webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Map,Set,WeakMap,Promise,console,performance,
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_,t)=>JSON.parse(t),encryptJson:async(_,v)=>JSON.stringify(v),decryptBytes:async()=>pdf,
- isCollision:()=>false,clearNavigationSnapshot:()=>{cache=null},rememberNavigationSnapshot:async(_scope,_salt,_key,data)=>{cache=data},
- restoredNavigationSnapshot:async(_scope,_salt,_key)=>cache?{data:cache,expires:Date.now()+120000}:null,
+ isCollision:()=>false,SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{cache=null},rememberNavigationSnapshot:async(_scope,_salt,_key,data)=>{cache=data},
+ restoredNavigationSnapshot:async(_scope,_salt,_key)=>cache?{data:cache,expires:Date.now()+600000}:null,
  fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),payrollPeriodKey:rec=>rec.form.paymentDate,
  beginPerfOperation:()=>({measure:async(_,fun)=>fun(),finish(){}}),
  MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:1e9,PayrollPartialSuccessError:class extends Error{},
@@ -68,3 +68,45 @@ cache={index,years:years.map(y=>[y,doc(y==='2025'?[make(2025,'2025'),make(2026,'
 const old=new PayrollVault(graph);old.setNavigationScope('client:synthetic');assert.equal(await old.resumeFromSnapshot(key,salt),true);current=old;
 reset();await api.getRecordSummary(2026,'2023');assert.equal(calls.read.filter(p=>p.includes('statements')).length,4);
 console.log('PASS: legacy snapshot without ETags falls back to full authenticated read');
+
+// Exercise the real snapshot functions with WebCrypto and an isolated tab store.
+{
+ const store=new Map();
+ const env={crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,Date,Map,Set,Promise,Error,JSON,btoa,atob,
+  sessionStorage:{getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,String(v)),removeItem:k=>store.delete(k)},
+  clearNavigationNotice(){},dismissOperationDialog(){},dismissRecordDiagnostic(){}};
+ const actual=runInNewContext(strip(src('src/cloud/crypto.ts'))+'\n'+strip(src('src/cloud/snapshot.ts'))+'\n({rememberNavigationSnapshot,restoredNavigationSnapshot,invalidateNavigationSnapshot,invalidateAuthSession,mutationEpoch,SNAPSHOT_TTL_MS})',env);
+ const k=await webcrypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+ const scope='synthetic-scope',s='synthetic-salt';
+ assert.equal(actual.SNAPSHOT_TTL_MS,600_000);
+ await actual.rememberNavigationSnapshot(scope,s,k,{name:'Synthetic home'});
+ await actual.rememberNavigationSnapshot(scope,s,k,[{displayName:'Synthetic employee'}],'people');
+ assert.equal(store.size,2);assert.doesNotMatch([...store.values()].join(' '),/Synthetic home|Synthetic employee/);
+ assert.equal((await actual.restoredNavigationSnapshot(scope,s,k,'people')).data[0].displayName,'Synthetic employee');
+ assert.equal((await actual.restoredNavigationSnapshot(scope,s,k)).data.name,'Synthetic home');
+ const pendingRead=actual.restoredNavigationSnapshot(scope,s,k,'people');actual.invalidateNavigationSnapshot();assert.equal(await pendingRead,null);
+ assert.equal(store.has('payroll-navigation-snapshot-v1'),false);assert.equal(store.has('payroll-yearend-navigation-snapshot-v1'),false);
+ const epoch=actual.mutationEpoch();actual.invalidateNavigationSnapshot();await actual.rememberNavigationSnapshot(scope,s,k,{old:true},'people',epoch);assert.equal(store.has('payroll-yearend-navigation-snapshot-v1'),false);
+ await actual.rememberNavigationSnapshot(scope,s,k,[{displayName:'Synthetic employee'}],'people');
+ assert.equal(await actual.restoredNavigationSnapshot('different-account',s,k,'people'),null);
+ await actual.rememberNavigationSnapshot(scope,s,k,{},'people');const clock=Date.now;Date.now=()=>clock()+600_001;
+ try{assert.equal(await actual.restoredNavigationSnapshot(scope,s,k,'people'),null);}finally{Date.now=clock;}
+ const pendingWrite=actual.rememberNavigationSnapshot(scope,s,k,{},'people');actual.invalidateAuthSession();await pendingWrite;
+ assert.equal(store.has('payroll-yearend-navigation-snapshot-v1'),false);
+ console.log('PASS: actual AES-GCM separate tab caches, scope binding, expiry and in-flight read/write invalidation');
+}
+// A background silent resume and a user-requested unlock can overlap. The
+// silent failure must not become a permanent failure of the interactive load.
+{
+ const source=src('src/cloud/auth.ts'),start=source.indexOf('export async function cloudVault()'),end=source.indexOf('/** Inspect the current Microsoft account',start);
+ let rejectProbe,probeCount=0,promptCount=0,allow=true;
+ const fakeVault={isUnlocked:()=>true};
+ const env={vault:undefined,unlocking:undefined,backgroundUnlocking:undefined,tabLocks:{check:()=>allow},validId:()=>true,clientId:()=> 'fixture',captureOperationAuthorization:()=>()=>allow,
+  resumeOrPrompt:async(prompt=true)=>{if(!prompt){probeCount++;return await new Promise((_,reject)=>{rejectProbe=reject;});}promptCount++;env.vault=fakeVault;return fakeVault;}};
+ const functions=runInNewContext(strip(source.slice(start,end))+'\n({cloudVault,tryResumeCloudVault})',env);
+ const background=functions.tryResumeCloudVault(),one=functions.cloudVault(),two=functions.cloudVault();rejectProbe(new Error('silent auth failed'));
+ assert.equal(await background,undefined);assert.equal(await one,fakeVault);assert.equal(await two,fakeVault);assert.equal(probeCount,1);assert.equal(promptCount,1);
+ env.vault=undefined;const next=functions.tryResumeCloudVault(),blocked=functions.cloudVault();allow=false;rejectProbe(new Error('account changed'));
+ await next;await assert.rejects(blocked,/ロック/);assert.equal(promptCount,1);
+ console.log('PASS: interactive unlock falls back once after silent failure; lock change blocks stale caller');
+}

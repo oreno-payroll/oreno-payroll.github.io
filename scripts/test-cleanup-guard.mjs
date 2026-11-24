@@ -81,6 +81,6 @@ async function prepared(){const g=new CloudMock(),v=new PayrollVault(g);await v.
  assert.doesNotMatch(localCleanup,/cloudVault\(|vault\.|recordSignature\(/,'local cleanup must not use OneDrive');
  assert.match(localCleanup,/indexedDB\.deleteDatabase\('payroll-local-v1'\)/);
  assert.doesNotMatch(localCleanup,/indexedDB\.deleteDatabase\(\s*[^'"\s]/);
- assert.match(code,/prompt\('削除するには/);
+ assert.match(code,/requiredText:'整理'/);
  console.log('PASS: cleanup controls and safe known-DB-only checks');
 }

@@ -57,6 +57,6 @@ const homepage=read('public/index.html');
 assert.match(homepage,/href="\.\/year-end-assist\/index\.html"/);
 const ui=read('src/year-end-assist.ts');
 assert.doesNotMatch(ui,/from ['"]\.\/storage\/payrollStore/);
-assert.match(ui,/window\.confirm/);
+assert.match(ui,/await approveYearEnd\(/);
 assert.match(ui,/clearDrafts\(\)/);
 console.log('PASS: year-end isolated model, taxable arithmetic, 2026 forecast, manual review, no cross-person mixing, new AAD, deletion guard');

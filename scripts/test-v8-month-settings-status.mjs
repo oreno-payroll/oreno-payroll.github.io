@@ -22,7 +22,7 @@ assert.match(home,/periodMode==='calendar' \? record\.form\.paymentDate\.slice\(
 assert.doesNotMatch(home,/statement-month-heading/);
 assert.doesNotMatch(homeCss,/\.statement-month-heading/);
 // Exactly one advanced settings panel contains the four independent operations.
-assert.match(settings,/<h2 id="settings-details-title">詳細設定<\/h2>/);
+assert.match(settings,/<h2 id="settings-details-title">メンテナンス<\/h2>/);
 assert.equal((settings.match(/class="settings-details-column/g)??[]).length,4);
 for (const id of ['payroll-income-publish','orphan-year-check','orphan-year-recover','legacy-cleanup-delete','legacy-cleanup-check','migrate-legacy-cloud']) {
  assert.equal((settings.match(new RegExp(`id="${id}"`,'g'))??[]).length,1,id);
@@ -41,13 +41,13 @@ assert.doesNotMatch(settingsCss,/\.settings-page \.backup-card__footer \{[^}]*bo
 // Every major screen must import and use the same right-bottom app status.
 for (const file of ['src/main.ts','src/upload.ts','src/edit.ts','src/backup.ts','src/view.ts','src/year-end-assist.ts']) {
  const source=read(file);
- assert.match(source,/import \{ createAppStatus \} from /,file);
+ assert.match(source,/import \{ createAppStatus(?:, type AppStatusKind)? \} from /,file);
  assert.match(source,/createAppStatus\(/,file);
 }
 assert.match(style,/\.app-status\{position:fixed;right:/);
 assert.match(style,/\.app-status\[data-state="loading"\]::before/);
 assert.match(style,/\.app-status\[data-state="error"\]/);
-assert.match(toast,/if\(kind!=='loading'\)timer=setTimeout/);
+assert.match(toast,/if\(kind!=='loading'&&!sticky\)timer=setTimeout/);
 assert.match(read('public/view/index.html'),/class="app-status" id="pdf-status"/);
 assert.match(read('public/upload/index.html'),/class="app-status" id="toast"/);
 assert.match(read('public/year-end-assist/index.html'),/class="app-status yea-status" id="yea-status"/);

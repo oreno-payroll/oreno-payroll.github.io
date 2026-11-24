@@ -17,19 +17,19 @@ for(const id of ['export-password','export-confirm','restore-file','restore-pass
 }
 assert.match(html,/class="vault-stack backup-grid"/);
 assert.match(html,/<title>設定 \| Payroll<\/title>/);
-assert.match(html,/<h1>設定<\/h1>/);
+assert.match(html,/<h1 id="settings-page-title" tabindex="-1">設定<\/h1>/);
 assert.match(css,/\.settings-page \.backup-grid\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 assert.match(css,/@media\s*\(max-width:\s*830px\)[\s\S]*?\.settings-page \.backup-grid\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 const personalSaveCard=html.match(/<section class="card vault-section" aria-labelledby="backup-export-title">([\s\S]*?)<\/section>/)?.[1];
 const yearEndSaveCard=html.match(/<section class="card vault-section" aria-labelledby="ye-backup-export-heading">([\s\S]*?)<\/section>/)?.[1];
 assert.ok(personalSaveCard,'personal backup save card must exist');
 assert.ok(yearEndSaveCard,'year-end backup save card must exist');
-const note='従業員情報・各年の明細・PDF原本・見込み額・年度メモを専用ファイルにまとめます。本人用のバックアップとは別です。';
+const note='従業員情報・各年の明細・PDF原本・見込み額・年別メモを専用ファイルにまとめます。本人用のバックアップとは別です。';
 assert.equal(html.split(note).length-1,1,'year-end backup explanation should appear only once');
 assert.ok(yearEndSaveCard.includes(note),'description must be inside employee backup save card');
 assert.match(yearEndSaveCard,/<div class="vault-section__head">[\s\S]*?従業員データを保存[\s\S]*?<p class="vault-info">/,'explanation should follow heading');
 assert.doesNotMatch(html,/OneDriveの全従業員を照合し、AES-GCM暗号化してダウンロードします。/,'redundant implementation explanation removed');
-const personalDescription='本人の給与・賞与明細と原本PDFが対象です。年末調整の従業員データは下の専用バックアップで保存してください。復元にはこのパスワードが必要です。';
+const personalDescription='本人の給与・賞与明細、PDF原本、勤務先情報を保存します。復元にはこのパスワードが必要です。';
 assert.equal(html.split(personalDescription).length-1,1,'personal backup explanation should appear only once');
 for(const [card,heading,desc,password,button] of [
  [personalSaveCard,'backup-export-title',personalDescription,'export-password','export-button'],
@@ -45,20 +45,21 @@ assert.ok(personalSaveCard.indexOf('id="export-summary"')<personalSaveCard.index
 assert.match(css,/\.settings-page \.backup-save-button\s*\{\s*width:\s*100%;\s*white-space:\s*normal;/,'both save buttons must share full-width styling');
 assert.match(html,/<section class="card settings-panel backup-cloud-settings"/);
 assert.match(html,/<section class="card settings-panel backup-key-change"/);
-const withoutRestorePreview=html.replace(/<details id="ye-restore-people"[\s\S]*?<\/details>/,'');
+const withoutRestorePreview=html.replace(/<details id="ye-restore-people"[\s\S]*?<\/details>/,'').replace(/<details class="backup-cloud-settings__form"[\s\S]*?<\/details>/,'');
+assert.match(html,/<details class="backup-cloud-settings__form" id="backup-cloud-advanced" open>/);
 assert.doesNotMatch(withoutRestorePreview,/<details\b|<summary\b/,'settings sections must not be accordions; only restore-preview list may collapse');
 assert.match(html,/id="ye-restore-people"/,'large restore preview can collapse');
-for(const [id,title] of [['settings-backup-title','バックアップ'],['settings-yearend-backup-title','年末調整のバックアップ'],['settings-auth-title','認証'],['settings-details-title','詳細設定']]){
+for(const [id,title] of [['settings-backup-title','本人のバックアップ'],['settings-yearend-backup-title','年末調整のバックアップ'],['settings-auth-title','Microsoft接続・認証'],['settings-details-title','メンテナンス']]){
  assert.ok(html.includes(`<h2 id="${id}">${title}</h2>`));
 }
 for(const [id,title] of [['settings-finance-income-title','Finance連携用の収入データ'],['settings-orphan-title','年度データの復旧'],['settings-legacy-title','旧データの整理・移行']]){
  assert.ok(html.includes(`<h3 id="${id}">${title}</h3>`));
 }
-assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,4,'personal backup, year-end backup, auth and details groups');
+assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,4,'employer management, shared backup, auth and maintenance groups');
 assert.match(html,/<div class="card settings-details-grid">/);
 assert.equal((html.match(/class="settings-details-column/g)??[]).length,4);
-assert.match(css,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2/);
-assert.match(css,/@media\s*\(max-width:\s*850px\)\s*\{[^}]*\.settings-page \.settings-details-grid\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+assert.match(css,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,1fr\)/);
+assert.match(css,/\.settings-page \.settings-details-column \+ \.settings-details-column\s*\{\s*border-top:/);
 assert.ok(html.indexOf('id="settings-backup-title"')<html.indexOf('id="settings-auth-title"'));
 assert.ok(html.indexOf('id="settings-auth-title"')<html.indexOf('id="settings-details-title"'));
 assert.ok(html.indexOf('id="settings-finance-income-title"')<html.indexOf('id="settings-orphan-title"'));
@@ -71,7 +72,7 @@ assert.match(html,/id="restore-button"[^>]*disabled/);
 assert.match(html,/id="verify-button"[^>]*disabled/);
 assert.doesNotMatch(html,/id="restore-password-row"[^>]*hidden/);
 assert.match(html,/id="backup-status"[^>]*aria-live="polite"/);
-assert.match(script,/window\.confirm\(`/,'destructive restore confirmation must remain');
+assert.match(script,/await approveSettings\(\{title:'本人用バックアップを置き換えて復元'/,'destructive restore confirmation must remain');
 assert.doesNotMatch(html,/style="/,'no inline CSS');
 assert.match(html,/id="payroll-income-publish"/);
 assert.match(html,/id="orphan-year-check"/);
@@ -96,7 +97,7 @@ for(const [label,section,ids] of [['personal',personal,steps.map(x=>x[1])],['emp
   cursor=position;
  }
  assert.doesNotMatch(section,/backup-restore-warning/,'old duplicate warning must be removed');
- assert.match(section,/>復元する<\/button>/,'final button label must match');
+ assert.ok(section.includes(label==='personal'?'>置き換えて復元</button>':'>従業員を追加復元</button>'),'restore buttons distinguish destructive replacement from additive restore');
 }
 assert.match(personal,/現在の本人明細をすべて置き換えることを確認しました/);
 assert.match(employee,/登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加することを確認しました/);
@@ -110,4 +111,17 @@ const account=html.match(/<section class="card settings-panel backup-cloud-setti
 const passphrase=html.match(/<section class="card settings-panel backup-key-change"([\s\S]*?)<\/section>/)?.[1];
 assert.ok(account?.includes('id="remember-browser-register"'));
 assert.ok(!passphrase?.includes('id="remember-browser-register"'));
-console.log('PASS: personal/employee restore flow, browser auth layout, 2x2 detail grid, safety confirmation');
+console.log('PASS: personal/employee restore flow, browser auth layout, maintenance layout, safety confirmation');
+// All detail controls stay mounted, but no category is exposed before navigation initializes.
+for(const [key,panel] of [['auth','auth'],['employers','employers'],['backup','backup'],['maintenance','details']]){
+ assert.match(html,new RegExp(`data-settings-open="${key}" aria-controls="settings-${panel}-panel" disabled`));
+ assert.match(html,new RegExp(`id="settings-${panel}-panel"[^>]* hidden>`));
+}
+assert.match(script,/settingsNavigation\?\.setBusy\(busy\)/);
+assert.match(script,/settingsNavigation=mountSettingsNavigation\(/);
+assert.ok(script.indexOf('settingsNavigation=mountSettingsNavigation(')>script.indexOf("yearEndRecheck.addEventListener('click'"));
+console.log('PASS: settings overview, initial hidden detail panels, busy-state linkage');
+
+for(const id of ['restore-add-inspect','restore-add-preview','restore-add-ack','restore-add-button']){assert.ok(personal.includes(`id="${id}"`));assert.ok(script.includes(id));}
+assert.match(personal,/id="restore-add-button"[^>]*disabled>明細を追加復元/);
+assert.match(script,/await restoreAdditiveRecords\(data.records,plan.signature,data.employers,authorized/);

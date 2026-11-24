@@ -7,11 +7,11 @@ const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const source=read('src/year-end-assist.ts');
 const block=source.slice(source.indexOf('function updateSaveState(){'),source.indexOf('function renderSelectedReview(){'));
 assert.ok(block.startsWith('function updateSaveState(){'),'source policy must remain testable');
-function testQueue(statuses,{blocked=false}={}){
+function testQueue(statuses,{blocked=false,unapproved=false}={}){
  const progress={textContent:''},saveAll={disabled:null,textContent:''},saveRecheck={disabled:null},saveReload={disabled:null};
  const state={fileQueue:statuses.map(status=>({status,draft:status==='ready'?{}:null})),data:{documents:[]},savedEdits:new Map(),pendingDeletions:new Map(),
   busy:false,saveRecoveryRequired:blocked,selected:'synthetic-uuid',savingDocuments:false,
-  saveAll,saveRecheck,saveReload,saveRecoveryChecked:false,saveRecoverySafe:false,validateQueueItem:()=>null,isChanged:()=>false,validateSavedEdit:()=>null,$:()=>progress};
+  saveAll,saveRecheck,saveReload,saveRecoveryChecked:false,saveRecoverySafe:false,validateQueueItem:()=>null,isChanged:()=>false,validateSavedEdit:()=>null,requiresAmountApproval:()=>unapproved,renderAmountReview:()=>{},$:()=>progress};
  runInNewContext(stripTypeScriptTypes(block,{mode:'strip'})+'\nupdateSaveState()',state);
  return {disabled:saveAll.disabled,text:progress.textContent};
 }
@@ -23,6 +23,7 @@ assert.equal(onlyDuplicate.disabled,true);assert.match(onlyDuplicate.text,/ÈáçË§
 assert.equal(testQueue(['ready','error']).disabled,true,'an unreadable PDF still blocks the batch');
 assert.equal(testQueue(['ready','reading']).disabled,true,'never save before parsing completes');
 assert.equal(testQueue(['ready'],{blocked:true}).disabled,true,'ambiguous cloud save must stay blocked until reinspection');
+assert.equal(testQueue(['ready'],{unapproved:true}).disabled,true,'unapproved warning must block batch');
 assert.match(source,/showSkippedResult\(additions\.length,updates\.length,excluded\)/);
 assert.match(source,/item\.status='duplicate';item\.error=/);
 assert.match(source,/saveRecoveryRequired=true;saveRecoveryChecked=false;saveRecoverySafe=false/);

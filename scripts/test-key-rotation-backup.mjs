@@ -6,10 +6,10 @@ import {readFileSync} from 'node:fs';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const root=new URL('../',import.meta.url).pathname;
 const result=await build({
- stdin:{contents:"export {PayrollVault,InterruptedRotationError} from './src/cloud/vault.ts'; export {GraphError} from './src/cloud/graph.ts'; export {encryptJson,decryptJson} from './src/cloud/crypto.ts';",resolveDir:root,sourcefile:'test-entry.ts',loader:'ts'},
+ stdin:{contents:"export {PayrollVault,InterruptedRotationError} from './src/cloud/vault.ts'; export {GraphError} from './src/cloud/graph.ts'; export {encryptJson,decryptJson,encryptBytes} from './src/cloud/crypto.ts';",resolveDir:root,sourcefile:'test-entry.ts',loader:'ts'},
  bundle:true,platform:'node',format:'esm',target:'es2022',write:false,logLevel:'silent',
 });
-const {PayrollVault,InterruptedRotationError,GraphError,encryptJson,decryptJson}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
+const {PayrollVault,InterruptedRotationError,GraphError,encryptJson,decryptJson,encryptBytes}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
 const encoder=new TextEncoder();
 class FakeGraph {
  files=new Map(); failOn=null; modifyOnMetadata=null; writes=[];reads=[];
@@ -37,6 +37,13 @@ class FakeGraph {
    else contents.set(name,{id:file.id,name,etag:file.etag,folder:false,size:file.size});
   }
   return contents.size?[...contents.values()].sort((a,b)=>a.name.localeCompare(b.name)):null;
+ }
+ async trashPayrollOriginal(parts,item,beforeDelete){
+  await beforeDelete();const path=this.path(parts,item.name),actual=this.files.get(path);
+  assert.equal(actual?.id,item.id);assert.equal(actual?.etag,item.etag);
+  if(this.failTrash)throw new Error('synthetic trash failure');
+  this.files.delete(path);
+  if(this.failReceipt)this.failOn='payroll/index.enc';
  }
  async trashFolder(parts,item){
   const existing=(await this.listFolder(parts))?.find(v=>v.name===item.name);
@@ -70,6 +77,8 @@ async function prepared(){
 }
 {
  const {graph,vault}=await prepared(),records=vault.records();
+ const directory=[{id:'emp_'+'d'.repeat(32),name:'架空勤務先',role:'main',current:true}];
+ await vault.writeEmployerDirectory([],directory);
  const priorPaths=[...graph.files.keys()];
  const result=await vault.changePassphrase(previous,changed);
  assert.ok(result.generation);
@@ -77,6 +86,7 @@ async function prepared(){
  assert.equal((await vault.original(records[0])).size,records[0].pdfSize);
  const reopened=new PayrollVault(graph);
  await reopened.unlock(changed);
+ assert.deepEqual(await reopened.readEmployerDirectory(),directory);
  assert.equal((await reopened.refresh()).length,1);
  assert.equal((await reopened.original(reopened.records()[0])).size,records[0].pdfSize);
  const wrong=new PayrollVault(graph);
@@ -146,7 +156,11 @@ async function prepared(){
 {
  const {graph,vault}=await prepared();
  const before=vault.records()[0],secret=vault.sessionKey();
- const orphan={...before,id:9876,form:{...before.form,targetMonth:'2027-04',paymentDate:'2027-04-27'}};
+ const bytes=encoder.encode('%PDF-1.7 synthetic distinct orphan');
+ const fileHash=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
+ const originalId=crypto.randomUUID();
+ const orphan={...before,id:9876,fileHash,pdfSize:bytes.length,originalId,originalMonth:'2027-04',form:{...before.form,targetMonth:'2027-04',paymentDate:'2027-04-27'}};
+ await graph.write(['payroll','originals','2027','04'],`${originalId}.enc`,await encryptBytes('original',bytes,secret.key),null,80_000_000);
  await graph.write(['payroll','statements'],'2027.enc',await encryptJson('year',{
   format:'payroll-annual-v1',records:[orphan],deleted:[]
  },secret.key,secret.salt),null,30_000_000);
@@ -269,9 +283,48 @@ async function prepared(){
   assert.ok(ui.includes(id),`missing script control: ${id}`);
  }
  assert.match(html,/<section class="card settings-panel backup-key-change"/);
- assert.match(ui,/vault\.changePassphrase\(changeCurrent\.value,changeNew\.value/);
+ assert.match(ui,/vault\.changePassphrase\(currentPass,newPass/);
  assert.match(ui,/await refreshSessionAfterKeyRotation\(\)/);
- assert.match(ui,/const zip=await createBackup\(records\)/);
+ assert.match(ui,/const zip=await createBackup\(records,employers\)/);
  assert.match(ui,/setInterval\(display,1000\)/);
  console.log('PASS: backup screen exposes controlled key rotation, download progress and success state');
+}
+
+// A2: old-copy authorization is issued only for a confirmed current-original trash.
+{
+ const {graph,vault}=await prepared();const record=vault.records()[0];
+ const {generation}=await vault.changePassphrase(previous,changed);
+ const current=`payroll/versions/${generation}/originals/2026/11/${record.originalId}.enc`,old=`payroll/originals/2026/11/${record.originalId}.enc`;
+ const annualPath=`payroll/versions/${generation}/statements/2026.enc`,beforeAnnual=graph.files.get(annualPath);
+ await vault.removeBatch([{id:record.id,matches:r=>r.originalId===record.originalId}]);
+ assert.ok(!graph.files.has(current));assert.ok(graph.files.has(old));
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);await reopened.refresh({forceFresh:true});
+ const key=reopened.sessionKey().key;
+ const index=await decryptJson('index',graph.files.get('payroll/index.enc').text,key);
+ assert.equal(index.originalTrashHistory.length,1);assert.equal(index.originalTrashHistory[0].id,graph.files.get(old).id);
+ const afterAnnual=graph.files.get(annualPath);graph.files.set(annualPath,beforeAnnual);
+ await assert.rejects(reopened.inspectOldEncryptedData(),/有効な給与明細が参照する原本/);
+ graph.files.set(annualPath,afterAnnual);
+ const oldFile=graph.files.get(old);graph.files.set(old,{...oldFile,etag:'changed-old-copy'});
+ await assert.rejects(reopened.inspectOldEncryptedData(),/旧保存世代のPDF原本.*現行世代にありません/);
+ graph.files.set(old,oldFile);
+ const third='third-synthetic-passphrase-123456';await reopened.changePassphrase(changed,third);
+ const newest=new PayrollVault(graph);await newest.unlock(third);await newest.refresh({forceFresh:true});
+ const next=await decryptJson('index',graph.files.get('payroll/index.enc').text,newest.sessionKey().key);
+ assert.deepEqual(next.originalTrashHistory,index.originalTrashHistory);
+ const plan=await newest.inspectOldEncryptedData();await newest.cleanupOldEncryptedData(plan);assert.ok(!graph.files.has(old));
+ console.log('PASS A2: receipt survives restart and another key rotation, changed old ETag blocks cleanup');
+}
+for(const failReceipt of [false,true]){
+ const {graph,vault}=await prepared();const record=vault.records()[0];const {generation}=await vault.changePassphrase(previous,changed);
+ const current=`payroll/versions/${generation}/originals/2026/11/${record.originalId}.enc`,old=`payroll/originals/2026/11/${record.originalId}.enc`;
+ graph.failTrash=!failReceipt;graph.failReceipt=failReceipt;
+ await assert.rejects(vault.removeBatch([{id:record.id,matches:r=>r.originalId===record.originalId}]),e=>e.stage==='original-trash');
+ graph.failOn=null;graph.failTrash=false;graph.failReceipt=false;
+ const reopened=new PayrollVault(graph);await reopened.unlock(changed);await reopened.refresh({forceFresh:true});
+ const index=await decryptJson('index',graph.files.get('payroll/index.enc').text,reopened.sessionKey().key);
+ assert.equal(index.originalTrashHistory,undefined);assert.ok(graph.files.has(old));
+ if(failReceipt){assert.ok(!graph.files.has(current));await assert.rejects(reopened.inspectOldEncryptedData(),/旧保存世代のPDF原本.*現行世代にありません/);}
+ else assert.ok(graph.files.has(current));
+ console.log('PASS A2: '+(failReceipt?'failed receipt preserves old-only original':'failed DELETE produces no receipt'));
 }

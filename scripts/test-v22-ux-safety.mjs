@@ -9,13 +9,13 @@ for(const page of ['public/upload/index.html','public/edit/index.html']){
   assert.match(read(page),/ホームへ戻る/);
 }
 assert.match(edit,/saveButton\.disabled = saving \|\| !changed \|\| errors\.length/);
-assert.match(edit,/if \(!record \|\| saving \|\| !hasUnsavedChanges\(\)\) return/);
-assert.match(edit,/【残す明細】/);
-assert.match(edit,/【一覧・収入情報から除外する明細/);
-assert.match(edit,/ID \$\{c\.id\}/);
+assert.match(edit,/if \(!record \|\| saving \|\| deletionNeedsReload \|\| !hasUnsavedChanges\(\)\) return/);
+assert.match(edit,/subject:`残す明細：\$\{employerDisplayName\(employerDirectory,updated\.employerId,updated\.form\.job\)\}/);
+assert.match(edit,/一覧・収入情報から除外する明細：\$\{conflicts\.length\}件/);
+assert.match(edit,/employerDisplayName\(employerDirectory,c\.employerId,c\.period\.split/);
 assert.match(upload,/describeUploadDuplicates\(result\.skipped/);
 assert.match(upload,/saveDuplicates\.hidden=false/);
-assert.match(upload,/if\(!skipped\) window\.setTimeout/);
+assert.match(upload,/if\(!skipped\) \{[\s\S]*?rememberNavigationNotice\([\s\S]*?window\.location\.assign\('\.\.\/index\.html'\)/);
 assert.match(upload,/leavingAfterSave && saveFeedback\.classList\.contains\('is-complete'\)/);
 for(const id of ['save-duplicates','save-duplicate-list','save-duplicate-title']) assert.match(html,new RegExp(`id="${id}"`));
 assert.match(dashboard,/\.details-list > div\.has-missing-data,\s*\.job-card__footer\.has-missing-data\s*\{\s*align-items:\s*flex-start/);

@@ -1,4 +1,8 @@
-import { createAppStatus } from "./ui/appStatus";
+import {personalReviewRows,renderReviewConfirmation} from './ui/payrollReview';
+import {confirmOperation} from './ui/operationDialog';
+import {rememberNavigationNotice} from './ui/navigationNotice';
+import {authEpoch} from './cloud/snapshot';
+import { createAppStatus, type AppStatusKind } from "./ui/appStatus";
 import {describePayrollSaveProgress,type PayrollSavePhase} from './ui/operationFeedback';
 /**
  * 明細アップロード画面。
@@ -11,11 +15,13 @@ import { createCoordinateDiagnostic } from "./pdf/diagnostic";
 import { redactCoordinateDiagnostic } from "./pdf/redactDiagnostic";
 import { parsePayroll, type PdfTextCell, type PayrollParseResult } from "./pdf/payrollParser";
 import { saveRecordsSkippingDuplicates, recordSignature, type SavedPayrollRecordInput } from "./storage/payrollStore";
-import { cloudVault } from "./cloud/auth";
-import { inspectUploadRecovery, type UploadRecoveryAttempt } from "./storage/uploadRecovery";
-import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
+import { cloudVault,captureOperationAuthorization,tryResumeCloudVault } from "./cloud/auth";
+import { inspectUploadRecovery, requireSafeUploadRecovery, uploadRecoveryAttempt, uploadRecoveryMessage, type UploadRecoveryAttempt } from "./storage/uploadRecovery";
+import { PAYROLL_FIELDS, PayrollEmployerConfirmationError, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
 import {createPayrollSemantics} from './storage/payrollSemantics';
-import {validEmployerId,createEmployerId} from './storage/employerIdentity';
+import {validEmployerId} from './storage/employerIdentity';
+import {type EmployerEntry} from './storage/employerDirectory';
+import {currentEmployer,renderEmployerSelect} from './ui/employerSelection';
 import {emptyOptionalAmounts,prepareOptionalZeros,ZERO_OPTIONAL_AMOUNT_LABELS} from './storage/payrollZeroResolution';
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
@@ -44,14 +50,13 @@ interface Entry {
   autoFields?: Set<FieldKey>;
   form: FormValues;
   employerId?:string;
+  employerChosen?:boolean;
   parsed?: PayrollParseResult;
   previewUrl?: string;
   /** このPDFに紐づく警告の確認。別PDFへの切り替えでは変えない。 */
   reviewed?: boolean;
   /** 確認時のフォーム・警告の指紋。中身が変われば確認を失効させる。 */
   reviewedFingerprint?: string;
-  /** 入力内容チェックの結果。別PDFへ移っても表示を保持する。 */
-  validationFeedback?: { message: string; isError: boolean };
 }
 
 const MAX_FILES = 30;
@@ -74,11 +79,46 @@ const listEmpty = $<HTMLDivElement>("file-list-empty");
 const reviewEmpty = $<HTMLDivElement>("review-empty");
 const reviewContent = $<HTMLDivElement>("review-content");
 const reviewForm = $<HTMLFormElement>("review-form");
-const employerInput = $<HTMLInputElement>("employer-id");
-const employerCreate = $<HTMLButtonElement>("employer-create");
+const employerInput = $<HTMLSelectElement>("employer-id");
+const employerLoad = $<HTMLButtonElement>("employer-load");
+const employerStatus = $<HTMLElement>("employer-status");
+let employerDirectory:EmployerEntry[]|undefined;
+let employerLoading=false;
+let employerLoadFailed=false;
+function defaultEmployer(entry:Entry):void{
+ if(entry.employerChosen||!employerDirectory)return;
+ const next=currentEmployer(employerDirectory,entry.form.job);
+ if(entry.employerId!==next){entry.employerId=next;setReviewed(entry,false);}
+}
+/** Explicit load or save preflight. Never write on the first load or after a directory change. */
+async function refreshEmployerChoices(allowPrompt=true):Promise<boolean>{
+ if(employerLoading)return false;
+ employerLoading=true;updateSaveState();
+ employerStatus.textContent='勤務先一覧を確認しています…';
+ const authorized=captureOperationAuthorization();
+ try{
+  const vault=allowPrompt?await cloudVault():await tryResumeCloudVault();
+  if(!vault){employerStatus.textContent='';return false;}
+  const fresh=await vault.readEmployerDirectory();
+  if(!authorized())return false;
+  const before=entries.map(entry=>entry.employerId??null);
+  employerDirectory=fresh;employerLoadFailed=false;
+  for(const entry of entries){
+   if(entry.employerId&&!fresh.some(x=>x.id===entry.employerId&&x.role===entry.form.job)){entry.employerId=undefined;entry.employerChosen=false;setReviewed(entry,false);}
+   defaultEmployer(entry);
+  }
+  const unchanged=entries.length===before.length&&entries.every((entry,i)=>(entry.employerId??null)===before[i]);
+  employerStatus.textContent='';
+  render();
+  if(allowPrompt&&!unchanged)notice('info','勤務先の選択が更新されました。確認して保存してください。');
+  return unchanged;
+ }catch{employerLoadFailed=true;employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度読み込んでください。';if(allowPrompt)notice('error',employerStatus.textContent);return false;}
+ finally{employerLoading=false;updateSaveState();}
+}
 const readResult = $<HTMLDivElement>("read-result");
 const validationMessage = $<HTMLParagraphElement>("validation-message");
-const validateButton = $<HTMLButtonElement>("validate-button");
+const reviewConfirmation = $<HTMLElement>("upload-review-confirmation");
+const reviewConfirm = $<HTMLInputElement>("upload-review-confirm");
 const clearButton = $<HTMLButtonElement>("clear-files");
 const progressWrap = $<HTMLDivElement>("progress-wrap");
 const progressFill = $<HTMLDivElement>("progress-fill");
@@ -140,6 +180,7 @@ let entries: Entry[] = [];
 let selectedId: number | null = null;
 let nextId = 1;
 let reading = false;
+let uploadInitialized = false;
 let saving = false;
 let leavingAfterSave = false;
 let uploadSaveRecoveryRequired=false;
@@ -196,9 +237,8 @@ function showSaveProgress(message:string):void {
  saveGuidance.textContent='保存中は画面移動・追加アップロードをしないでください。重複除外があった場合は結果を表示し、通常の保存完了時はホームへ戻ります。';
  updateSaveClock();
 }
-function notice(message: string): void {
-  if (/失敗|できません|エラー|要確認|確認してください|追加できません/.test(message)) appStatus.error(message);
-  else appStatus.success(message);
+function notice(kind:Exclude<AppStatusKind,'loading'>,message: string): void {
+  appStatus.show(kind,message);
 }
 function makeForm(): FormValues {
   return Object.fromEntries(FIELDS.map(key => [key, ""])) as FormValues;
@@ -256,9 +296,6 @@ function setReviewed(entry: Entry, value: boolean): void {
   entry.reviewed = value;
   entry.reviewedFingerprint = value ? reviewFingerprint(entry) : undefined;
 }
-function setValidationFeedback(entry: Entry, message: string, isError = false): void {
-  entry.validationFeedback = { message, isError };
-}
 
 function icon(name: string): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -304,7 +341,7 @@ function renderFileList(): void {
   if(active&&!wasParsing)appStatus.loading('PDFを解析しています…');
   if(!active&&wasParsing)appStatus.success('PDFの解析が完了しました');
   wasParsing=active;
-  $("file-summary").textContent = !hasFiles ? "取り込み待ち" : active ? `${completed} / ${entries.length} 件の読み取りが完了` : `${entries.length}件の確認が可能です（未保存）`;
+  $("file-summary").textContent = !hasFiles ? "PDF追加待ち" : active ? `${completed} / ${entries.length} 件のPDF解析が完了` : `${entries.length}件の確認が可能です（未保存）`;
   progressWrap.hidden = !active;
   const parsing = entries.find(entry => entry.status === "reading");
   progressText.textContent = parsing
@@ -336,7 +373,8 @@ function renderFileList(): void {
     name.title = entry.file.name;
     const size = document.createElement("span");
     size.className = "file-caption";
-    size.textContent = `${formatBytes(entry.file.size)}${entry.pages ? ` · ${entry.pages}ページ` : ""}`;
+    const employer=employerDirectory?.find(x=>x.id===entry.employerId);
+    size.textContent = `${formatBytes(entry.file.size)}${entry.pages ? ` · ${entry.pages}ページ` : ""}${employer?` · ${employer.name}`:""}`;
     const status = document.createElement("span");
     const state = statusLabel(entry);
     status.className = `file-status file-status--${state.variant}`;
@@ -395,9 +433,6 @@ function renderIssues(entry: Entry): void {
   for (const warning of entry.parsed?.warnings ?? []) {
     items.push({ text: warning, severity: "warning" });
   }
-  for (const warning of validatePayrollForm(entry.form).warnings) {
-    items.push({ text: warning, severity: "warning" });
-  }
   analysisIssues.hidden = items.length === 0;
   analysisIssuesCount.textContent = `${items.length}件`;
   for (const { text, severity } of items) {
@@ -443,7 +478,7 @@ function renderReview(): void {
     readResult.textContent = "同一内容のPDFは一覧内で最初の1件だけ保存します。このファイルは保存対象外です。";
     readResult.classList.add("read-result--warning");
   } else if (entry.status === "queued" || entry.status === "reading") {
-    readResult.textContent = `PDFの文字情報を読み取っています。${entry.pages ? ` ${entry.currentPage ?? 0}/${entry.pages}ページ` : ""}`;
+    readResult.textContent = `PDFを解析しています。${entry.pages ? ` ${entry.currentPage ?? 0}/${entry.pages}ページ` : ""}`;
   } else if (entry.status === "ready") {
     const parsed = entry.parsed;
     if (parsed?.profile) {
@@ -486,18 +521,13 @@ function renderReview(): void {
       }
     }
   }
-  employerInput.value=entry.employerId??'';
-  // ID is a separate encrypted-record property, never a new historical form field.
-  employerInput.disabled=entry.status==='queued'||entry.status==='reading'||duplicated().has(entry.id);
-  employerCreate.disabled=employerInput.disabled;
+  renderEmployerSelect(employerInput,employerDirectory??[],entry.form.job,entry.employerId);
+  employerInput.disabled=saving||employerLoading||!employerDirectory||entry.status==='queued'||entry.status==='reading'||duplicated().has(entry.id)||!['main','side'].includes(entry.form.job);
   updateConditionalFields(entry.form.kind);
   // 解析中に入力しても後からPDFの結果で上書きされないよう、完了まで編集不可。
   const isReading = entry.status === "queued" || entry.status === "reading" || duplicated().has(entry.id);
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = isReading;
   renderIssues(entry);
-  validationMessage.hidden = !entry.validationFeedback;
-  validationMessage.classList.toggle("is-error", Boolean(entry.validationFeedback?.isError));
-  validationMessage.textContent = entry.validationFeedback?.message ?? "";
 }
 function render(): void {
   renderFileList();
@@ -515,7 +545,7 @@ function removeFile(id: number): void {
   render();
 }
 function addFiles(files: File[]): void {
-  if (saving || uploadSaveRecoveryChecking) { notice("保存処理中はPDFを追加できません。"); return; }
+  if (saving || uploadSaveRecoveryChecking) { notice("info","保存処理中はPDFを追加できません。"); return; }
   if (!files.length) return;
   saveFeedback.hidden=true;
   let rejected = 0;
@@ -530,7 +560,7 @@ function addFiles(files: File[]): void {
     added++;
   }
   render();
-  if (rejected) notice(`${rejected}件を追加できませんでした。PDF形式・25MB以下・最大30件をご確認ください。`);
+  if (rejected) notice("warning",`${rejected}件を追加できませんでした。PDF形式・25MB以下・最大30件をご確認ください。`);
   if (added) void drainQueue();
 }
 function toHex(buffer: ArrayBuffer): string {
@@ -618,6 +648,7 @@ async function inspect(entry: Entry): Promise<void> {
         }
       }
       entry.status = count ? "ready" : "no-text";
+      defaultEmployer(entry);
     } finally {
       entry.task = undefined;
       await task.destroy();
@@ -658,16 +689,17 @@ async function drainQueue(): Promise<void> {
 let suppressPickerUntil = 0;
 mobileFilePicker.addEventListener("click", () => { if (!fileInput.disabled) fileInput.click(); });
 dropZone.addEventListener("click", () => {
-  if (dragDepth || Date.now() < suppressPickerUntil) return;
+  if (fileInput.disabled || dragDepth || Date.now() < suppressPickerUntil) return;
   fileInput.click();
 });
 dropZone.addEventListener("keydown", event => {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
-  if (dragDepth || Date.now() < suppressPickerUntil) return;
+  if (fileInput.disabled || dragDepth || Date.now() < suppressPickerUntil) return;
   fileInput.click();
 });
 fileInput.addEventListener("change", () => {
+  if (fileInput.disabled) { fileInput.value = ""; return; }
   addFiles(Array.from(fileInput.files ?? []));
   fileInput.value = "";
 });
@@ -690,6 +722,7 @@ dropZone.addEventListener("drop", event => {
   dragDepth = 0;
   suppressPickerUntil = Date.now() + 600;
   dropZone.classList.remove("is-dragging");
+  if (fileInput.disabled) return;
   addFiles(Array.from(event.dataTransfer?.files ?? []));
 });
 // ドロップエリア以外へPDFを落としても、ブラウザがPDFへ遷移しないようにする。
@@ -701,10 +734,11 @@ document.addEventListener("drop", event => {
   event.preventDefault();
   const target = event.target;
   if (target instanceof Node && !dropZone.contains(target)) {
-    notice("PDFは上の点線エリアにドロップしてください。");
+    notice("info","PDFは上の点線エリアにドロップしてください。");
   }
 });
 clearButton.addEventListener("click", () => {
+  if(saving||uploadSaveRecoveryChecking)return;
   // ページで選択した未保存データだけを削除。保存済みDBには影響しない。
   for (const entry of entries) {
     abortEntry(entry);
@@ -713,26 +747,17 @@ clearButton.addEventListener("click", () => {
   entries = [];
   selectedId = null;
   render();
-  notice("選択中のPDFを一覧から削除しました。保存済みデータは削除されません。");
+  notice("info","選択中のPDFを一覧から削除しました。保存済みデータは削除されません。");
 });
-function setEntryEmployerId(value:string):void {
- const entry=selectedEntry();if(!entry)return;
- const next=value.trim()||undefined;
+employerInput.addEventListener('change',()=>{
+ const entry=selectedEntry();if(!entry||employerInput.disabled||!employerDirectory)return;
+ const next=employerInput.value||undefined;
+ if(next&&!employerDirectory.some(x=>x.id===next&&x.role===entry.form.job))return;
+ entry.employerChosen=true;
  if(entry.employerId===next)return;
- entry.employerId=next;
- setReviewed(entry,false);
- entry.validationFeedback=undefined;
- validationMessage.hidden=true;
- renderFileList();updateSaveState();
-}
-employerInput.addEventListener('input',()=>setEntryEmployerId(employerInput.value));
-employerCreate.addEventListener('click',()=>{
- const entry=selectedEntry();if(!entry||employerCreate.disabled)return;
- if(employerInput.value.trim()){employerInput.focus();employerInput.select();notice('発行済みのIDを変更する場合は、先に入力欄を空にしてください。');return;}
- const id=createEmployerId();employerInput.value=id;setEntryEmployerId(id);
- employerInput.focus();employerInput.select();
- notice('新しい勤務先IDを発行しました。同じ勤務先の別PDFにも貼り付けてください。');
+ entry.employerId=next;setReviewed(entry,false);renderFileList();updateSaveState();
 });
+employerLoad.addEventListener('click',()=>{if(!saving&&!employerLoading&&!uploadSaveRecoveryChecking)void refreshEmployerChoices();});
 reviewForm.addEventListener("input", event => {
   const target = event.target;
   const entry = selectedEntry();
@@ -740,13 +765,12 @@ reviewForm.addEventListener("input", event => {
   const key = target.name as FieldKey;
   if (!FIELDS.includes(key) || entry.form[key] === target.value) return;
   entry.form[key] = target.value;
+  if(key==="job"){entry.employerChosen=false;entry.employerId=undefined;defaultEmployer(entry);renderEmployerSelect(employerInput,employerDirectory??[],entry.form.job,entry.employerId);}
   entry.autoFields?.delete(key);
   if (key === "kind") updateConditionalFields(target.value);
   // 値が本当に変更された明細だけ確認を解除する。
   setReviewed(entry, false);
-  entry.validationFeedback = undefined;
   renderIssues(entry);
-  validationMessage.hidden = true;
   renderFileList();
   updateSaveState();
 });
@@ -761,7 +785,6 @@ reviewForm.addEventListener("change", event => {
     entry.form.workDays = rounded;
     entry.autoFields?.delete("workDays");
     setReviewed(entry, false);
-    entry.validationFeedback = undefined;
   }
   renderIssues(entry);
   renderFileList();
@@ -782,23 +805,12 @@ $("open-pdf").addEventListener("click", () => {
   a.rel = "noopener noreferrer";
   a.click();
 });
-validateButton.addEventListener("click", () => {
-  const entry = selectedEntry();
-  if (!entry || duplicated().has(entry.id)) return;
-  if (entry.status === "queued" || entry.status === "reading") return;
-  const checked = validatePayrollForm(entry.form);
-  if (!reviewForm.reportValidity() || !validEmployerId(entry.employerId) || checked.errors.length || entry.status === "error") {
-    setReviewed(entry, false);
-    setValidationFeedback(entry, !validEmployerId(entry.employerId)?"勤務先IDは『新しいIDを発行』で生成した形式を使ってください。":checked.errors[0] ?? "入力形式またはPDFの状態を確認してください。", true);
-  } else if (hasReviewIssue(entry)) {
-    // 警告・不足項目を原本と照合したことを明示的なボタン操作で承認する。
-    // 同じ操作を別のPDFに移動しても再度求めない。
-    setReviewed(entry, true);
-    setValidationFeedback(entry, "この明細の確認事項を確認済みにしました。入力を変更した場合だけ再確認が必要です。");
-  } else {
-    setValidationFeedback(entry, "入力内容を検証しました。保存できます。");
-  }
-  render();
+reviewConfirm.addEventListener("change", () => {
+  const entry=selectedEntry();
+  if(!entry||reviewConfirm.disabled||duplicated().has(entry.id))return;
+  const approved=reviewConfirm.checked&&hasReviewIssue(entry)&&reviewForm.reportValidity()&&validEmployerId(entry.employerId)&&!formError(entry)&&entry.status!=="error";
+  setReviewed(entry,approved);
+  renderFileList();updateSaveState();
 });
 /** 検算差異もチェック対象。破損PDFは確認に関係なく保存不可。 */
 function hasReviewIssue(entry: Entry): boolean {
@@ -815,12 +827,23 @@ function zeroIntroducedWarnings(entry: Entry): string[] {
   const prepared=prepareOptionalZeros(entry.form,{},true);
   return validatePayrollForm(prepared.form).warnings.filter(warning=>!before.has(warning));
 }
-function updateSaveState(): void {
-  const locked = saving || uploadSaveRecoveryChecking || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
-  for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
+/** The HTML starts disabled. Only enable the picker after all listeners and the
+ * first render have completed; a static DOM is not an initialized upload page. */
+function updateFilePickerState(): void {
+  if (!uploadInitialized) return;
   fileInput.disabled = saving || uploadSaveRecoveryChecking;
   mobileFilePicker.disabled = saving || uploadSaveRecoveryChecking;
   dropZone.setAttribute("aria-disabled",saving||uploadSaveRecoveryChecking?"true":"false");
+  dropZone.tabIndex = fileInput.disabled ? -1 : 0;
+}
+function updateSaveState(): void {
+  const locked = saving || uploadSaveRecoveryChecking || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
+  for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
+  employerInput.disabled=locked||employerLoading||!employerDirectory||!selectedEntry()||!['main','side'].includes(selectedEntry()?.form.job??'');
+  employerLoad.hidden=(employerDirectory!==undefined&&!employerLoadFailed)||employerLoading;
+  employerLoad.textContent=employerLoadFailed?'再読み込み':'勤務先を選択する';
+  employerLoad.disabled=locked||employerLoading||!selectedEntry();
+  updateFilePickerState();
   clearButton.disabled = saving || uploadSaveRecoveryChecking;
   for (const button of Array.from(fileList.querySelectorAll<HTMLButtonElement>("button"))) button.disabled = saving || uploadSaveRecoveryChecking;
   uploadRecoveryRecheck.disabled = saving || uploadSaveRecoveryChecking || !uploadSaveRecoveryRequired;
@@ -831,13 +854,21 @@ function updateSaveState(): void {
   const invalidEntry = uploadable.find(entry => formError(entry)||!validEmployerId(entry.employerId));
   const badPdf = uploadable.find(entry => entry.status === "error");
   const unreviewed = issueEntries.filter(entry => !isReviewed(entry));
-  validateButton.disabled = locked;
-  // 確認の入口を右側のボタンに一本化する。状態は選択中PDFごとに保持。
-  // ボタン名を切り替えず、確認済みは左側のステータスと直下のメッセージで示す。
+  const current=selectedEntry();
+  const editable=Boolean(current&&!locked&&current.status!=="error");
+  const formIssue=current&&editable?(!validEmployerId(current.employerId)?"勤務先の選択が不正です。":formError(current)):null;
+  validationMessage.hidden=!formIssue;
+  validationMessage.textContent=formIssue??"";
+  validationMessage.classList.toggle("is-error",Boolean(formIssue));
+  renderReviewConfirmation(reviewConfirmation,reviewConfirm,{
+    required:Boolean(current&&(current.status==="ready"||current.status==="no-text")&&!duplicated().has(current.id)&&hasReviewIssue(current)),
+    approved:Boolean(current&&isReviewed(current)),disabled:!editable||Boolean(formIssue),
+    warnings:current?[...validatePayrollForm(current.form).warnings,...(current.status==="no-text"||!current.parsed?.profile||current.parsed.warnings.length||current.parsed.missingFields.length?["PDF解析時の確認事項も原本と照合してください。"]:[])]:[],rows:current?personalReviewRows(current.form):[],
+  });
   // Consent is only valid for the exact current batch and field values. Changing
   // any PDF/form/status after checking resets it, never silently extends consent.
   const fingerprint=zeroCandidatesFingerprint(uploadable);
-  if(zeroCheckbox.checked&&zeroConsentFingerprint!==fingerprint){
+  if(zeroCheckbox.checked&&(zeroConsentFingerprint!==fingerprint||unreviewed.length>0||Boolean(invalidEntry)||Boolean(badPdf)||pending)){
     zeroCheckbox.checked=false;zeroConsentFingerprint=null;
   }
   const zeroRows=uploadable.map(entry=>({entry,fields:emptyOptionalAmounts(entry.form)}))
@@ -854,11 +885,11 @@ function updateSaveState(): void {
     item.textContent=`${entry.file.name}：${fields.map(field=>ZERO_OPTIONAL_AMOUNT_LABELS[field]).join('・')}`;
     return item;
   }));
-  saveButton.disabled = saving || uploadSaveRecoveryRequired || uploadSaveRecoveryChecking || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
+  saveButton.disabled = saving || uploadSaveRecoveryRequired || uploadSaveRecoveryChecking || employerLoading || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
   saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
   const isEmpty=entries.length===0;
   workspace.classList.toggle('is-empty',isEmpty);
-  saveBar.classList.toggle('is-empty',isEmpty&&!saving);
+  saveBar.classList.toggle('is-empty',isEmpty&&!saving&&!uploadSaveRecoveryRequired);
   saveStatus.hidden=isEmpty&&!saving;
   uploadGuide.textContent=uploadSaveRecoveryRequired?'前回の保存結果が未確認です。OneDriveを再照合してください。':isEmpty?'PDFを追加してください。':saving?'OneDriveへ保存しています…':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
   if (saving) {
@@ -872,9 +903,9 @@ function updateSaveState(): void {
   } else if (badPdf) {
     saveStatus.textContent = `「${badPdf.file.name}」はPDFとして正常に読めないため保存できません。削除して再追加してください。`;
   } else if (invalidEntry) {
-    saveStatus.textContent = `「${invalidEntry.file.name}」：${!validEmployerId(invalidEntry.employerId)?'勤務先IDの形式が不正です。':formError(invalidEntry)}`;
+    saveStatus.textContent = `「${invalidEntry.file.name}」：${!validEmployerId(invalidEntry.employerId)?'勤務先の選択が不正です。':formError(invalidEntry)}`;
   } else if (unreviewed.length) {
-    saveStatus.textContent = `${unreviewed.length}件が未確認です。左の「要確認」を選び、右側の「入力内容をチェック」を押してください。`;
+    saveStatus.textContent = `${unreviewed.length}件が未確認です。左の「要確認」を選び、右側の確認チェックを入れてください。`;
   } else if (zeroContradictions.length) {
     saveStatus.textContent = `未取得金額を0円にすると${zeroContradictions.length}件で検算不一致になります。確認して手動入力するか、チェックを外してください。`;
   } else {
@@ -888,19 +919,23 @@ uploadRecoveryRecheck.addEventListener('click',()=>{void(async()=>{
   uploadRecoveryStatus.textContent='OneDriveの年度別明細と暗号化PDF原本を照合しています…';
   try{
     const report=await inspectUploadRecovery(await cloudVault(),uploadSaveAttempt,recordSignature);
-    uploadSaveRecoveryChecked=true;
-    uploadRecoveryStatus.textContent=`OneDriveの照合が完了しました。対象${report.attempted}件のうち、${report.saved}件は保存済みです。再開前に「保存済みデータを読み直す」を押してください。`;
+    uploadRecoveryStatus.textContent=uploadRecoveryMessage(report);
+    try{requireSafeUploadRecovery(report);uploadSaveRecoveryChecked=true;uploadRecoveryStatus.textContent+=' 再開前に「保存済みデータを読み直す」を押してください。';}
+    catch(error){uploadRecoveryStatus.textContent+=' '+(error instanceof Error?error.message:'設定画面で復旧してください。');}
   }catch(error){
     uploadRecoveryStatus.textContent=`安全な再保存を確認できませんでした：${error instanceof Error?error.message:'通信エラー'}。この画面で再保存しないでください。`;
   }finally{uploadSaveRecoveryChecking=false;updateSaveState();}
  })()});
 uploadRecoveryReload.addEventListener('click',()=>{void(async()=>{
   if(saving||uploadSaveRecoveryChecking||!uploadSaveRecoveryRequired||!uploadSaveRecoveryChecked)return;
-  if(!window.confirm('選択中のPDFと未保存の入力内容を破棄して、最新のOneDrive保存状態を読み直します。必要なPDFは再度選択してください。続けますか？'))return;
+  const authorized=captureOperationAuthorization(),attempt=uploadSaveAttempt;
+  if(!await confirmOperation({title:'最新データを確認',details:['選択中のPDFと未保存の入力内容を破棄して、最新のOneDrive保存状態を読み直します。','必要なPDFは再度選択してください。'],tone:'warning',acceptLabel:'破棄して読み直す'},authorized)||!authorized())return;
+  if(saving||uploadSaveRecoveryChecking||!uploadSaveRecoveryRequired||!uploadSaveRecoveryChecked||attempt!==uploadSaveAttempt)return;
   uploadSaveRecoveryChecking=true;uploadSaveRecoveryChecked=false;updateSaveState();
   uploadRecoveryStatus.textContent='画面を戻す直前にOneDriveを再照合しています…';
   try{
-    await inspectUploadRecovery(await cloudVault(),uploadSaveAttempt,recordSignature);
+    requireSafeUploadRecovery(await inspectUploadRecovery(await cloudVault(),uploadSaveAttempt,recordSignature));
+    if(!authorized())return;
     leavingAfterSave=true; // The user confirmed discarding drafts; bypass only the local beforeunload prompt.
     window.location.reload();
   }catch(error){
@@ -909,24 +944,30 @@ uploadRecoveryReload.addEventListener('click',()=>{void(async()=>{
  })()});
 saveButton.addEventListener("click", async () => {
   if (saving || uploadSaveRecoveryRequired || saveButton.disabled) return;
+  const authorized=captureOperationAuthorization();
+  const before=zeroCandidatesFingerprint(candidates());
+  const unchanged=await refreshEmployerChoices();
+  if(!unchanged||!authorized())return;
+  if(saving||uploadSaveRecoveryRequired||saveButton.disabled||before!==zeroCandidatesFingerprint(candidates()))return;
   const uploadable = candidates();
-  const attempt:UploadRecoveryAttempt[]=uploadable.map(entry=>({targetMonth:entry.form.targetMonth,fileHash:entry.hash??''}));
+  const attempt:UploadRecoveryAttempt[]=uploadable.map(entry=>uploadRecoveryAttempt({form:entry.form,fileHash:entry.hash,employerId:entry.employerId}));
   const errorEntry = uploadable.find(entry => formError(entry)||!validEmployerId(entry.employerId));
   if (errorEntry) {
     selectFile(errorEntry.id);
-    notice(`「${errorEntry.file.name}」の勤務先IDまたは入力内容を確認してください。`);
+    notice("warning",`「${errorEntry.file.name}」の勤務先または入力内容を確認してください。`);
     return;
   }
   if (uploadable.some(entry => entry.status === "error")) {
-    notice("読み取りに失敗したPDFがあります。先に一覧から削除してください。");
+    notice("error","読み取りに失敗したPDFがあります。先に一覧から削除してください。");
     return;
   }
   if (uploadable.some(entry => hasReviewIssue(entry) && !isReviewed(entry))) {
-    notice("未確認の明細があります。右側の「入力内容をチェック」で確認してください。");
+    notice("warning","未確認の明細があります。右側の確認チェックを入れてください。");
     return;
   }
   // Capture the opt-in BEFORE disabling the controls. It is never inferred from
   // a previously saved statement or from a rendered summary's zero policy.
+  const operationEpoch=authEpoch();
   const approveZero=zeroCheckbox.checked&&zeroConsentFingerprint===zeroCandidatesFingerprint(uploadable);
   saving = true;
   clearInlineError(saveStatus);
@@ -1008,21 +1049,27 @@ saveButton.addEventListener("click", async () => {
       saveStatus.textContent=`重複${skipped}件を除外しました。新しい保存は行っていません。`;
       saveGuidance.textContent=skipped?'重複として除外したファイルを下で確認してください。':'新しい保存対象はありません。ホームへ戻ります。';
       saveButtonLabel.textContent='重複確認済み';
-      appStatus.success('重複を確認しました');
+      appStatus.info('重複しているため、新しい明細はありません。');
     }
     // 重複がなければ従来どおり自動帰還。重複があればファイル名と理由を画面に残す。
     leavingAfterSave = true;
-    if(!skipped) window.setTimeout(() => window.location.assign('../index.html'), 1500);
+    if(!skipped) {
+      if(result.saved&&operationEpoch===authEpoch())rememberNavigationNotice({operation:'upload-saved',count:result.saved},operationEpoch);
+      window.location.assign('../index.html');
+    }
   } catch (error) {
     leavingAfterSave = false;
-    // After any uncertain batch failure, block repeat writes until a full read-only recovery.
-    uploadSaveRecoveryRequired=true;uploadSaveRecoveryChecked=false;uploadSaveAttempt=attempt;
-    uploadRecovery.hidden=false;uploadRecoveryStatus.textContent='OneDriveへの保存結果を確認できません。確認が終わるまで再保存しないでください。';
+    // An employer ambiguity is detected before any writes and can be corrected
+    // in the current form. All uncertain cloud failures still require inspection.
+    if(!(error instanceof PayrollEmployerConfirmationError)){
+      uploadSaveRecoveryRequired=true;uploadSaveRecoveryChecked=false;uploadSaveAttempt=attempt;
+      uploadRecovery.hidden=false;uploadRecoveryStatus.textContent='OneDriveへの保存結果を確認できません。確認が終わるまで再保存しないでください。';
+    }
     stopSaveClock();saveFeedback.classList.add('is-failed');
     saveStage.textContent='保存を完了できませんでした';
     saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='0%';
     saveGuidance.textContent='OneDriveの保存済み一覧を確認してから再試行してください。途中まで保存されたファイルが残っている可能性があります。';
-    console.error("明細保存に失敗", error);
+    // Do not log cloud exceptions which may contain private diagnostic data.
     saving = false;
     updateSaveState();
     showInlineError(saveStatus, `保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
@@ -1031,6 +1078,7 @@ saveButton.addEventListener("click", async () => {
 });
 
 // PDFの元テキストと座標を抽出し、利用者が伏せ字に編集してからコピーする。
+let diagnosticGeneration=0;
 diagnosticButton.addEventListener("click", async () => {
   const entry = selectedEntry();
   if (!entry) return;
@@ -1043,8 +1091,10 @@ diagnosticButton.addEventListener("click", async () => {
   diagnosticCopyOriginal.disabled = true;
   diagnosticButton.disabled = true;
   diagnosticDialog.showModal();
+  const generation=++diagnosticGeneration,authorized=captureOperationAuthorization();
   try {
     const diagnostic = await createCoordinateDiagnostic(entry.file);
+    if(!diagnosticDialog.open||generation!==diagnosticGeneration||!authorized())return;
     diagnosticRawText = diagnostic.raw;
     diagnosticShared.value = redactCoordinateDiagnostic(diagnostic.raw);
     diagnosticState.textContent = `${diagnostic.pageCount}ページのPDFから、${diagnostic.itemCount}件を抽出。共有用の原文はすべてマスク済みです。`;
@@ -1053,6 +1103,7 @@ diagnosticButton.addEventListener("click", async () => {
     diagnosticViewOriginal.disabled = false;
     diagnosticCopyOriginal.disabled = false;
   } catch {
+    if(!diagnosticDialog.open||generation!==diagnosticGeneration||!authorized())return;
     diagnosticState.textContent = "座標診断に失敗しました。画像だけのPDFや保護されたPDFは解析できない場合があります。";
   } finally {
     diagnosticButton.disabled = false;
@@ -1080,14 +1131,20 @@ diagnosticCopy.addEventListener("click", async () => {
     diagnosticState.textContent = "自動コピーできませんでした。マスク済みテキストを選択しました。";
   }
 });
-diagnosticViewOriginal.addEventListener("click", () => {
-  if (!diagnosticRawText || !window.confirm("原文には氏名・勤務先・給与額・口座情報などが含まれます。この端末の画面に表示しますか？")) return;
+diagnosticViewOriginal.addEventListener("click", async () => {
+  if(!diagnosticRawText||!diagnosticDialog.open)return;
+  const authorized=captureOperationAuthorization(),generation=diagnosticGeneration;
+  const current=()=>authorized()&&diagnosticDialog.open&&generation===diagnosticGeneration&&Boolean(diagnosticRawText);
+  if(!await confirmOperation({title:'PDF診断の原文を表示',details:['原文には氏名・勤務先・給与額・口座情報などが含まれます。','この端末の画面にのみ表示します。共有用コピーは引き続き全マスクです。'],tone:'warning',acceptLabel:'原文を表示'},current)||!current())return;
   diagnosticShared.value = diagnosticRawText;
   diagnosticRedact.disabled = false;
   diagnosticState.textContent = "原文をローカル表示中です。共有用コピーは引き続き自動マスクします。";
 });
 diagnosticCopyOriginal.addEventListener("click", async () => {
-  if (!diagnosticRawText || !window.confirm("個人情報を含むPDF診断の原文をコピーします。原文のコピーには明示的な確認が必要です。貼り付け先に注意してください。続けますか？")) return;
+  if(!diagnosticRawText||!diagnosticDialog.open)return;
+  const authorized=captureOperationAuthorization(),generation=diagnosticGeneration;
+  const current=()=>authorized()&&diagnosticDialog.open&&generation===diagnosticGeneration&&Boolean(diagnosticRawText);
+  if(!await confirmOperation({title:'PDF診断の原文をコピー',details:['個人情報を含むPDF診断の原文をクリップボードにコピーします。','貼り付け先に注意してください。共有用にする場合は全マスクのコピーを使用してください。'],tone:'warning',acceptLabel:'原文をコピー'},current)||!current())return;
   try {
     await navigator.clipboard.writeText(diagnosticRawText);
     diagnosticState.textContent = "確認済みの原文をコピーしました。共有先を再確認してください。";
@@ -1097,6 +1154,7 @@ diagnosticCopyOriginal.addEventListener("click", async () => {
 });
 diagnosticClose.addEventListener("click", () => diagnosticDialog.close());
 diagnosticDialog.addEventListener("close", () => {
+  diagnosticGeneration++;
   diagnosticRawText = "";
   diagnosticShared.value = "";
   diagnosticCopy.disabled = true;
@@ -1116,7 +1174,7 @@ document.addEventListener('click',event=>{
  if(!(target instanceof Element))return;
  const link=target.closest<HTMLAnchorElement>('a[href]');
  if(!link)return;
- event.preventDefault();notice('OneDriveへ保存中です。完了後に移動してください。');
+ event.preventDefault();notice('info','OneDriveへ保存中です。完了後に移動してください。');
 },true);
 window.addEventListener("beforeunload", event => {
   if ((!saving && entries.length === 0) || leavingAfterSave) return;
@@ -1127,3 +1185,8 @@ window.addEventListener("pagehide", () => {
   for (const entry of entries) if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
 });
 render();
+uploadInitialized = true;
+updateFilePickerState();
+
+// Read the directory automatically only when an existing authorized session can resume.
+void refreshEmployerChoices(false);

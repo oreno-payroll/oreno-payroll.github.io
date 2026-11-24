@@ -1,11 +1,14 @@
 /** Payroll v2: 保存の正本はOneDriveの暗号化保管庫だけ。旧IndexedDBはmigration専用。 */
-import {payrollPeriodKey,validatePayrollForm} from './payrollValidation';
+import {payrollPeriodKey,payrollPeriodRelation,PayrollEmployerConfirmationError,validatePayrollForm} from './payrollValidation';
 import {isValidPayrollSemantics,type PayrollStatementSemantics} from './payrollSemantics';
 import {isValidPayrollZeroResolution,type PayrollZeroResolutionV1} from './payrollZeroResolution';
 import {validEmployerId} from './employerIdentity';
+import {employerDirectorySignature,mergeEmployerDirectories,type EmployerEntry} from './employerDirectory';
 import {cloudVault} from '../cloud/auth';
 import type {CloudRecord} from '../cloud/vault';
 import {PayrollPartialSuccessError} from './operationError';
+import {inspectUploadRecovery,requireSafeUploadRecovery,uploadRecoveryAttempt,pdfSha256,resolveLegacyOriginalHashes} from './uploadRecovery';
+import {fiscalYearOfTargetMonth} from '../forecast/payrollCalendar';
 import {MAX_RECORDS,MAX_PDF_SIZE,MAX_TOTAL_PDF_BYTES} from './storageLimits';
 
 export interface SavedPayrollRecordInput {
@@ -30,17 +33,19 @@ export function toSummary(record:SavedPayrollRecord):SavedPayrollSummary {
 }
 export interface ReplacementConflict {
  id:number;fileName:string;period:string;reasons:('same-pdf'|'same-period')[];
- signature:string;legacyHash?:string;
+ signature:string;legacyHash?:string;employerId?:string;
 }
 export function recordSignature(record:SavedPayrollRecord|SavedPayrollSummary):string {
  const pdfSize='pdf' in record?record.pdf.size:record.pdfSize;
  const pdfType='pdf' in record?record.pdf.type:record.pdfType;
  return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form,record.semantics??null,record.zeroResolution??null,record.employerId??null]);
 }
-const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'fileHash'|'form'>):('same-pdf'|'same-period')[]=>{
+const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'fileHash'|'form'|'employerId'>):('same-pdf'|'same-period')[]=>{
  const result:('same-pdf'|'same-period')[]=[];
  if(old.fileHash&&incoming.fileHash&&old.fileHash===incoming.fileHash)result.push('same-pdf');
- if(payrollPeriodKey(old.form)===payrollPeriodKey(incoming.form))result.push('same-period');
+ const relation=payrollPeriodRelation(old,incoming);
+ if(relation==='ambiguous'&&!result.includes('same-pdf'))throw new PayrollEmployerConfirmationError();
+ if(relation==='same')result.push('same-period');
  return result;
 };
 function assertValid(input:SavedPayrollRecordInput,legacy=false):void {
@@ -85,6 +90,7 @@ export interface DashboardLoadOptions {
  forceFresh?:boolean;
  priorityYears?:readonly string[];
  onProgress?:(status:string)=>void;
+ onEmployerDirectory?:(directory:EmployerEntry[])=>void;
 }
 /** Dashboard startup reuses only the freshly verified index, never for saving or editing. */
 export async function loadRecordSummaries(options?:DashboardLoadOptions):Promise<SavedPayrollSummary[]> {
@@ -94,9 +100,10 @@ export async function loadRecordSummaries(options?:DashboardLoadOptions):Promise
  const vault=await cloudVault();
  const authMs=Math.round(performance.now()-start);
  options.onProgress?.('暗号索引と年度別明細を確認しています…');
- const result=await vault.refresh({dashboardStartup:true,forceFresh:options.forceFresh,priorityYears:options.priorityYears,onProgress:(loaded,total)=>{
+ const result=await vault.refresh({dashboardStartup:true,forceFresh:options.forceFresh,reuseVerifiedYears:true,bulkYearMetadata:true,priorityYears:options.priorityYears,onProgress:(loaded,total)=>{
   options.onProgress?.(`OneDriveから年度別データを読み込み中：${loaded}/${total}年度（経過 ${Math.round((performance.now()-start)/1000)}秒）`);
  }});
+ options.onEmployerDirectory?.(vault.dashboardEmployerDirectory());
  // Diagnostic timings contain no filenames, salary values, tokens, or Microsoft identity.
  console.info(`[Payroll startup] source=${vault.isShowingSnapshot()?'encrypted-tab-cache':'OneDrive'}, authentication/unlock=${authMs}ms, annual-records=${Math.round(performance.now()-start)-authMs}ms, total=${Math.round(performance.now()-start)}ms`);
  return result;
@@ -183,7 +190,7 @@ export async function inspectReplacementConflicts(records:Array<SavedPayrollReco
  const old=await cloudSummaries();
  return old.filter(r=>r.id!==excludeId).flatMap(r=>{
   const reasons=[...new Set(records.flatMap(v=>conflicts(r,v)))];
-  return reasons.length?[{id:r.id,fileName:r.fileName,period:payrollPeriodKey(r.form),reasons,signature:recordSignature(r)}]:[];
+  return reasons.length?[{id:r.id,fileName:r.fileName,period:payrollPeriodKey(r.form,r.employerId),reasons,signature:recordSignature(r),...(r.employerId?{employerId:r.employerId}:{})}]:[];
  });
 }
 function newNumericId(used:Set<number>):number {
@@ -201,30 +208,44 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
  if(!records.length)throw new Error('保存対象がありません。');
  onProgress?.('OneDriveの保存済み明細を確認しています…');
  const vault=await cloudVault();const existing=await vault.refresh();
- const savedHashes=new Set(existing.map(r=>r.fileHash).filter(Boolean));
- const savedPeriods=new Set(existing.map(r=>payrollPeriodKey(r.form)));
- const batchHashes=new Set<string>(),batchPeriods=new Set<string>();
+ const legacyHashes=await resolveLegacyOriginalHashes(vault,existing);
+ const savedHashes=new Set(existing.map(r=>r.fileHash||legacyHashes.get(r.id)).filter(Boolean));
+ const batchHashes=new Set<string>();
  const accepted:SavedPayrollRecordInput[]=[],skipped:SkippedPayroll[]=[];
  for(const record of records) {
   assertValid(record);
-  if(!record.fileHash||!/^[a-f0-9]{64}$/.test(record.fileHash))throw new Error('PDFのSHA-256が必要です。');
-  const period=payrollPeriodKey(record.form);
+  if(!record.fileHash||!/^[a-f0-9]{64}$/.test(record.fileHash)||await pdfSha256(record.pdf)!==record.fileHash)throw new Error('PDFのSHA-256が一致しません。');
   let reason:SkippedPayroll['reason']|undefined;
   if(savedHashes.has(record.fileHash))reason='saved-pdf';
-  else if(savedPeriods.has(period))reason='saved-period';
   else if(batchHashes.has(record.fileHash))reason='batch-pdf';
-  else if(batchPeriods.has(period))reason='batch-period';
+  else {
+   const savedRelations=existing.map(r=>payrollPeriodRelation(r,record));
+   const batchRelations=accepted.map(r=>payrollPeriodRelation(r,record));
+   if(savedRelations.includes('ambiguous')||batchRelations.includes('ambiguous'))throw new PayrollEmployerConfirmationError();
+   if(savedRelations.includes('same'))reason='saved-period';
+   else if(batchRelations.includes('same'))reason='batch-period';
+  }
   if(reason){skipped.push({fileName:record.fileName,originalFileName:record.originalFileName,reason});continue;}
-  accepted.push(record);batchHashes.add(record.fileHash);batchPeriods.add(period);
+  accepted.push(record);batchHashes.add(record.fileHash);
  }
- checkLimits(existing,accepted);
- const used=new Set(existing.map(x=>x.id));
+ // Even after a reload, inspect cloud-side originals and income before writing.
+ // Include skipped PDFs so an income-only partial success cannot be called saved.
+ onProgress?.('OneDriveの保存済み明細を確認しています…');
+ const preflight=await inspectUploadRecovery(vault,records.map(uploadRecoveryAttempt),recordSignature);
+ requireSafeUploadRecovery(preflight);
+ // The preflight is read-only; recheck the exact source snapshot before using
+ // the previously computed accepted list. saveBatch independently checks races.
+ const latest=await vault.refresh({forceFresh:true});
+ if(physicalRestoreSnapshot(latest)!==physicalRestoreSnapshot(existing))
+  throw new Error('保存前の照合中に明細が変更されました。最新状態を確認してください。');
+ checkLimits(latest,accepted);
+ const used=new Set(latest.map(x=>x.id));
  const batch:SavedPayrollRecord[]=accepted.map(item=>{
   const id=newNumericId(used);used.add(id);
   return {...item,id,savedAt:new Date().toISOString(),revision:1};
  });
  if(!batch.length)return {saved:0,skipped};
- await vault.saveBatch(batch,onProgress);
+ await vault.saveBatch(batch,onProgress,latest);
  return {saved:batch.length,skipped};
 }
 export async function updateRecord(record:SavedPayrollRecord,approvals:ReplacementConflict[]=[],expectedSignature?:string):Promise<void> {
@@ -234,21 +255,27 @@ export async function updateRecord(record:SavedPayrollRecord,approvals:Replaceme
  const conflicting=current.filter(r=>r.id!==record.id&&conflicts(r,record).length);
  const allowed=new Map(approvals.map(a=>[a.id,a]));
  if(conflicting.length!==allowed.size||conflicting.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))throw new Error('重複する明細が変更されました。再度確認してください。');
- await vault.save({...record,revision:(prior.revision??0)+1});
- let removed=0;
- for(const other of conflicting){
-  try{await vault.remove(other.id);removed++;}
-  catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup',`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+ await vault.save({...record,revision:(prior.revision??0)+1},undefined,remote=>recordSignature(remote)===expectedSignature,remote=>{
+  if(remote.some(r=>r.id!==record.id&&conflicts(r,record).length&&allowed.get(r.id)?.signature!==recordSignature(r)))throw new Error('保存直前に重複する明細が変更されました。再度確認してください。');
+ });
+ if(conflicting.length){
+  try{await vault.removeBatch(conflicting.map(other=>({id:other.id,matches:remote=>recordSignature(remote)===recordSignature(other)})));}
+  catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup','編集した明細は保存済みですが、重複明細・原本の整理は一部未確認です。最新明細とFinance連携、未参照PDF原本を確認してください。',{cause:error});}
  }
 }
 /** Edit an existing cloud record without requiring or uploading its original PDF. */
-export async function updateRecordMetadata(record:SavedPayrollSummary,approvals:ReplacementConflict[]=[],expectedSignature?:string,onProgress?:(stage:string)=>void):Promise<void> {
+export async function updateRecordMetadata(record:SavedPayrollSummary,approvals:ReplacementConflict[]=[],expectedSignature?:string,onProgress?:(stage:string)=>void,expectedDirectory?:string):Promise<void> {
  assertValidMetadata(record);
  const vault=await cloudVault();
  const current=await vault.refresh({forceFresh:true});
  const prior=current.find(r=>r.id===record.id);
  if(!prior||!expectedSignature||recordSignature(prior)!==expectedSignature)
   throw new Error('別端末で明細が変更されました。読み直してから保存してください。');
+ if(expectedDirectory!==undefined||(record.employerId!==undefined&&record.form.job!==prior.form.job)){
+  const directory=await vault.readEmployerDirectory();
+  if(expectedDirectory!==undefined&&employerDirectorySignature(directory)!==expectedDirectory)throw new Error('勤務先一覧が更新されました。再度確認してください。');
+  if(record.employerId!==undefined&&(record.employerId!==prior.employerId||record.form.job!==prior.form.job)&&!directory.some(e=>e.id===record.employerId&&e.role===record.form.job))throw new Error('勤務区分に対応する勤務先を選択してください。');
+ }
  if(prior.fileHash!==record.fileHash||prior.pdfSize!==record.pdfSize||prior.pdfType!==record.pdfType||
     prior.pages!==record.pages||prior.savedAt!==record.savedAt||prior.originalFileName!==record.originalFileName)
   throw new Error('PDF原本の保存情報が変更されています。再読み込みしてください。');
@@ -259,12 +286,15 @@ export async function updateRecordMetadata(record:SavedPayrollSummary,approvals:
  // The vault always takes physical PDF id/month/hash/size/type from the live source,
  // and verifies the expected revision/signature again at the conditional year write.
  await vault.save({...record,revision:(prior.revision??0)+1},onProgress,
-  remote=>recordSignature(remote)===expectedSignature);
- let removed=0;
- if(conflicting.length)onProgress?.('明細データを保存済み。重複した明細の除外を確認しています…');
- for(const other of conflicting){
-  try{await vault.remove(other.id);removed++;}
-  catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup',`編集した明細は保存済みですが、重複明細の整理は${removed}/${conflicting.length}件まで完了しました。処理が一部進んでいる可能性があります。画面を再読み込みして確認してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
+  remote=>recordSignature(remote)===expectedSignature,remote=>{
+   const liveConflicts=remote.filter(r=>r.id!==record.id&&conflicts(r,record).length);
+   if(liveConflicts.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))
+    throw new Error('保存直前に重複する明細が変更されました。再度確認してください。');
+  });
+ if(conflicting.length){
+  onProgress?.('明細データを保存済み。重複した明細と原本の整理を確認しています…');
+  try{await vault.removeBatch(conflicting.map(other=>({id:other.id,matches:remote=>recordSignature(remote)===recordSignature(other)})));}
+  catch(error){throw new PayrollPartialSuccessError('duplicate-cleanup','編集した明細は保存済みですが、重複明細・原本の整理は一部未確認です。最新明細とFinance連携、未参照PDF原本を確認してください。',{cause:error});}
  }
 }
 export async function deleteRecord(id:number,expectedSignature:string):Promise<void> {
@@ -272,45 +302,205 @@ export async function deleteRecord(id:number,expectedSignature:string):Promise<v
  const vault=await cloudVault();const current=await vault.refresh();const record=current.find(r=>r.id===id);
  if(!record)throw new Error('対象明細はすでに削除されています。');
  if(recordSignature(record)!==expectedSignature)throw new Error('別の端末で明細が更新されました。削除を中断します。');
- await vault.remove(id);
+ await vault.removeBatch([{id,matches:remote=>recordSignature(remote)===expectedSignature}]);
+}
+/** All selected revisions are checked before the first annual mutation. */
+export async function deleteRecords(targets:readonly {id:number;signature:string}[]):Promise<void> {
+ if(!targets.length||targets.some(t=>!Number.isSafeInteger(t.id)||t.id<=0||!t.signature)||new Set(targets.map(t=>t.id)).size!==targets.length)
+  throw new Error('削除対象が不正です。');
+ const vault=await cloudVault();
+ await vault.removeBatch(targets.map(t=>({id:t.id,matches:remote=>recordSignature(remote)===t.signature})));
 }
 export function payrollSnapshot(records:readonly SavedPayrollSummary[]):string[] {return records.map(recordSignature).sort();}
-/** Legacy hashes may be missing. Compare actual PDF bytes before changing any records. */
-async function pdfSha256(blob:Blob):Promise<string> {
- const digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
- return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
+/** The plan is read-only and binds exact records, physical references and directory. */
+export interface EmployerAssignmentPlan {signature:string;count:number;employerId:string}
+export interface EmployerAssignmentTarget {id:number;signature:string}
+async function planEmployerAssignment(vault:Awaited<ReturnType<typeof cloudVault>>,targets:readonly EmployerAssignmentTarget[],employerId:string,directorySignature:string,authorized:()=>boolean){
+ if(!authorized()||!targets.length||targets.length>MAX_RECORDS||new Set(targets.map(t=>t.id)).size!==targets.length)throw new Error('勤務先設定の対象または認証状態が不正です。');
+ const live=await vault.refresh({forceFresh:true}),directory=await vault.readEmployerDirectory();
+ const entry=directory.find(e=>e.id===employerId);
+ if(!entry||employerDirectorySignature(directory)!==directorySignature||!authorized())throw new Error('勤務先一覧が変更されました。');
+ const selected=new Map(targets.map(t=>[t.id,t.signature]));
+ const items=live.filter(r=>selected.has(r.id));
+ if(items.length!==targets.length||items.some(r=>r.employerId!==undefined||r.form.job!==entry.role||recordSignature(r)!==selected.get(r.id)))throw new Error('対象明細が変更されました。最新データを確認してください。');
+ const final=live.map(r=>selected.has(r.id)?{...r,employerId}:r);
+ for(const item of final.filter(r=>selected.has(r.id)))if(final.some(r=>r.id!==item.id&&payrollPeriodRelation(r,item)!=='different'))throw new Error('同じ期間の明細が重複するか勤務先を確定できません。対象を確認してください。');
+ const physical=physicalRestoreSnapshot(live);
+ if(physicalRestoreSnapshot(await vault.refresh({forceFresh:true}))!==physical||employerDirectorySignature(await vault.readEmployerDirectory())!==directorySignature||!authorized())throw new Error('検査中に明細または勤務先が変更されました。');
+ const signature=JSON.stringify([physical,directorySignature,employerId,[...selected.keys()].sort((a,b)=>a-b)]);
+ return {preview:{signature,count:items.length,employerId},live};
 }
-/** バックアップ復元：旧データを先に消さず、クラウドへ全件アップロード・照合してから余剰明細を論理削除。 */
-export async function replaceAllRecords(records:SavedPayrollRecord[],expectedSnapshot:readonly string[]):Promise<void> {
- const vault=await cloudVault();const old=await vault.refresh();
- if(JSON.stringify(payrollSnapshot(old))!==JSON.stringify(expectedSnapshot))throw new Error('復元開始前にクラウドデータが変更されました。');
- const ids=new Set<number>();
+export async function inspectEmployerAssignment(targets:readonly EmployerAssignmentTarget[],employerId:string,directorySignature:string,authorized:()=>boolean):Promise<EmployerAssignmentPlan>{
+ return (await planEmployerAssignment(await cloudVault(),targets,employerId,directorySignature,authorized)).preview;
+}
+export async function assignEmployers(targets:readonly EmployerAssignmentTarget[],employerId:string,directorySignature:string,expectedSignature:string,authorized:()=>boolean):Promise<void>{
+ const vault=await cloudVault(),plan=await planEmployerAssignment(vault,targets,employerId,directorySignature,authorized);
+ if(plan.preview.signature!==expectedSignature||!authorized())throw new Error('承認した勤務先設定の対象が変更されました。');
+ await vault.assignEmployerBatch(plan.live,targets.map(t=>t.id),employerId,directorySignature,authorized);
+}
+/** Read-only additive restore plan. Nothing is overwritten, even on ID collision. */
+export interface AdditiveRestorePreview {
+ signature:string; add:number; samePdf:number; sameId:number; samePeriod:number; ambiguous:number; backupConflict:number; employersAdded:number;
+}
+const physicalRestoreSnapshot=(records:readonly CloudRecord[])=>JSON.stringify(records.map(r=>JSON.stringify([recordSignature(r),r.originalId,r.originalMonth])).sort());
+async function planAdditiveRestore(vault:Awaited<ReturnType<typeof cloudVault>>,records:readonly SavedPayrollRecord[],employers?:readonly EmployerEntry[]) {
+ const live=await vault.refresh({forceFresh:true});const before=physicalRestoreSnapshot(live);
+ const directory=await vault.readEmployerDirectory(),merged=employers===undefined?directory:mergeEmployerDirectories(directory,employers);
+ const directorySignature=employerDirectorySignature(directory);
+ const nextDirectorySignature=employerDirectorySignature(merged);
+ const used=new Set<number>(),normalized:SavedPayrollRecord[]=[];
+ if(records.length>MAX_RECORDS||records.reduce((sum,r)=>sum+r.pdf.size,0)>MAX_TOTAL_PDF_BYTES)throw new Error('復元データが容量上限を超えています。');
+ for(const record of records){
+  assertValid(record,true);
+  if(!Number.isSafeInteger(record.id)||record.id<=0||used.has(record.id))throw new Error('復元元のIDが不正です。');
+  used.add(record.id);const hash=await pdfSha256(record.pdf);
+  if(record.fileHash&&record.fileHash!==hash)throw new Error('バックアップ内のPDFハッシュが一致しません。');
+  normalized.push({...record,fileHash:hash,form:{...record.form}});
+ }
+ const liveHashes=new Set<string>();
+ // A legacy record without a hash must be compared by actual bytes, not assumed distinct.
+ // Authenticate matching PDFs too, so a damaged existing original is not reported as recovered.
+ const backupHashes=new Set(normalized.map(r=>r.fileHash));
+ for(const item of live){
+  const hash=!item.fileHash||backupHashes.has(item.fileHash)?await pdfSha256(await vault.original(item)):item.fileHash;
+  if(item.fileHash&&item.fileHash!==hash)throw new Error('既存PDFのハッシュが一致しません。');
+  liveHashes.add(hash);
+ }
+ const preview:AdditiveRestorePreview={signature:'',add:0,samePdf:0,sameId:0,samePeriod:0,ambiguous:0,backupConflict:0,employersAdded:merged.length-directory.length};
+ const accepted:SavedPayrollRecord[]=[],candidates:SavedPayrollRecord[]=[];
+ for(const record of normalized){
+  if(liveHashes.has(record.fileHash!)){preview.samePdf++;continue;}
+  if(live.some(r=>r.id===record.id)){preview.sameId++;continue;}
+  const relations=live.map(r=>payrollPeriodRelation(r,record));
+  if(relations.includes('ambiguous')){preview.ambiguous++;continue;}
+  if(relations.includes('same')){preview.samePeriod++;continue;}
+  candidates.push(record);
+ }
+ // Never select an arbitrary winner from a conflicting group inside a backup.
+ for(const record of candidates){
+  if(normalized.some(other=>other!==record&&(other.fileHash===record.fileHash||payrollPeriodRelation(other,record)!=='different'))){preview.backupConflict++;continue;}
+  accepted.push(record);
+ }
+ preview.add=accepted.length;checkLimits(live,accepted);
+ if(normalized.length){
+  const recovery=await inspectUploadRecovery(vault,normalized.map(uploadRecoveryAttempt),recordSignature);
+  requireSafeUploadRecovery(recovery);
+ }
+ if(physicalRestoreSnapshot(await vault.refresh({forceFresh:true}))!==before||employerDirectorySignature(await vault.readEmployerDirectory())!==directorySignature)
+  throw new Error('復元内容の照合中にOneDriveが変更されました。再検査してください。');
+ preview.signature=JSON.stringify([before,directorySignature,nextDirectorySignature,normalized.map(recordSignature),accepted.map(r=>r.id),[...liveHashes].sort(),preview]);
+ return {preview,accepted,live,directory,merged};
+}
+export async function inspectAdditiveRestore(records:readonly SavedPayrollRecord[],employers?:readonly EmployerEntry[]):Promise<AdditiveRestorePreview>{
+ return (await planAdditiveRestore(await cloudVault(),records,employers)).preview;
+}
+/** Rebuild the approved plan before any write. Allocate fresh local IDs so deleted IDs
+ * and old revision histories are never resurrected or reused; PDF hash is the resume key. */
+export async function restoreAdditiveRecords(records:readonly SavedPayrollRecord[],expectedSignature:string,employers?:readonly EmployerEntry[],authorized:()=>boolean=()=>true,onProgress?:(stage:string)=>void):Promise<AdditiveRestorePreview>{
+ const vault=await cloudVault();if(!authorized())throw new Error('認証状態が変更されました。再確認してください。');
+ const plan=await planAdditiveRestore(vault,records,employers);
+ if(!authorized()||plan.preview.signature!==expectedSignature)throw new Error('追加復元の対象が変更されました。再検査してください。');
+ if(plan.preview.employersAdded){
+  await vault.writeEmployerDirectory(plan.directory,plan.merged);
+ }
+ if(!authorized()||physicalRestoreSnapshot(await vault.refresh({forceFresh:true}))!==physicalRestoreSnapshot(plan.live)||employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(plan.merged))
+  throw new Error('追加復元の直前にOneDriveが変更されました。再検査してください。');
+ const used=new Set([...plan.live.map(r=>r.id),...records.map(r=>r.id)]);
+ const batch=plan.accepted.map(record=>{const id=newNumericId(used);used.add(id);return {...record,id};});
+ if(batch.length){
+  await vault.saveBatch(batch,onProgress,plan.live,authorized);
+  const latest=await vault.refresh({forceFresh:true});
+  const ids=new Set(batch.map(r=>r.id));
+  if(physicalRestoreSnapshot(latest.filter(r=>!ids.has(r.id)))!==physicalRestoreSnapshot(plan.live)||batch.some(r=>!latest.some(v=>v.id===r.id&&recordSignature(v)===recordSignature(r))))
+   throw new Error('追加復元後の明細照合が一致しません。再検査してください。');
+  for(const r of latest.filter(r=>ids.has(r.id)))await vault.original(r);
+  const years=new Set(batch.map(r=>r.form.paymentDate.slice(0,4)));
+  if((await vault.inspectIncomeConsistency(years)).length)throw new Error('追加復元後のFinance連携が一致しません。連携データを再生成してください。');
+ }
+ return plan.preview;
+}
+
+/** The approved baseline includes physical references, not only displayed metadata. */
+export interface ReplacementRestoreBaseline {physical:string;directory:string;count:number;bytes:number}
+export async function inspectReplacementRestoreBaseline():Promise<ReplacementRestoreBaseline>{
+ const vault=await cloudVault();
+ const records=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}),physical=physicalRestoreSnapshot(records);
+ const directory=employerDirectorySignature(await vault.readEmployerDirectory());
+ if(physicalRestoreSnapshot(await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}))!==physical||employerDirectorySignature(await vault.readEmployerDirectory())!==directory)
+  throw new Error('全件置換の確認中に明細または勤務先が変更されました。再確認してください。');
+ return {physical,directory,count:records.length,bytes:records.reduce((sum,r)=>sum+r.pdfSize,0)};
+}
+/** 全件置換は事前承認した明細と勤務先を境界ごとに照合する。
+ * 置換対象外の原本は全明細・Finance照合後にのみ整理する。複数年度にまたがる処理は原子的ではない。 */
+export async function replaceAllRecords(records:SavedPayrollRecord[],baseline:ReplacementRestoreBaseline,employers?:readonly EmployerEntry[],authorized:()=>boolean=()=>true):Promise<void> {
+ const vault=await cloudVault();
+ const old=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}),directory=await vault.readEmployerDirectory();
+ if(!authorized()||physicalRestoreSnapshot(old)!==baseline.physical||employerDirectorySignature(directory)!==baseline.directory)
+  throw new Error('復元開始前に明細・勤務先または認証状態が変更されました。再検査してください。');
+ const ids=new Set<number>(),byId=new Map(old.map(r=>[r.id,r]));
+ let expected=old.slice(),expectedDirectory=baseline.directory;
+ const checkState=async()=>{
+  const current=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
+  if(!authorized()||physicalRestoreSnapshot(current)!==physicalRestoreSnapshot(expected)||employerDirectorySignature(await vault.readEmployerDirectory())!==expectedDirectory||!authorized())
+   throw new Error('復元中に明細・勤務先または認証状態が変更されました。再検査してください。');
+  return current;
+ };
+ const checkYear=(remote:readonly CloudRecord[],year:string)=>{
+  if(!authorized()||physicalRestoreSnapshot(remote)!==physicalRestoreSnapshot(expected.filter(r=>String(fiscalYearOfTargetMonth(r.form.targetMonth))===year)))
+   throw new Error('復元の年度書き込み直前に明細が変更されました。再検査してください。');
+ };
  for(const record of records){assertValid(record,true);if(!Number.isSafeInteger(record.id)||record.id<=0||ids.has(record.id))throw new Error('復元元のIDが不正です。');ids.add(record.id);}
  if(records.length>MAX_RECORDS||records.reduce((sum,r)=>sum+r.pdf.size,0)>MAX_TOTAL_PDF_BYTES)throw new Error('復元データが容量上限を超えています。');
- // Check all matching IDs first: never partially restore records before a PDF mismatch is discovered.
- const byId=new Map(old.map(r=>[r.id,r]));
+ // Verify all incoming hashes, including new IDs, before the first write.
+ const hashes:Array<{targetMonth:string;fileHash:string}>=[];
  for(const record of records){
-  const prior=byId.get(record.id);
-  if(!prior)continue;
-  const original=await vault.original(prior);
-  const [storedHash,backupHash]=await Promise.all([pdfSha256(original),pdfSha256(record.pdf)]);
-  if(storedHash!==backupHash)throw new Error(`明細ID ${record.id} のPDF原本がバックアップと異なります。既存データは更新していません。`);
-  if(record.fileHash&&record.fileHash!==backupHash)throw new Error(`明細ID ${record.id} のバックアップ内PDFハッシュが不正です。`);
+  const backupHash=await pdfSha256(record.pdf),prior=byId.get(record.id);
+  hashes.push({targetMonth:record.form.targetMonth,fileHash:backupHash});
+  if(prior&&await pdfSha256(await vault.original(prior))!==backupHash)throw new Error('同じ明細IDのPDF原本がバックアップと異なります。既存データは更新していません。');
+  if(record.fileHash&&record.fileHash!==backupHash)throw new Error('バックアップ内PDFハッシュが不正です。');
  }
- const afterCheck=await vault.refresh({forceFresh:true});
- if(JSON.stringify(payrollSnapshot(afterCheck))!==JSON.stringify(expectedSnapshot))throw new Error('PDF照合中に別端末が明細を変更しました。復元を中断しました。');
+ // An interrupted earlier restore may have detached originals. Never blindly
+ // upload the same PDF again, even if its month was corrected.
+ {
+  const report=await vault.inspectDetachedOriginals();
+  if(hashes.length&&(await vault.inspectDetachedUploadMatches(report,hashes)).length)throw new Error('復元対象と同じ未参照原本があります。設定で原本を確認・整理してから再検査してください。');
+  if(JSON.stringify(await vault.inspectDetachedOriginals())!==JSON.stringify(report))throw new Error('復元対象の原本検査中に一覧が変更されました。再検査してください。');
+ }
+ const excluded=old.filter(r=>!ids.has(r.id));
+ const excludedOriginals=await vault.captureDeletionOriginals(excluded);
+ await checkState();
+ if(employers!==undefined){
+  const merged=mergeEmployerDirectories(directory,employers);
+  if(employerDirectorySignature(merged)!==expectedDirectory)await vault.writeEmployerDirectory(directory,merged);
+  expectedDirectory=employerDirectorySignature(merged);
+  await checkState();
+ }
  for(const record of records){
-  const current=await vault.refresh({forceFresh:true}),prior=current.find(r=>r.id===record.id);
-  // Never assume an ID found after preflight belongs to the same physical PDF.
-  if(prior&&!byId.has(record.id))throw new Error('復元中に別端末が同じIDの明細を追加しました。復元を中断します。');
-  if(!prior&&byId.has(record.id))throw new Error('復元中に元の明細が削除されました。復元を中断します。');
+  const prior=expected.find(r=>r.id===record.id);
   if(prior&&recordSignature(prior)===recordSignature(record))continue;
-  if(prior&&byId.has(record.id)&&recordSignature(prior)!==recordSignature(byId.get(record.id)!))throw new Error('復元中に同じIDの明細が更新されました。再確認してください。');
-  await vault.save(record);
+  await checkState();
+  const matches=(remote:CloudRecord)=>!!prior&&physicalRestoreSnapshot([remote])===physicalRestoreSnapshot([prior]);
+  await vault.save(record,undefined,matches,checkYear);
+  const current=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}),actual=current.find(r=>r.id===record.id);
+  if(!actual||recordSignature(actual)!==recordSignature(record)||prior&&(actual.originalId!==prior.originalId||actual.originalMonth!==prior.originalMonth))
+   throw new Error('復元した明細・原本の照合に失敗しました。');
+  if(await pdfSha256(await vault.original(actual))!==await pdfSha256(record.pdf))throw new Error('復元したPDF原本が一致しません。');
+  expected=[...expected.filter(r=>r.id!==record.id),actual];
+  await checkState();
  }
- for(const record of old){if(!ids.has(record.id))await vault.remove(record.id);}
- await vault.refresh();
- if(JSON.stringify(payrollSnapshot(vault.records()))!==JSON.stringify(payrollSnapshot(records.map(toSummary))))throw new Error('復元後の照合に失敗しました。旧IndexedDBやバックアップは削除していません。');
+ for(const record of old){
+  if(ids.has(record.id))continue;
+  await checkState();
+  await vault.remove(record.id,remote=>physicalRestoreSnapshot([remote])===physicalRestoreSnapshot([record]),checkYear);
+  expected=expected.filter(r=>r.id!==record.id);
+  await checkState();
+ }
+ const latest=await checkState();
+ if(JSON.stringify(payrollSnapshot(latest))!==JSON.stringify(payrollSnapshot(records.map(toSummary))))throw new Error('復元後の照合に失敗しました。旧IndexedDBやバックアップは削除していません。');
+ const years=new Set([...old,...latest].map(r=>r.form.paymentDate.slice(0,4)));
+ if((await vault.inspectIncomeConsistency(years)).length)throw new Error('全件置換後のFinance連携が一致しません。連携データを再生成してください。');
+ await checkState();
+ await vault.trashConfirmedDeletionOriginals(excludedOriginals,new Set(excluded.map(r=>r.id)),years,checkState);
 }
 /** 移行用：一度も旧DBへ書かない。読取前に全件を原本ごと検証する。 */
 export async function migrateFromLegacyIndexedDb(progress:(message:string)=>void):Promise<{found:number;migrated:number}> {
@@ -336,7 +526,7 @@ export async function migrateFromLegacyIndexedDb(progress:(message:string)=>void
    if(sameId.fileHash!==record.fileHash||recordSignature(sameId)!==recordSignature(record))throw new Error(`旧明細ID ${record.id} とクラウドの内容が異なります。手動調査が必要です。`);
    continue;
   }
-  if(current.some(x=>(x.fileHash&&x.fileHash===record.fileHash)||payrollPeriodKey(x.form)===payrollPeriodKey(record.form)))throw new Error(`旧明細ID ${record.id} はクラウドに同じ期間の明細があります。自動統合を中断しました。`);
+  if(current.some(x=>(x.fileHash&&x.fileHash===record.fileHash)||payrollPeriodRelation(x,record)!=='different'))throw new Error(`旧明細ID ${record.id} はクラウドに同じ期間の明細があります。自動統合を中断しました。`);
   progress(`旧IndexedDBから暗号化移行中 ${migrated+1}/${legacy.length}件`);
   await vault.save(record);
   const after=await vault.refresh();const saved=after.find(x=>x.id===record.id);

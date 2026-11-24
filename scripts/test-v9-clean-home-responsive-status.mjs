@@ -13,8 +13,8 @@ assert.match(main,/monthKey\(b\)\.localeCompare\(monthKey\(a\)\)/);
 assert.doesNotMatch(main,/statement-month-heading|statement-item__meta/);
 assert.doesNotMatch(dash,/\.statement-month-heading|\.statement-item__meta/);
 assert.doesNotMatch(home,/登録されたPDFを年月別に確認できます/);
-assert.match(main,/detail\.append\(link, amounts\)/);
-assert.match(main,/\['総支給', record\.form\.gross\]/);
+assert.match(main,/detail\.append\(link, employer, amounts\)/);
+assert.match(main,/\['総支給額', record\.form\.gross\]/);
 assert.match(main,/\['手取り', record\.form\.net\]/);
 assert.match(dash,/\.statement-item__amounts \{/);
 // Work days belongs to the supplementary deductions, above net pay.

@@ -1,12 +1,18 @@
+import {confirmOperation,type OperationDialogRequest} from './ui/operationDialog';
+import {mountSettingsNavigation} from './ui/settingsNavigation';
 import { createAppStatus } from './ui/appStatus';
 import {microsoftDiagnostic} from './cloud/msalPolicy';
 import {operationFeedback,type OperationResult} from './ui/operationOutcome';
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
 import type {OrphanAnnualYear,DetachedOriginalReport,DetachedOriginal} from './cloud/vault';
-import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, verifyLegacyIndexedDbCloudBeforeDelete, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
+import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, verifyLegacyIndexedDbCloudBeforeDelete, deleteLegacyIndexedDb, loadRecords, inspectReplacementRestoreBaseline, type ReplacementRestoreBaseline, replaceAllRecords,inspectAdditiveRestore,restoreAdditiveRecords,type AdditiveRestorePreview, inspectEmployerAssignment, assignEmployers, recordSignature, type SavedPayrollSummary } from './storage/payrollStore';
+import {employerDirectorySignature,upsertEmployer,type EmployerEntry} from './storage/employerDirectory';
+import {PayrollPartialSuccessError} from './storage/operationError';
+import {createEmployerId} from './storage/employerIdentity';
+import {legacyEmployers,employerDisplayName,type LegacyEmployer} from './ui/employerSelection';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
-import {cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,signOutMicrosoftAccount,reconnectMicrosoftAccount,cloudRedirectUri,currentBrowserRememberState,rememberCurrentBrowser,forgetCurrentBrowser} from './cloud/auth';
+import {captureOperationAuthorization,cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,signOutMicrosoftAccount,reconnectMicrosoftAccount,cloudRedirectUri,currentBrowserRememberState,rememberCurrentBrowser,forgetCurrentBrowser} from './cloud/auth';
 import {clearNavigationSnapshot} from './cloud/snapshot';
 import type {CloudFolderItem} from './cloud/graph';
 import {YearEndRepository,type YearEndRestorePreview} from './yearEnd/repository';
@@ -29,6 +35,12 @@ const verifyButton = $<HTMLButtonElement>('verify-button');
 const restorePreview = $<HTMLElement>('restore-preview');
 const ack = $<HTMLInputElement>('restore-ack');
 const restoreButton = $<HTMLButtonElement>('restore-button');
+const addInspect=$<HTMLButtonElement>('restore-add-inspect');
+const addPreview=$<HTMLElement>('restore-add-preview');
+const addAck=$<HTMLInputElement>('restore-add-ack');
+const addButton=$<HTMLButtonElement>('restore-add-button');
+let addPlan:AdditiveRestorePreview|undefined;
+let addPlanAuthorized:(()=>boolean)|undefined;
 const status = $<HTMLElement>('backup-status');
 const changeCurrent=$<HTMLInputElement>('change-current');
 const changeNew=$<HTMLInputElement>('change-new');
@@ -61,8 +73,109 @@ let detachedReport:DetachedOriginalReport|undefined;
 let detachedPage=0;
 let preview: LoadedBackup | undefined;
 let currentCount = 0;
-let initialSnapshot: string[] | undefined;
+let initialSnapshot: ReplacementRestoreBaseline | undefined;
 let busy = false;
+let settingsNavigation:ReturnType<typeof mountSettingsNavigation>|undefined;
+let employers:EmployerEntry[]|undefined;
+let legacyDirectory:LegacyEmployer[]=[];
+const employerDirectoryLoad=$<HTMLButtonElement>('employer-directory-load');
+const employerDirectoryStatus=$<HTMLElement>('employer-directory-status');
+const employerDirectoryList=$<HTMLUListElement>('employer-directory-list');
+const employerDirectoryForm=$<HTMLFormElement>('employer-directory-form');
+const employerDirectoryTarget=$<HTMLSelectElement>('employer-directory-target');
+const employerDirectoryName=$<HTMLInputElement>('employer-directory-name');
+const employerDirectoryRole=$<HTMLSelectElement>('employer-directory-role');
+const employerDirectoryCurrent=$<HTMLInputElement>('employer-directory-current');
+const employerDirectorySave=$<HTMLButtonElement>('employer-directory-save');
+const employerDirectoryAdd=$<HTMLButtonElement>('employer-directory-add');
+const employerDirectoryCancel=$<HTMLButtonElement>('employer-directory-cancel');
+const bulkPanel=$<HTMLElement>('employer-bulk-panel');
+const bulkTarget=$<HTMLSelectElement>('employer-bulk-target');
+const bulkList=$<HTMLElement>('employer-bulk-list');
+const bulkCount=$<HTMLElement>('employer-bulk-count');
+const bulkStatus=$<HTMLElement>('employer-bulk-status');
+const bulkAll=$<HTMLButtonElement>('employer-bulk-all');
+const bulkNone=$<HTMLButtonElement>('employer-bulk-none');
+const bulkSave=$<HTMLButtonElement>('employer-bulk-save');
+let bulkRecords:SavedPayrollSummary[]=[];
+let bulkAuthorized:(()=>boolean)|undefined;
+const bulkSelected=new Set<number>();
+function bulkCandidates():SavedPayrollSummary[]{
+ const role=employers?.find(e=>e.id===bulkTarget.value)?.role;
+ return bulkRecords.filter(r=>r.employerId===undefined&&r.form.job===role).sort((a,b)=>b.form.targetMonth.localeCompare(a.form.targetMonth)||a.id-b.id);
+}
+function updateBulkControls():void{
+ const enabled=!busy&&!!bulkAuthorized?.()&&!!employers;
+ const candidates=bulkCandidates();
+ bulkTarget.disabled=!enabled;bulkAll.disabled=!enabled||!candidates.length||bulkSelected.size===candidates.length;
+ bulkNone.disabled=!enabled||!bulkSelected.size;bulkSave.disabled=!enabled||!bulkSelected.size||!bulkTarget.value;
+ bulkList.querySelectorAll<HTMLInputElement>('input').forEach(el=>el.disabled=!enabled);
+ bulkCount.textContent=`対象 ${candidates.length}件・選択 ${bulkSelected.size}件`;
+}
+function renderBulkList():void{
+ bulkList.replaceChildren();
+ for(const r of bulkCandidates()){
+  const label=document.createElement('label'),box=document.createElement('input'),text=document.createElement('span');
+  box.type='checkbox';box.checked=bulkSelected.has(r.id);
+  text.textContent=`${r.form.targetMonth} ${r.form.kind==='bonus'?'賞与':'給与'} / 支給日 ${r.form.paymentDate} / ${r.fileName} / 総支給額 ${Number(r.form.gross).toLocaleString('ja-JP')}円`;
+  box.addEventListener('change',()=>{if(busy||!bulkAuthorized?.())return;if(box.checked)bulkSelected.add(r.id);else bulkSelected.delete(r.id);updateBulkControls();});
+  label.append(box,text);bulkList.append(label);
+ }
+ updateBulkControls();
+}
+function renderBulkPanel():void{
+ bulkPanel.hidden=employers===undefined;bulkSelected.clear();bulkTarget.replaceChildren();
+ const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='勤務先を選択';bulkTarget.append(placeholder);
+ for(const entry of employers??[]){const option=document.createElement('option');option.value=entry.id;option.textContent=`${employerDisplayName(employers??[],entry.id)}（${entry.role==='main'?'本業':'副業'}・${entry.current?'現在':'過去'}）`;bulkTarget.append(option);}
+ bulkStatus.textContent='';renderBulkList();
+}
+const roleLabel=(role:string)=>role==='main'?'本業':'副業';
+function updateEmployerButtons():void{
+ employerDirectoryLoad.disabled=busy;
+ employerDirectoryAdd.disabled=busy||!employers;employerDirectoryCancel.disabled=busy;
+ employerDirectoryTarget.disabled=busy||!employers;
+ employerDirectoryName.disabled=busy||!employers;
+ const entry=employers?.find(x=>x.id===employerDirectoryTarget.value);
+ const legacy=legacyDirectory.find(x=>x.id===employerDirectoryTarget.value);
+ employerDirectoryRole.disabled=busy||!employers||Boolean(entry)||legacy?.roles.length===1;
+ employerDirectoryCurrent.disabled=busy||!employers;
+ employerDirectorySave.disabled=busy||!employers||!employerDirectoryName.value.trim()||!['main','side'].includes(employerDirectoryRole.value);
+}
+function fillEmployerDraft():void{
+ const entry=employers?.find(x=>x.id===employerDirectoryTarget.value);
+ const legacy=legacyDirectory.find(x=>x.id===employerDirectoryTarget.value);
+ employerDirectoryName.value=entry?.name??'';
+ employerDirectoryRole.value=entry?.role??(legacy?(legacy.roles.length===1?legacy.roles[0]:''):'main');
+ employerDirectoryCurrent.checked=entry?.current??false;
+ updateEmployerButtons();
+}
+function renderEmployerDirectory():void{
+ employerDirectoryForm.hidden=true;
+ employerDirectoryList.hidden=employers===undefined;
+ employerDirectoryList.replaceChildren();
+ const option=(id:string,label:string)=>{const node=document.createElement('option');node.value=id;node.textContent=label;return node;};
+ employerDirectoryTarget.replaceChildren(option('','新しい勤務先'));
+ for(const entry of [...(employers??[])].sort((a,b)=>a.role.localeCompare(b.role)||Number(b.current)-Number(a.current)||a.name.localeCompare(b.name,'ja')||a.id.localeCompare(b.id))){
+  const sameName=employers!.filter(x=>x.role===entry.role&&x.name===entry.name);
+  const label=`${entry.name}（${roleLabel(entry.role)}・${entry.current?'現在':'過去'}${sameName.length>1?`・${sameName.findIndex(x=>x.id===entry.id)+1}`:''}）`;
+  employerDirectoryTarget.append(option(entry.id,label));
+  const li=document.createElement('li'),text=document.createElement('span'),edit=document.createElement('button');
+  text.textContent=label;edit.type='button';edit.className='btn btn--secondary btn--small';edit.textContent='編集';
+  edit.addEventListener('click',()=>{if(busy)return;employerDirectoryTarget.value=entry.id;fillEmployerDraft();employerDirectoryForm.hidden=false;employerDirectoryName.focus();});li.append(text,edit);employerDirectoryList.append(li);
+ }
+ legacyDirectory.forEach((entry,i)=>{
+  const label=`未登録の勤務先 ${i+1}（${entry.roles.map(roleLabel).join('・')} / ${entry.first}〜${entry.last} / ${entry.count}件）`;
+  employerDirectoryTarget.append(option(entry.id,label));
+  const li=document.createElement('li'),text=document.createElement('span'),edit=document.createElement('button');text.textContent=label;edit.type='button';edit.className='btn btn--secondary btn--small';edit.textContent='名称を設定';
+  edit.addEventListener('click',()=>{if(busy)return;employerDirectoryTarget.value=entry.id;fillEmployerDraft();employerDirectoryForm.hidden=false;employerDirectoryName.focus();});li.append(text,edit);employerDirectoryList.append(li);
+ });
+ employerDirectoryTarget.value='';fillEmployerDraft();renderBulkPanel();
+}
+
+async function approveSettings(request:OperationDialogRequest,current:()=>boolean=()=>!busy,authorized=captureOperationAuthorization()):Promise<boolean>{
+ const guard=()=>authorized()&&current();
+ return await confirmOperation(request,guard)&&guard();
+}
 let loadedDb = false;
 let encryptedFile = false;
 const appStatus=createAppStatus();
@@ -74,9 +187,14 @@ function cancelOperation():void{operationCancelled=true;}
 let currentOperation: Operation|null=null;
 let wasBusy=false;
 const operations: Record<string,Operation>={
+ 'employer-directory-load':{label:'勤務先一覧を確認',result:'employer-directory-status'},
+ 'employer-directory-save':{label:'勤務先を保存',result:'employer-directory-status'},
+ 'employer-bulk-save':{label:'明細の勤務先を一括設定',result:'employer-bulk-status'},
  'export-button':{label:'バックアップを作成',result:'backup-status'},
  'verify-button':{label:'バックアップを検証',result:'backup-status'},
  'restore-button':{label:'バックアップを復元',result:'backup-status'},
+ 'restore-add-inspect':{label:'追加復元の対象を確認',result:'backup-status'},
+ 'restore-add-button':{label:'明細を追加復元',result:'backup-status'},
  'change-passphrase-button':{label:'パスフレーズを変更',result:'change-passphrase-status'},
  'cloud-cleanup-check':{label:'旧暗号データを確認',result:'cloud-cleanup-status'},
  'cloud-cleanup-delete':{label:'旧暗号データを整理',result:'cloud-cleanup-status'},
@@ -85,8 +203,8 @@ const operations: Record<string,Operation>={
  'detached-original-check':{label:'未参照PDFを検査',result:'detached-original-status'},
  'payroll-income-publish':{label:'Finance連携を更新',result:'payroll-income-publish-status'},
  'migrate-legacy-cloud':{label:'旧データを移行',result:'migrate-legacy-cloud-status'},
- 'legacy-cleanup-check':{label:'旧DBを検査',result:'legacy-cleanup-status'},
- 'legacy-cleanup-delete':{label:'旧DBを削除',result:'legacy-cleanup-status'},
+ 'legacy-cleanup-check':{label:'旧データを検査',result:'legacy-cleanup-status'},
+ 'legacy-cleanup-delete':{label:'旧データを削除',result:'legacy-cleanup-status'},
  'backup-cloud-load':{label:'OneDriveの明細を取得',result:'backup-status'},
  'ye-backup-export':{label:'従業員バックアップを保存',result:'ye-backup-status'},
  'ye-restore-verify':{label:'従業員バックアップを検証',result:'ye-backup-status'},
@@ -107,8 +225,7 @@ function reportStatusTransition(){
   if(operationCancelled||!operation)appStatus.clear();
   else {
    const notification=operationFeedback(operation.label,operationResult);
-   if(notification.kind==='success')appStatus.success(notification.message);
-   else appStatus.error(notification.message);
+   appStatus.show(notification.kind,notification.message);
   }
   currentOperation=null;operationResult=null;operationCancelled=false;
  }
@@ -158,6 +275,10 @@ function showYearEndPlan(plan:YearEndRestorePreview){
 
 
 function updateButtons(): void {
+  settingsNavigation?.setBusy(busy);
+  updateEmployerButtons();
+  updateBulkControls();
+  employerDirectoryList.querySelectorAll<HTMLButtonElement>('button').forEach(button=>button.disabled=busy);
   reportStatusTransition();
   orphanCheck.disabled=busy;orphanRecover.disabled=busy||!orphanYears?.length;
   detachedCheck.disabled=busy;
@@ -183,8 +304,13 @@ function updateButtons(): void {
   document.querySelector<HTMLButtonElement>('#migrate-legacy-cloud')?.toggleAttribute('disabled',busy);
   restorePassword.disabled = busy || !encryptedFile;
   verifyButton.disabled = busy || !filePicker.files?.length || (encryptedFile && !restorePassword.value);
+  document.querySelectorAll<HTMLElement>('[data-personal-restore-stage]').forEach(panel=>panel.hidden=!preview);
+  $<HTMLElement>('ye-restore-actions').hidden=!yearEndPreview||!yearEndPlan;
   ack.disabled = busy || !preview;
-  restoreButton.disabled = busy || !preview || !ack.checked;
+  restoreButton.disabled = busy || !preview || !ack.checked || !initialSnapshot;
+  addInspect.disabled=busy||!preview;
+  addAck.disabled=busy||!preview||!addPlan||!addPlanAuthorized?.()||!(addPlan.add||addPlan.employersAdded);
+  addButton.disabled=addAck.disabled||!addAck.checked;
 }
 function info(message: string, isError = false): void {
   status.textContent = message;
@@ -195,15 +321,17 @@ function info(message: string, isError = false): void {
 }
 function resetPreview(): void {
   preview = undefined;
+  addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;addPreview.textContent='ファイルを検証してから対象を確認してください。';
   ack.checked = false;
   updateButtons();
 }
 async function refreshCount(): Promise<void> {
-  const records = await loadRecordSummaries({priorityYears:[]});
-  currentCount = records.length;
-  initialSnapshot = payrollSnapshot(records);
+  initialSnapshot = undefined;
+  const snapshot = await inspectReplacementRestoreBaseline();
+  currentCount = snapshot.count;
+  initialSnapshot = snapshot;
   loadedDb = true;
-  const bytes = records.reduce((sum, r) => sum + r.pdfSize, 0);
+  const bytes = snapshot.bytes;
   exportSummary.textContent = `明細 ${currentCount}件 / PDF ${sizes(bytes)}`;
 }
 exportButton.addEventListener('click', async () => {
@@ -218,12 +346,15 @@ exportButton.addEventListener('click', async () => {
   timer=setInterval(display,1000);
   try {
     display();
+    const vault=await cloudVault();
+    const employers=await vault.readEmployerDirectory();
     const records=await loadRecords((completed,total)=>{
       step=`PDF原本 ${completed}/${total}件を取得・照合しました`;
       display();
     });
     step='ZIPファイルを作成しています…';display();
-    const zip=await createBackup(records);
+    if(employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(employers))throw new Error('バックアップ中に勤務先一覧が更新されました。再実行してください。');
+    const zip=await createBackup(records,employers);
     step='バックアップを暗号化しています…';display();
     const blob = await encryptBackup(zip, exportPassword.value);
     const today = new Date();
@@ -251,7 +382,7 @@ async function verifyRestore(file: File, password?: string): Promise<void> {
     const loaded = await readBackup(content);
     preview = loaded;
     restorePassword.value = '';
-    restorePreview.textContent = `検証完了：${loaded.records.length}件 ・ PDF ${sizes(loaded.bytes)}\n作成日時：${new Date(loaded.exportedAt).toLocaleString('ja-JP')}${loaded.unreviewedWarnings ? `\n旧データの検算未承認：${loaded.unreviewedWarnings}件` : ''}${loaded.legacyDuplicates ? `\n旧データの重複候補：${loaded.legacyDuplicates}件` : ''}`;
+    restorePreview.textContent = `検証完了：${loaded.records.length}件 ・ PDF ${sizes(loaded.bytes)}\n作成日時：${new Date(loaded.exportedAt).toLocaleString('ja-JP')}${loaded.unreviewedWarnings ? `\n旧データの検算未承認：${loaded.unreviewedWarnings}件` : ''}${loaded.legacyDuplicates ? `\n旧データの重複候補：${loaded.legacyDuplicates}件` : ''}${loaded.employers!==undefined?`\n勤務先一覧：${loaded.employers.length}件（既存の勤務先情報は維持）`:''}`;
     info('バックアップを検証しました。復元内容を確認してください。');finishOperation('success');
   } catch (error) {
     preview = undefined;
@@ -264,7 +395,7 @@ filePicker.addEventListener('change', async () => {
   restorePassword.value = '';
   encryptedFile = false;
   const file = filePicker.files?.[0];
-  if (!file) { restorePreview.textContent = 'バックアップファイルを選択してください。'; return; }
+  if (!file) { restorePreview.textContent = 'バックアップファイルを選択してください。'; updateButtons(); return; }
   busy = true; updateButtons();
   try {
     encryptedFile = await isEncryptedBackup(file);
@@ -290,11 +421,13 @@ ack.addEventListener('change', updateButtons);
 restoreButton.addEventListener('click', async () => {
   if (busy || !preview || !ack.checked || !initialSnapshot) return;
   const data = preview;
-  const snapshot = [...initialSnapshot];
-  if (!window.confirm(`現在の${currentCount}件を削除して、バックアップ内の${data.records.length}件で完全に置き換えます。続けますか？`)) return;
+  const snapshot = {...initialSnapshot};
+  const authorized=captureOperationAuthorization();
+  const count=currentCount,sourceSnapshot=initialSnapshot;
+  if (!await approveSettings({title:'本人用バックアップを置き換えて復元',subject:`現在 ${count}件 → バックアップ ${data.records.length}件`,details:['現在の明細を削除し、バックアップの全件で完全に置き換えます。','全明細とFinance連携の照合後、置換対象外の未参照PDF原本をごみ箱へ移動します。共有原本は保持します。旧暗号世代は別途確認して整理します。','現在のデータを別途バックアップしたことを確認してください。'],tone:'danger',acceptLabel:'置き換えて復元'},()=>!busy&&preview===data&&ack.checked&&initialSnapshot===sourceSnapshot&&currentCount===count,authorized)) return;
   busy = true; updateButtons(); info('全件復元中です。操作完了を確認してください…');
   try {
-    await replaceAllRecords(data.records, snapshot);finishOperation('success');
+    await replaceAllRecords(data.records, snapshot,data.employers,authorized);finishOperation('success');
     window.location.assign('../index.html');
   } catch (error) {
     // 別タブで変更されていた場合も、古い復元確認を再利用できないようにする。
@@ -311,6 +444,38 @@ async function refreshBrowserKeyState():Promise<void>{
  browserKeyState.textContent=state==='saved'?'このブラウザ：記憶済み':state==='missing'?'このブラウザ：未登録':'保存鍵を確認できません';
  updateButtons();
 }
+function describeAddPlan(plan:AdditiveRestorePreview):string{
+ return `追加 ${plan.add}件 / 除外 ${plan.samePdf+plan.sameId+plan.samePeriod+plan.ambiguous+plan.backupConflict}件\n同じPDF ${plan.samePdf}件・同じID ${plan.sameId}件・同じ期間 ${plan.samePeriod}件・勤務先未確定 ${plan.ambiguous}件・バックアップ内競合 ${plan.backupConflict}件\n勤務先情報の追加 ${plan.employersAdded}件（既存名称・設定は維持）`;
+}
+addAck.addEventListener('change',updateButtons);
+addInspect.addEventListener('click',async()=>{
+ if(busy||!preview)return;
+ const data=preview;addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;busy=true;updateButtons();info('追加復元の対象を照合しています…');
+ try{
+  await cloudVault();const authorized=captureOperationAuthorization();
+  const plan=await inspectAdditiveRestore(data.records,data.employers);
+  if(!authorized()||preview!==data)throw new Error('バックアップが変更されました。');
+  addPlan=plan;addPlanAuthorized=authorized;addPreview.textContent=describeAddPlan(plan);info('追加復元の対象を確認しました。');finishOperation('success');
+ }catch(error){addPreview.textContent='追加復元の検査を中断しました。';info(error instanceof Error?error.message:String(error),true);}
+ finally{busy=false;updateButtons();}
+});
+addButton.addEventListener('click',async()=>{
+ if(busy||!preview||!addPlan||!addPlanAuthorized?.()||!addAck.checked||!(addPlan.add||addPlan.employersAdded))return;
+ const data=preview,plan=addPlan,authorized=addPlanAuthorized;
+ if(!await approveSettings({title:'本人用バックアップを追加復元',subject:`明細 ${plan.add}件・勤務先 ${plan.employersAdded}件を追加`,details:[describeAddPlan(plan),'既存の明細は上書き・削除しません。',...(data.unreviewedWarnings?['旧データの検算未承認情報はそのまま保持します。']:[])],acceptLabel:'明細を追加復元'},()=>!busy&&preview===data&&addPlan===plan&&addAck.checked,authorized))return;
+ busy=true;updateButtons();info('追加復元の対象を再検査しています…');
+ try{
+  const result=await restoreAdditiveRecords(data.records,plan.signature,data.employers,authorized,stage=>info(stage));
+  await refreshCount();addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;ack.checked=false;
+  addPreview.textContent=`追加復元完了：明細 ${result.add}件・勤務先 ${result.employersAdded}件。再確認する場合は対象を検査してください。`;
+  info(addPreview.textContent);finishOperation('success');
+ }catch(error){
+  addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;ack.checked=false;
+  addPreview.textContent='追加復元を中断しました。既に追加された明細がある可能性があります。最新の対象を確認してください。未参照PDFやFinance未同期がある場合は設定から復旧してください。';
+  try{await refreshCount();}catch{ /* retain the original failure */ }
+  info(`${addPreview.textContent} ${error instanceof Error?error.message:String(error)}`,true);finishOperation('partial');
+ }finally{busy=false;updateButtons();}
+});
 browserKeyRegister.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
  busy=true;updateButtons();browserKeyFeedback.textContent='現在のOneDrive索引と鍵を確認しています…';
@@ -322,7 +487,7 @@ browserKeyRegister.addEventListener('click',()=>{void(async()=>{
 })()});
 browserKeyForget.addEventListener('click',()=>{void(async()=>{
  if(busy||browserKeyStateValue!=='saved')return;
- if(!window.confirm('このブラウザの保存鍵を削除し、開いているPayrollのすべてのタブをロックします。次回はパスフレーズで解除してください。続けますか？'))return;
+ if(!await approveSettings({title:'このブラウザの記憶を解除',details:['このブラウザの保存鍵を削除し、開いているPayrollのすべてのタブをロックします。','次回は保管庫のパスフレーズで解除してください。'],tone:'warning',acceptLabel:'記憶を解除'},()=>!busy&&browserKeyStateValue==='saved'))return;
  busy=true;updateButtons();browserKeyFeedback.textContent='保存鍵を削除しています…';
  try{await forgetCurrentBrowser();busy=false;window.location.reload();}
  catch(error){browserKeyFeedback.textContent=`記憶を解除できませんでした：${error instanceof Error?error.message:String(error)}`;busy=false;await refreshBrowserKeyState();updateButtons();}
@@ -339,6 +504,7 @@ $<HTMLElement>('backup-cloud-redirect-uri').textContent=cloudRedirectUri();
 async function refreshCloudSettings():Promise<boolean>{
  const state=await cloudConnectionState();
  cloudId.value=state.clientId;
+ $<HTMLDetailsElement>('backup-cloud-advanced').open=!state.clientId;
  cloudState.textContent=state.status==='connected'?`Microsoft認証済み · ${state.user??'Microsoftアカウント'}`:
   state.status==='reauth'?`${state.error??'Microsoftアカウントの再認証が必要です。'} · ${state.user??''}`:
   state.status==='temporary'?(state.error??'Microsoft認証を確認できませんでした。再接続してください。'):
@@ -347,7 +513,7 @@ async function refreshCloudSettings():Promise<boolean>{
  cloudDiagnostic.hidden=!state.diagnosticCode;
  cloudDiagnostic.textContent=state.diagnosticCode?`診断コード：${state.diagnosticCode}（認証情報・個人情報は含みません）`:'';
  cloudLogin.disabled=!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(state.clientId);
- cloudLogin.textContent=state.user?'別のアカウントでログイン':'Microsoftアカウントを選択';
+ cloudLogin.textContent=state.user?'別のアカウントに切り替え':'Microsoftに接続';
  cloudReconnect.hidden=state.status==='connected'||!state.clientId;
  cloudReconnect.disabled=busy||!state.clientId;
  cloudReconnect.textContent=state.status==='temporary'?'接続を再確認':'Microsoftに再接続';
@@ -389,7 +555,7 @@ cloudLogin.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
  // This action locks ALL Payroll tabs, revokes in-memory keys and can discard unsaved edits.
  // Do not even start MSAL initialization or the lock flow before the user agrees.
- if(!window.confirm('別のMicrosoftアカウントへ切り替えると、開いているPayrollのすべてのタブをロックし、メモリ上の復号鍵を消去します。\n他のタブで未保存の編集内容がある場合は失われます。保存を確認してから続けますか？'))return;
+ if(!await approveSettings({title:'Microsoftアカウントを切り替える',details:['開いているPayrollのすべてのタブをロックし、メモリ上の復号鍵を消去します。','他のタブの未保存の編集内容は失われます。保存を確認してください。'],tone:'warning',acceptLabel:'アカウントを切り替える'},()=>!busy&&!cloudLogin.disabled))return;
  cloudLogin.disabled=true;
  try{await chooseMicrosoftAccount();}
  catch(error){const info=microsoftDiagnostic(error,typeof navigator!=='undefined'&&navigator.onLine===false);cloudState.textContent=info.message;cloudDiagnostic.hidden=false;cloudDiagnostic.textContent=`診断コード：${info.code}`;cloudState.dataset.error='true';cloudLogin.disabled=false;}
@@ -397,14 +563,15 @@ cloudLogin.addEventListener('click',()=>{void(async()=>{
 let logoutRedirectReady=false;
 cloudLogout.addEventListener('click',()=>{void(async()=>{
  if(busy||cloudLogout.disabled)return;
- if(!window.confirm('PayrollからMicrosoftアカウントをサインアウトします。\n\nこのブラウザに記憶したPayrollの鍵をすべて削除し、開いているPayrollのタブをロックして、Microsoftのサインアウト画面に移動します。続けますか？'))return;
+ if(!await approveSettings({title:'Microsoftからサインアウト',details:['このブラウザに記憶したPayrollの鍵をすべて削除します。','開いているPayrollのタブをロックし、Microsoftのサインアウト画面に移動します。'],tone:'warning',acceptLabel:'サインアウト'},()=>!busy&&!cloudLogout.disabled))return;
  busy=true;updateButtons();cloudLogout.disabled=true;
  cloudState.textContent='Payrollをロックし、鍵の消去を確認しています…';
  try{await signOutMicrosoftAccount(()=>{logoutRedirectReady=true;});}
  catch(error){
   logoutRedirectReady=false;busy=false;updateButtons();
   // Once the vault is locked, do not redisplay old decrypted DOM content.
-  window.alert(`サインアウトを完了できませんでした。Payrollはロックしたまま再読み込みします。\n${error instanceof Error?error.message:'通信エラー'}\n\n鍵の削除が確認できなかった場合は、再読み込み後にもう一度サインアウトを実行してください。`);
+  // A locked document must stay hidden; do not unmask salary data to display a modal.
+  window.alert('サインアウトを完了できませんでした。Payrollはロックしたまま再読み込みします。\n鍵の削除が確認できなかった場合は、再読み込み後にもう一度サインアウトを実行してください。');
   window.location.reload();
  }
 })()});
@@ -427,7 +594,7 @@ void(async()=>{
  catch{ /* 旧DB確認が非対応なら従来どおりクラウド情報を表示する。 */ }
  if(legacyExists){
   cloudLoad.hidden=false;
-  exportSummary.textContent='旧DBの整理を優先できます。OneDriveの明細は必要なときだけ読み込んでください。';
+  exportSummary.textContent='旧ブラウザ保存データがあります。必要に応じて移行・整理してください。';
   updateButtons();
  }
  const connected=await refreshCloudSettings();
@@ -458,7 +625,7 @@ orphanCheck.addEventListener('click',()=>{void(async()=>{
 orphanRecover.addEventListener('click',()=>{void(async()=>{
  if(busy||!orphanYears?.length)return;
  const expected=orphanYears;
- if(!window.confirm(`索引に登録されていない年度 ${expected.length}件を復旧します。\n対象：${expected.map(v=>`${v.year}年度（${v.records}件${v.records===0?"・空の年度ファイル":""}）`).join('、')}\n\n暗号化ファイルを照合して年度索引に追加し、収入情報を同期します。よろしいですか？`))return;
+ if(!await approveSettings({title:'年度索引を復旧',subject:`対象：${expected.length}年度`,details:[...expected.map(v=>`${v.year}年度（${v.records}件${v.records===0?'・空の年度ファイル':''}）`),'暗号化ファイルを照合して年度索引に追加し、収入情報を同期します。'],tone:'warning',acceptLabel:'年度索引を復旧'},()=>!busy&&orphanYears===expected))return;
  busy=true;updateButtons();orphanStatus.textContent='年度索引を復旧しています…';
  try{
   const vault=await cloudVault();
@@ -500,11 +667,11 @@ const migrateButton=document.querySelector<HTMLButtonElement>('#migrate-legacy-c
 const migrateStatus=document.querySelector<HTMLElement>('#migrate-legacy-cloud-status');
 migrateButton?.addEventListener('click',()=>{void(async()=>{
  if(!migrateStatus||busy)return;
- if(!confirm('旧IndexedDBの給与明細をOneDriveへ移行します。移行前にバックアップを保管しましたか？'))return;
+ if(!await approveSettings({title:'旧ブラウザ保存データを移行',details:['旧ブラウザ保存データをOneDriveへ移行します。','移行前のバックアップを保管したことを確認してください。'],tone:'warning',acceptLabel:'移行を開始'}))return;
  busy=true;updateButtons();
  try{
   const result=await migrateFromLegacyIndexedDb(message=>{migrateStatus.textContent=message;});
-  migrateStatus.textContent=`旧データ ${result.found}件中、新規に${result.migrated}件を移行しました。旧IndexedDBは削除していません。`;
+  migrateStatus.textContent=`旧データ ${result.found}件中、新規に${result.migrated}件を移行しました。旧ブラウザ保存データは保持しています。`;
   await refreshCount();finishOperation('success');
  }catch(error){finishOperation('partial');migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
@@ -520,7 +687,8 @@ changeButton.addEventListener('click',()=>{void(async()=>{
  if([...changeCurrent.value].length<12||[...changeNew.value].length<12){changeStatus.textContent='現在・新しいパスフレーズを12文字以上で入力してください。';return;}
  if(changeCurrent.value===changeNew.value){changeStatus.textContent='現在と異なるパスフレーズを指定してください。';return;}
  if(!changeAck.checked){changeStatus.textContent='バックアップと他タブの終了を確認してください。';return;}
- if(!window.confirm('OneDriveの全暗号ファイルを新しい鍵へ移行します。完了まで画面移動はできません。開始しますか？'))return;
+ const currentPass=changeCurrent.value,newPass=changeNew.value;
+ if(!await approveSettings({title:'保管庫のパスフレーズを変更',details:['OneDriveの全暗号ファイルを新しい鍵へ移行します。','完了まで画面移動はできません。バックアップと他タブの終了を確認してください。'],tone:'warning',acceptLabel:'鍵の変更を開始'},()=>!busy&&changeAck.checked&&changeCurrent.value===currentPass&&changeNew.value===newPass&&changeConfirm.value===newPass))return;
  busy=true;updateButtons();
  const started=performance.now();let stage='変更の準備中…';
  const report=()=>{changeStatus.textContent=`${stage}（経過 ${Math.round((performance.now()-started)/1000)}秒）`;};
@@ -528,7 +696,7 @@ changeButton.addEventListener('click',()=>{void(async()=>{
  try{
   const vault=await cloudVault();
   clearNavigationSnapshot();
-  await vault.changePassphrase(changeCurrent.value,changeNew.value,value=>{stage=value;report();});
+  await vault.changePassphrase(currentPass,newPass,value=>{stage=value;report();});
   // 移行はこの時点でOneDriveに確定済み。旧タブ鍵を消し、メモリ鍵を更新する。
   changeCurrent.value='';changeNew.value='';changeConfirm.value='';changeAck.checked=false;
   let remembered:'updated'|'not-registered'|'storage-warning';
@@ -552,14 +720,13 @@ cloudCheck.addEventListener('click',()=>{void(async()=>{
   oldCloudPlan=plan;
   cloudStatus.textContent=plan.targets.length?`旧暗号フォルダー ${plan.targets.length}件 / 暗号ファイル ${plan.files}件（約${sizes(plan.bytes)}）。現行の保存世代は対象外です。`:'整理できる旧暗号データはありません。';
   cloudDelete.hidden=!plan.targets.length;finishOperation('success');
- }catch(error){finishOperation('error');cloudStatus.textContent=error instanceof Error?error.message:String(error);}
+ }catch(error){finishOperation('error');const message=error instanceof Error?error.message:String(error);cloudStatus.textContent=message.includes('が現行世代にありません')?`${message} 直前に原本をごみ箱へ移動した場合は、OneDriveで現行原本を復元し、未参照PDFを再検査してください。`:message;}
  finally{busy=false;updateButtons();}
 })()});
 cloudDelete.addEventListener('click',()=>{void(async()=>{
  if(busy||!oldCloudPlan)return;
  const plan=oldCloudPlan;
- if(!confirm(`現行データ・PDFをすべて照合したあと、旧暗号フォルダー ${plan.targets.length}件をOneDriveのごみ箱へ移動します。\nごみ箱には古いパスフレーズで開けるファイルが残ります。\n暗号化バックアップを別途保存し、他タブを閉じましたか？`))return;
- if(prompt('削除するには「整理」と入力してください。')!=='整理')return;
+ if(!await approveSettings({title:'旧暗号データを整理',subject:`旧暗号フォルダー ${plan.targets.length}件`,details:['現行データ・PDFと確定済み原本整理履歴を照合してからOneDriveのごみ箱へ移動します。原本の欠落や履歴不一致がある場合は停止します。','ごみ箱には古いパスフレーズで開けるファイルが残ります。','暗号化バックアップを別途保存し、他タブを閉じたことを確認してください。'],tone:'danger',requiredText:'整理',acceptLabel:'ごみ箱へ移動'},()=>!busy&&oldCloudPlan===plan))return;
  oldCloudPlan=undefined;cloudDelete.hidden=true;busy=true;updateButtons();
  try{
   const vault=await cloudVault();
@@ -600,15 +767,14 @@ function renderDetachedReport(report:DetachedOriginalReport):void{
     const trash=document.createElement('button');trash.type='button';trash.className='btn btn--danger-outline';trash.textContent='ごみ箱へ移動';
     trash.addEventListener('click',()=>{void(async()=>{
       if(busy||!detachedReport)return;
-      if(!confirm(`${detachedItemLabel(item)}\nこのPDFは現在の本人明細から参照されていません。\n削除済み明細の原本だけでなく、保存中断で残ったPDFの可能性もあります。\nバックアップを別途保存しましたか？`))return;
-      if(prompt('OneDriveのごみ箱に移動します。実行するには「原本整理」と入力してください。')!=='原本整理')return;
+      if(!await approveSettings({title:'未参照PDF原本を整理',subject:detachedItemLabel(item),details:['現在の本人明細から参照されていないPDFをOneDriveのごみ箱へ移動します。','削除済み明細の原本だけでなく、保存中断で残ったPDFの可能性もあります。旧世代にある同じ原本の情報は暗号化索引に記録し、別途確認した旧世代整理に利用します。','Finance連携が最新であることを照合します。未同期の場合は再生成後に再検査してください。','バックアップを別途保存したことを確認してください。'],tone:'danger',requiredText:'原本整理',acceptLabel:'ごみ箱へ移動'},()=>!busy&&detachedReport===report))return;
       busy=true;updateButtons();detachedStatus.textContent='参照先と原本の内容を再検証しています…';
       try{
         const vault=await cloudVault();
         await vault.trashDetachedOriginal(report,item);
         clearDetachedReport();
         detachedStatus.textContent='PDF原本をごみ箱へ移動しました。完全消去が必要ならOneDrive側のごみ箱も確認してください。残りの原本を見るには再検査してください。';
-      }catch(error){clearDetachedReport();detachedStatus.textContent=`原本整理を中断しました。最新の状態を再検査してください：${error instanceof Error?error.message:String(error)}`;}
+      }catch(error){clearDetachedReport();detachedStatus.textContent=`原本整理を中断しました。Finance連携を確認し、最新の状態を再検査してください：${error instanceof Error?error.message:String(error)}`;}
       finally{busy=false;updateButtons();}
     })();});
     actions.append(retrieve,trash);row.append(name,actions);detachedList.append(row);
@@ -639,24 +805,25 @@ detachedCheck.addEventListener('click',()=>{void(async()=>{
 // 旧DBは任意検査可能。削除時はOneDriveの全件照合に成功した場合のみ実行する。
 localCheck.addEventListener('click',()=>{void(async()=>{
  if(busy)return;busy=true;updateButtons();
- localStatus.textContent='この端末の旧IndexedDBを確認しています…';
+ localStatus.textContent='旧ブラウザ保存データを確認しています…';
  try{
   const result=await inspectLegacyIndexedDb();
-  finishOperation('success');localStatus.textContent=result.exists?`旧IndexedDB：${result.count}件。削除前にOneDriveの全明細・PDF原本を照合します。`:'この端末に旧IndexedDBはありません。';
- }catch(error){finishOperation('error');localStatus.textContent=`旧DBを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  finishOperation('success');localStatus.textContent=result.exists?`旧ブラウザ保存データ：${result.count}件。削除前にOneDriveの全明細・PDF原本を照合します。`:'旧ブラウザ保存データはありません。';
+ }catch(error){finishOperation('error');localStatus.textContent=`旧データを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 localDelete.addEventListener('click',()=>{void(async()=>{
- if(busy)return;busy=true;updateButtons();
+ if(busy)return;const authorized=captureOperationAuthorization();busy=true;updateButtons();
  try{
   // 誤って空の新規DBを作らず、既存の旧DBだけを列挙する。
   const result=await inspectLegacyIndexedDb();
-  if(!result.exists){localStatus.textContent='この端末に旧IndexedDBはありません。';finishOperation('success');return;}
-  if(!window.confirm(`この端末の旧IndexedDB（${result.count}件）を削除します。\n削除前にOneDriveへの移行済みデータとPDF原本をすべて照合します。一致しない場合は削除しません。\nバックアップを確認したうえで削除しますか？`)){cancelOperation();return;}
+  if(!result.exists){localStatus.textContent='旧ブラウザ保存データはありません。';finishOperation('success');return;}
+  if(!await approveSettings({title:'旧ブラウザ保存データを削除',subject:`旧明細 ${result.count}件`,details:['削除前にOneDriveへの移行済みデータとPDF原本をすべて照合します。一致しない場合は削除しません。','バックアップを確認してください。'],tone:'danger',acceptLabel:'旧データを削除'},()=>busy,authorized)){cancelOperation();return;}
   await verifyLegacyIndexedDbCloudBeforeDelete(result.count,text=>{localStatus.textContent=text;});
+  if(!authorized()){cancelOperation();return;}
   const deleted=await deleteLegacyIndexedDb(result.count,text=>{localStatus.textContent=text;});
-  localStatus.textContent=`この端末の旧IndexedDBを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;finishOperation('success');
- }catch(error){finishOperation('partial');localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  localStatus.textContent=`旧ブラウザ保存データを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;finishOperation('success');
+ }catch(error){finishOperation('partial');localStatus.textContent=`旧データは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 
@@ -744,7 +911,8 @@ yearEndVerify.addEventListener('click',()=>{void(async()=>{
 yearEndCommit.addEventListener('click',()=>{void(async()=>{
  if(busy||!yearEndPreview||!yearEndAck.checked||!yearEndPlan?.canRestore||!yearEndPlan.restorable)return;
  const data=yearEndPreview;
- if(!window.confirm(`年末調整の従業員 ${yearEndPlan.restorable}名を復元します（登録済み ${yearEndPlan.skipped}名はスキップ）。${yearEndPlan.sameNameCollisions?`\n注意：同名の別データが${yearEndPlan.sameNameCollisions}名追加されます。`:''}\n索引不整合・孤立ファイルがあれば中止します。\nOneDriveへの書き込みを開始しますか？`))return;
+ const plan=yearEndPlan;
+ if(!await approveSettings({title:'年末調整の従業員を追加復元',subject:`復元 ${plan.restorable}名・登録済み ${plan.skipped}名は維持`,details:[...(plan.sameNameCollisions?[`注意：同名の別データが${plan.sameNameCollisions}名追加されます。`]:[]),'索引不整合・孤立ファイルがあれば中止します。'],tone:'warning',acceptLabel:'従業員を追加復元'},()=>!busy&&yearEndPreview===data&&yearEndPlan===plan&&yearEndAck.checked))return;
  busy=true;updateButtons();reportYearEnd('従業員データの復元を開始しています…');
  try{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd);
@@ -761,7 +929,7 @@ yearEndCommit.addEventListener('click',()=>{void(async()=>{
 yearEndResume.addEventListener('click',()=>{void(async()=>{
  if(busy||!yearEndPreview||yearEndResume.hidden)return;
  const data=yearEndPreview;
- if(!window.confirm('保存途中の暗号化ファイルを選択中のバックアップとすべて照合します。\n一致するファイルはそのまま利用し、不足分のみ新規保存して、最後に従業員索引へ登録します。\n一致しないファイル・未知の項目があれば書き込まず停止します。復元を再開しますか？'))return;
+ if(!await approveSettings({title:'従業員データの復元を再開',details:['保存途中の暗号化ファイルを選択中のバックアップとすべて照合します。','一致するファイルは利用し、不足分のみ新規保存して、最後に従業員索引へ登録します。','一致しないファイル・未知の項目があれば書き込まず停止します。'],tone:'warning',acceptLabel:'復元を再開'},()=>!busy&&yearEndPreview===data&&!yearEndResume.hidden))return;
  busy=true;updateButtons();reportYearEnd('復元途中のデータを照合しています…');
  try{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd,{resumeVerifiedOrphans:true});
@@ -791,3 +959,76 @@ yearEndRecheck.addEventListener('click',()=>{void(async()=>{
  }catch(error){yearEndPlan=undefined;yearEndResume.hidden=true;yearEndError(error);}
  finally{busy=false;updateButtons();}
 })()});
+
+// Employer names stay in the unlocked page and encrypted index. No browser storage or console output.
+employerDirectoryTarget.addEventListener('change',fillEmployerDraft);
+employerDirectoryAdd.addEventListener('click',()=>{if(busy||!employers)return;employerDirectoryTarget.value='';fillEmployerDraft();employerDirectoryForm.hidden=false;employerDirectoryName.focus();});
+employerDirectoryCancel.addEventListener('click',()=>{if(busy)return;employerDirectoryForm.hidden=true;employerDirectoryTarget.value='';fillEmployerDraft();employerDirectoryAdd.focus();});
+employerDirectoryName.addEventListener('input',updateEmployerButtons);
+employerDirectoryRole.addEventListener('change',updateEmployerButtons);
+employerDirectoryLoad.addEventListener('click',async()=>{
+ if(busy)return;
+ const authorized=captureOperationAuthorization();
+ busy=true;employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();updateButtons();
+ try{
+  const vault=await cloudVault();const list=await vault.readEmployerDirectory();
+  const records=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
+  if(!authorized()||employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(list)||!authorized())throw new Error('勤務先一覧の確認中に状態が変更されました。');
+  employers=list;legacyDirectory=legacyEmployers(records,list);bulkRecords=records;bulkAuthorized=authorized;renderEmployerDirectory();
+  employerDirectoryStatus.textContent=`登録済み ${list.length}件・名称未設定 ${legacyDirectory.length}件`;finishOperation('success');
+ }catch{employerDirectoryStatus.textContent='勤務先一覧を確認できませんでした。最新データを確認してください。';finishOperation('error');}
+ finally{busy=false;updateButtons();}
+});
+employerDirectoryForm.addEventListener('submit',async event=>{
+ event.preventDefault();if(busy||!employers||employerDirectorySave.disabled)return;
+ // Enter submission also sets an explicit operation, rather than inheriting a previous click.
+ currentOperation=operations['employer-directory-save'];operationResult=null;operationCancelled=false;
+ const expected=employers,selected=employerDirectoryTarget.value,existing=expected.find(x=>x.id===selected),legacy=legacyDirectory.find(x=>x.id===selected);
+ if(selected&&!existing&&!legacy)return;
+ const role=employerDirectoryRole.value;
+ if((role!=='main'&&role!=='side')||(existing&&existing.role!==role)||(legacy&&!legacy.roles.includes(role)))return;
+ let next:EmployerEntry[];
+ try{next=upsertEmployer(expected,{id:selected||createEmployerId(),name:employerDirectoryName.value.trim(),role,current:employerDirectoryCurrent.checked});}
+ catch{employerDirectoryStatus.textContent='表示名または勤務先の件数を確認してください。';appStatus.warning(employerDirectoryStatus.textContent);return;}
+ const authorized=captureOperationAuthorization();
+ busy=true;updateButtons();
+ try{
+  const vault=await cloudVault();
+  if(!authorized())throw new Error('認証状態が変わりました。');
+  if(legacy){const records=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});if(!legacyEmployers(records,expected).some(x=>x.id===legacy.id&&x.roles.includes(role)))throw new Error('既存明細が更新されました。');}
+  if(!authorized())throw new Error('認証状態が変わりました。');
+  const saved=await vault.writeEmployerDirectory(expected,next);
+  if(!authorized())throw new Error('認証状態が変わりました。');
+  employers=saved;legacyDirectory=legacyDirectory.filter(x=>!saved.some(y=>y.id===x.id));renderEmployerDirectory();
+  employerDirectoryStatus.textContent='勤務先を保存しました。';finishOperation('success');
+ }catch{employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();employerDirectoryStatus.textContent='勤務先の保存結果を確認できませんでした。最新データを確認してください。';finishOperation('error');}
+ finally{busy=false;updateButtons();}
+});
+
+bulkTarget.addEventListener('change',()=>{bulkSelected.clear();bulkStatus.textContent='';renderBulkList();});
+bulkAll.addEventListener('click',()=>{if(busy||!bulkAuthorized?.())return;for(const r of bulkCandidates())bulkSelected.add(r.id);renderBulkList();});
+bulkNone.addEventListener('click',()=>{if(busy)return;bulkSelected.clear();renderBulkList();});
+bulkSave.addEventListener('click',async()=>{
+ if(busy||bulkSave.disabled||!employers||!bulkAuthorized?.())return;
+ const authorized=bulkAuthorized,entry=employers.find(e=>e.id===bulkTarget.value);
+ if(!entry)return;
+ const directory=employerDirectorySignature(employers),targets=bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)}));
+ const selectedSignature=JSON.stringify(targets),guard=()=>authorized()&&busy&&bulkTarget.value===entry.id&&!!employers&&employerDirectorySignature(employers)===directory&&JSON.stringify(bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)})))===selectedSignature;
+ busy=true;updateButtons();let writing=false;
+ try{
+  const plan=await inspectEmployerAssignment(targets,entry.id,directory,guard);
+  if(!await approveSettings({title:'明細の勤務先を一括設定',subject:`未設定の明細 ${plan.count}件 → ${employerDisplayName(employers,entry.id)}`,details:['選択した明細の勤務先だけを変更します。金額・PDF原本・確認履歴は維持します。','同じ期間の重複や他端末での変更を検査してから保存します。'],acceptLabel:'勤務先を設定'},guard,authorized)){cancelOperation();return;}
+  writing=true;await assignEmployers(targets,entry.id,directory,plan.signature,guard);
+  // A new read is required before another assignment; never reuse old approvals.
+  employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();
+  employerDirectoryStatus.textContent=`${plan.count}件の勤務先を設定しました。最新データを確認してください。`;finishOperation('success');
+ }catch(error){
+  if(writing){employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();employerDirectoryStatus.textContent='勤務先設定の結果を確認してください。最新データを確認し、必要に応じてFinance連携を再生成してください。';}
+  else bulkStatus.textContent='対象明細・勤務先・同じ期間の重複を確認してください。最新データの再確認が必要な場合があります。';
+  finishOperation(error instanceof PayrollPartialSuccessError?'partial':'error');
+ }finally{busy=false;updateButtons();}
+});
+
+// Activate navigation only after the original settings handlers are registered.
+settingsNavigation=mountSettingsNavigation($<HTMLElement>('settings-menu').closest<HTMLElement>('.settings-page')!,()=>!busy&&!document.querySelector('dialog[open]'));
+settingsNavigation.setBusy(busy);

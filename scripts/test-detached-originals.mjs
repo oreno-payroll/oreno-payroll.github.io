@@ -19,10 +19,11 @@ async function fixture(){
   async listFolder(p){if(p.at(-1)==='statements')return [{name:'2026.enc',folder:false,etag:state.yearEtag},...(state.otherYear?[{name:'2025.enc',folder:false,etag:'orphan-year'}]:[])];throw new Error('unexpected listFolder');},
   async read(p,name){assert.deepEqual(p,path);assert.equal(name,`${orphan}.enc`);state.reads++;return {id:'cloud-orphan',etag:'o1',size:cipher.length,text:cipher};},
   async metadata(_,name){assert.equal(name,'2026.enc');return {id:'year-file',etag:state.yearEtag};},
-  async trashPayrollOriginal(p,item){assert.deepEqual(p,path);assert.equal(item.name,`${orphan}.enc`);state.deletes.push(item);},
+  async trashPayrollOriginal(p,item,beforeDelete){await beforeDelete();assert.deepEqual(p,path);assert.equal(item.name,`${orphan}.enc`);state.deletes.push(item);},
  };
  const vault=new PayrollVault(graph);
  vault.key=key;vault.index=index;vault.salt='salt';
+ vault.refresh=async()=>[];vault.inspectIncomeConsistency=async()=>[];
  vault.readIndex=async()=>({index,file:{id:'root',etag:state.indexEtag}});
  vault.readYear=async()=>({doc:{format:'payroll-annual-v1',records:[{
   id:7,form:{targetMonth:'2026-11',paymentDate:'2026-11-25'},

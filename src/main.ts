@@ -1,21 +1,27 @@
-import { createAppStatus } from './ui/appStatus';
+import {confirmOperation,showOperationMessage} from './ui/operationDialog';
+import {takeNavigationNotice,navigationFeedback} from './ui/navigationNotice';
+import { createAppStatus, type AppStatusKind } from './ui/appStatus';
 import {dashboardFreshnessLabel} from './ui/operationFeedback';
 import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
-import { capturePdfHandoffAuthorization } from './cloud/auth';
+import { capturePdfHandoffAuthorization,captureOperationAuthorization } from './cloud/auth';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
-import { deleteRecord, getOriginalForVerifiedEdit, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
+import { deleteRecords, getOriginalForVerifiedEdit, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import {PayrollPartialSuccessError} from './storage/operationError';
-import {incompleteDeleteIncomeNotice} from './ui/deleteOutcome';
-import {mutationEpoch} from './cloud/snapshot';
+import {incompleteDeleteIncomeNotice,incompleteDeleteOriginalNotice} from './ui/deleteOutcome';
+import {PendingDeletion} from './ui/pendingDeletion';
+import {mutationEpoch,authEpoch,NAVIGATION_MUTATION_KEY} from './cloud/snapshot';
 import { amountOrMissing } from './storage/payrollValidation';
 import { summary, withEstimates, type Summary, type SummaryKey } from './forecast/summary';
 import { setMissingIndicator } from './ui/missingIndicator';
 import { createSidePdfZip } from './export/sidePdfs';
 import { calculateAnnualForecast, type MonthEstimate, type AnnualForecast } from './forecast/annualForecast';
+import { selectDashboardPeriod, selectDashboardIncome, selectDashboardStatements, type StatementKindFilter } from './forecast/dashboardSelection';
 import { fiscalYearOfTargetMonth } from './forecast/payrollCalendar';
 import { calendarYearOfPaymentDate, calculateCalendarForecast, type CalendarForecast } from './forecast/calendarForecast';
 import { monthlySalaryRegistration } from './forecast/monthlyRegistration';
+import {employerDisplayName,legacyEmployers,type LegacyEmployer} from './ui/employerSelection';
+import type {EmployerEntry} from './storage/employerDirectory';
 
 type Job = 'main' | 'side';
 type PeriodMode = 'fiscal' | 'calendar';
@@ -34,7 +40,7 @@ const forecastLabel = required<HTMLElement>('#forecast-toggle-label');
 const periodLabel = required<HTMLElement>('#fiscal-period');
 const bonusToggle = required<HTMLInputElement>('#include-bonus');
 const forecastToggle = required<HTMLInputElement>('#include-forecast');
-const forecastPanel = required<HTMLElement>('#forecast-panel');
+const forecastPanel = required<HTMLDetailsElement>('#forecast-panel');
 const forecastStatus = required<HTMLElement>('#forecast-status');
 const forecastDetails = required<HTMLElement>('#forecast-details');
 const forecastHeading = required<HTMLElement>('#forecast-heading');
@@ -70,28 +76,94 @@ function editPeriodQuery(): string {
   return `mode=${encodeURIComponent(periodMode)}&year=${encodeURIComponent(yearSelect.value)}`;
 }
 let saved: SavedPayrollSummary[] = [];
+let employerDirectory:EmployerEntry[]=[];
+let legacyDirectory:LegacyEmployer[]=[];
+function employerName(record:SavedPayrollSummary):string{return employerDisplayName(employerDirectory,record.employerId,record.form.job,legacyDirectory);}
 const visibleCounts: Record<Job, number> = { main: 50, side: 50 };
 const deletingRecordIds = new Set<number>();
+const pendingDeletion=new PendingDeletion();
+const deletionPanel=required<HTMLElement>('#pending-deletion');
+const deletionList=required<HTMLUListElement>('#pending-deletion-list');
+const deletionStatus=required<HTMLElement>('#pending-deletion-status');
+const deletionSave=required<HTMLButtonElement>('#pending-deletion-save');
+const deletionUndo=required<HTMLButtonElement>('#pending-deletion-undo');
+let deletionAuthorization:(()=>boolean)|undefined;
+let confirmingDeletion=false;
+const deletionBusy=()=>confirmingDeletion||deletingRecordIds.size>0;
+function deletionMatches():boolean{return pendingDeletion.matches(saved.map(r=>({id:r.id,signature:recordSignature(r)})));}
+function deletionLabel(record:SavedPayrollSummary):string{return `${record.form.targetMonth} / ${record.form.job==='main'?'本業':'副業'} / ${employerName(record)} / ${record.fileName}`;}
+function renderPendingDeletion():void{
+ deletionPanel.hidden=pendingDeletion.size===0;
+ deletionList.replaceChildren();
+ const blocked=deletionBusy()||exportingSideZip||dashboardLoading||dashboardStale;
+ const current=!pendingDeletion.size||deletionMatches();
+ deletionStatus.textContent=`削除待ち ${pendingDeletion.size}件（すべての期間・絞り込みを含む）`+(current?'':'。対象が更新されました。取り消して選び直してください。');
+ for(const target of pendingDeletion.snapshot()){
+  const li=document.createElement('li'),name=document.createElement('span'),undo=document.createElement('button');
+  name.textContent=saved.find(r=>r.id===target.id)?deletionLabel(saved.find(r=>r.id===target.id)!):target.label;undo.type='button';undo.className='btn btn--secondary';undo.textContent='元に戻す';undo.disabled=deletionBusy();
+  undo.addEventListener('click',()=>{if(!deletionBusy()){pendingDeletion.remove(target.id);render();}});li.append(name,undo);deletionList.append(li);
+ }
+ deletionUndo.disabled=deletionBusy();
+ deletionSave.disabled=blocked||!current||!pendingDeletion.size||!deletionAuthorization?.();
+}
+deletionUndo.addEventListener('click',()=>{if(!deletionBusy()){pendingDeletion.clear();deletionAuthorization=undefined;render();}});
+window.addEventListener('beforeunload',event=>{if(pendingDeletion.size||deletingRecordIds.size){event.preventDefault();event.returnValue='';}});
+window.addEventListener('pagehide',()=>{pendingDeletion.clear();deletionAuthorization=undefined;});
+deletionSave.addEventListener('click',async()=>{
+ if(deletionBusy()||exportingSideZip||dashboardLoading||dashboardStale||!pendingDeletion.size||!deletionMatches()||!deletionAuthorization?.())return;
+ const targets=pendingDeletion.snapshot(),authorized=deletionAuthorization;
+ const guard=()=>authorized()&&!exportingSideZip&&!dashboardLoading&&!dashboardStale&&deletionMatches()&&JSON.stringify(targets)===JSON.stringify(pendingDeletion.snapshot());
+ confirmingDeletion=true;renderPendingDeletion();
+ const approved=await confirmOperation({title:'削除待ちの明細を確定',subject:`給与明細 ${targets.length}件`,tone:'danger',acceptLabel:'明細を削除',details:[
+  ...targets.map(t=>{const record=saved.find(r=>r.id===t.id);return record?deletionLabel(record):t.label;}),
+  '解析・入力情報とFinance連携用の収入情報から選択した明細を除外します。',
+  '明細とFinance連携の確認後、未参照になった暗号化PDF原本をごみ箱へ移動します。別の明細が参照している原本は保持します。他の端末・タブで保存中でないことを確認してください。',
+  '復元には削除前のバックアップなどが必要です。',
+ ]},guard);
+ confirmingDeletion=false;
+ if(!approved||!guard()){renderPendingDeletion();return;}
+ for(const target of targets)deletingRecordIds.add(target.id);
+ render();
+ appStatus.loading(`明細 ${targets.length}件を削除しています…`);
+ let completion:{kind:AppStatusKind;message:string};
+ try{
+  await deleteRecords(targets);
+  completion={kind:'success',message:`明細 ${targets.length}件を削除しました。Finance連携と未参照になったPDF原本の整理も確認済みです。`};
+ }catch(error){
+  if(error instanceof PayrollPartialSuccessError&&error.stage==='income-sync'){
+   completion={kind:'partial',message:incompleteDeleteIncomeNotice()};
+   appStatus.partial(completion.message);
+   await showOperationMessage({title:'明細削除・一部完了',details:[incompleteDeleteIncomeNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
+  }else if(error instanceof PayrollPartialSuccessError&&error.stage==='original-trash'){
+   completion={kind:'partial',message:incompleteDeleteOriginalNotice()};
+   appStatus.partial(completion.message);
+   await showOperationMessage({title:'PDF原本の整理・一部完了',details:[completion.message],tone:'warning',acceptLabel:'閉じる'},authorized);
+  }else{
+   completion={kind:'error',message:'削除結果を確認できません。年度ごとに一部確定した可能性があります。最新データを確認し、設定からFinance連携を再生成してください。'};
+   appStatus.error(completion.message);
+   await showOperationMessage({title:'削除結果を確認してください',details:[completion.message],tone:'danger',acceptLabel:'閉じる'},authorized);
+  }
+ }finally{
+  pendingDeletion.clear();deletionAuthorization=undefined;deletingRecordIds.clear();
+ }
+ if(authorized())await refreshDashboard(true,completion);
+});
 const sideZipButton = required<HTMLButtonElement>('#download-side-zip');
-const sideZipStatus = required<HTMLElement>('#side-zip-status');
 let exportingSideZip = false;
+let statementKind: StatementKindFilter = 'all';
 function selectedPeriodRecords(): SavedPayrollSummary[] {
-  const year = Number(yearSelect.value);
-  return saved.filter(item =>
-    (periodMode === 'calendar' ? calendarYearOfPaymentDate(item.form.paymentDate) : fiscalYearOfTargetMonth(item.form.targetMonth)) === year &&
-    (bonusToggle.checked || item.form.kind !== 'bonus'));
+  return selectDashboardPeriod(saved, Number(yearSelect.value), periodMode);
 }
 sideZipButton.addEventListener('click', async () => {
-  if (exportingSideZip || dashboardLoading || dashboardStale) return;
+  if (exportingSideZip || dashboardLoading || dashboardStale || deletionBusy()) return;
   const exportYear = yearSelect.value;
   const exportMode = periodMode;
   const side = selectedPeriodRecords().filter(item => item.form.job === 'side');
   if (!side.length) return;
   exportingSideZip = true;
+  renderPendingDeletion();
   appStatus.loading('副業PDFをまとめています…');
   sideZipButton.disabled = true;
-  sideZipStatus.textContent = `${side.length}件のPDFをZIPにまとめています…`;
-  sideZipStatus.removeAttribute('role');
   try {
     // 表示には索引しか持たないため、ZIP作成の際にだけ対象PDF原本を取得する。
     const before=await loadRecordSummaries();
@@ -110,7 +182,6 @@ sideZipButton.addEventListener('click', async () => {
           const pdf=await getOriginalForCurrentView(item.id,recordSignature(item));
           originals[index]={...item,pdf};
           completed++;
-          sideZipStatus.textContent=`副業PDFを取得中… ${completed} / ${side.length}件（${exportMode === 'calendar' ? '暦年' : '年度'} ${exportYear}）`;
           appStatus.loading(`PDF原本を取得中 ${completed}/${side.length}件`);
         }catch(error){if(firstFailure===null)firstFailure=error;}
       }
@@ -129,14 +200,12 @@ sideZipButton.addEventListener('click', async () => {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    sideZipStatus.textContent = `副業PDF ${side.length}件（${exportYear}）のZIPを作成しました。ダウンロード先を確認してください。`;
     appStatus.success(`副業PDF ${side.length}件のZIPを作成しました`);
   } catch (error) {
-    sideZipStatus.textContent = `副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`;
-    appStatus.error(sideZipStatus.textContent);
-    sideZipStatus.setAttribute('role', 'alert');
+    appStatus.error(`副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`);
   } finally {
     exportingSideZip = false;
+    renderPendingDeletion();
     sideZipButton.disabled = dashboardLoading || dashboardStale || selectedPeriodRecords().every(item => item.form.job !== 'side');
   }
 });
@@ -181,18 +250,23 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   explanation.className = 'forecast-note';
   explanation.textContent = periodMode === 'fiscal'
     ? '通常給与は未登録対象月を直近最大3件の中央値で推計。立替経費は翌月以降に繰り越しません。本業の未登録賞与（8月・翌2月）は最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含みません。副業賞与の見込みは加算しません。'
-    : '通常給与は、勤務先ごとに最後の実績支給月の翌月と現在月のうち遅い方から12月までを直近最大3件の中央値で推計します。現在月より前の未登録給与月は補完しません。立替経費・年末調整の還付や追徴を繰り越しません。本業の未登録賞与（2月・8月）は過去月も含め、最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含めず、副業賞与の見込みは加算しません。';
-  forecastDetails.append(explanation);
+    : '通常給与は、勤務先ごとに最後の実績支給月の翌月と現在月のうち遅い方から12月までを直近最大3件の中央値で推計します。現在月より前の未登録給与月は補完しません。立替経費・年末調整の還付や追徴を繰り越しません。本業の未登録賞与（2月・8月）は最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含めず、副業賞与の見込みは加算しません。';
+  const methodology = document.createElement('details');
+  methodology.className = 'forecast-methodology';
+  const methodologyTitle = document.createElement('summary');
+  methodologyTitle.textContent = '計算方法・注意事項';
+  methodology.append(methodologyTitle, explanation);
+  const scopeNote=document.createElement('p');scopeNote.className='forecast-note';scopeNote.textContent='現在の勤務先が設定されている場合はその勤務先の給与を参照し、過去の賞与は補完しません。勤務先未設定の実績月は重複見込みを避けます。勤務先情報が未登録の勤務区分では、直近の勤務先の給与実績を参照します。すべて過去の勤務先の場合は見込みを算出しません。実績集計は全勤務先を含みます。';methodology.append(scopeNote);
   if (estimatedCount) {
     const deltaLine = document.createElement('p');
     deltaLine.className = 'forecast-delta';
     const fields: Array<[SummaryKey, string]> = [
-      ['gross', '総支給'], ['net', '手取り'], ['incomeTax', '所得税'],
+      ['gross', '総支給額'], ['net', '手取り'], ['taxable', '課税支給額'], ['nonTaxable', '非課税支給額'], ['incomeTax', '所得税'],
       ['residentTax', '住民税'], ['socialInsurance', '社会保険料'], ['transportation', '交通費'], ['reimbursedExpenses', '立替経費'],
     ];
     const additions = fields.map(([key, label]) => {
       const known = plan.estimates.map(estimate => estimate.values[key]).filter((value): value is number => value !== null);
-      return `${label} +${known.length ? yen(known.reduce((sum, value) => sum + value, 0)) : '算出不可'}${known.length < estimatedCount ? ' ※' : ''}`;
+      return `${label} +${known.length ? yen(known.reduce((sum, value) => sum + value, 0)) : '算出不可'}${known.length < estimatedCount || plan.estimates.some(estimate=>estimate.incomplete[key]) ? ' ※' : ''}`;
     });
     deltaLine.textContent = `見込み加算分：${additions.join(' ／ ')}`;
     forecastDetails.append(deltaLine);
@@ -202,7 +276,7 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
     const line = document.createElement('div');
     line.className = 'forecast-job-row';
     const title = document.createElement('strong');
-    title.textContent = job === 'main' ? '本業' : '副業';
+    title.textContent = `${job === 'main' ? '本業' : '副業'}${item.employerName?`（${item.employerName}）`:''}`;
     const detail = document.createElement('span');
     if (item.reason) {
       detail.textContent = item.reason;
@@ -211,7 +285,7 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
       const total = item.estimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
       const sample = item.sampleMonths.map(month => month.replace('-', '/')).join('・');
       const months = item.pendingMonths.map(month => month.replace('-', '/')).join('、');
-      detail.textContent = `${item.estimates.length}か月分の推計（${months}）｜月額総支給 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
+      detail.textContent = `${item.estimates.length}か月分の推計（${months}）｜月額総支給額 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
     }
     line.append(title, detail);
     forecastDetails.append(line);
@@ -238,8 +312,9 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   }
   const caution = document.createElement('p');
   caution.className = 'forecast-caution';
-  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。登録済みの副業賞与は「賞与を含む」ON時に実績として集計します。見込み加算分の※は一部算出できない項目を示します。保存データは変更しません。';
-  forecastDetails.append(caution);
+  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。課税・非課税の見込みは取得済みの内訳から推計します。項目ごとの中央値を使用するため、総支給額と一致しない場合があります。根拠がない内訳は算出しません。見込み加算分の※は一部算出できない項目を示します。';
+  methodology.append(caution);
+  forecastDetails.append(methodology);
   const suspicious = plan.estimates.filter(estimate => {
     const gross = estimate.values.gross;
     const net = estimate.values.net;
@@ -250,18 +325,22 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   if (suspicious.length) {
     const warning = document.createElement('p');
     warning.className = 'forecast-caution forecast-caution--warning';
-    warning.textContent = `見込み${suspicious.length}件で手取りが総支給を上回るなどの異常値が検出されました。推計の元となった実績明細を確認してください。`;
+    warning.textContent = `見込み${suspicious.length}件で手取りが総支給額を上回るなどの異常値が検出されました。推計の元となった実績明細を確認してください。`;
     forecastDetails.append(warning);
   }
 }
 function updateSummary(prefix: 'total' | Job, result: Summary, count: number, sideSalaryCount = count): void {
-  for (const key of ['gross', 'net', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses'] as const) {
+  for (const key of ['gross', 'net', 'taxable', 'nonTaxable', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses'] as const) {
     const id = `${prefix}-${key.replace(/[A-Z]/g, ch => `-${ch.toLowerCase()}`)}`;
     const element = document.getElementById(id);
     if (!element) continue;
     // 金額には金額だけを表示し、欠損情報は項目名の直下へ分離する。
     element.textContent = !count || !result.observed[key] ? '--' : yen(result.sums[key]);
     setMissingIndicator(element, count && result.partial[key] ? result.missingCounts[key] : 0, count);
+  }
+  if (prefix === 'total') {
+    const complete = count > 0 && result.observed.gross && result.observed.net && !result.partial.gross && !result.partial.net;
+    required<HTMLElement>('#total-deductions').textContent = complete ? yen(result.sums.gross - result.sums.net) : '--';
   }
   if (prefix === 'side') {
     const days = document.getElementById('side-days');
@@ -272,7 +351,7 @@ function updateSummary(prefix: 'total' | Job, result: Summary, count: number, si
     }
   }
 }
-function renderList(job: Job, records: SavedPayrollSummary[]): void {
+function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:string): void {
   const list = required<HTMLUListElement>(`#${job}-records`);
   required<HTMLElement>(`#${job}-count`).textContent = `${records.length}件`;
   list.replaceChildren();
@@ -280,10 +359,8 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     const li = document.createElement('li');
     li.className = 'empty-state';
     const strong = document.createElement('strong');
-    strong.textContent = '登録済みの明細はありません';
-    const hint = document.createElement('span');
-    hint.textContent = '明細を保存すると、ここに表示されます。';
-    li.append(strong, hint);
+    strong.textContent = emptyMessage??(saved.some(item=>item.form.job===job)?(selectedPeriodRecords().some(item=>item.form.job===job)?'条件に一致する明細はありません':'この期間の明細はありません'):'明細が登録されていません');
+    li.append(strong);
     list.append(li);
     return;
   }
@@ -318,7 +395,7 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     const amounts = document.createElement('span');
     amounts.className = 'statement-item__amounts';
     for (const [label, value] of [
-      ['総支給', record.form.gross],
+      ['総支給額', record.form.gross],
       ['手取り', record.form.net],
     ] as const) {
       const amount = document.createElement('span');
@@ -326,7 +403,8 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
       amount.textContent = `${label} ${figure === null ? '--' : yen(figure)}`;
       amounts.append(amount);
     }
-    detail.append(link, amounts);
+    const employer=document.createElement('span');employer.className='statement-item__employer';employer.textContent=employerName(record);
+    detail.append(link, employer, amounts);
     left.append(detail);
     const actions = document.createElement('div');
     actions.className = 'statement-item__actions';
@@ -370,36 +448,22 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
     remove.type = 'button';
     remove.className = 'btn btn--icon btn--delete';
     remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>';
-    remove.setAttribute('aria-label', `${record.fileName} を削除`);
-    remove.title = '保存済みの明細を削除（暗号化PDF原本はOneDriveに保持）';
+    const pending=pendingDeletion.has(record.id);
+    remove.setAttribute('aria-label', `${record.fileName} ${pending?'の削除を取り消す':'を削除待ちにする'}`);
+    remove.title = '削除待ちにする（確定までは暗号化PDF原本はOneDriveに保持）';
     remove.dataset.recordId=String(record.id);
-    remove.disabled = deletingRecordIds.has(record.id) || dashboardLoading || dashboardStale;
-    remove.addEventListener('click', async () => {
-      if (dashboardLoading||dashboardStale){appStatus.error('最新の明細を確認できていません。再確認してから削除してください。');return;}
-      if (deletingRecordIds.has(record.id)) return;
-      const label = record.form.job === 'main' ? '本業' : '副業';
-      const kind = record.form.kind === 'bonus' ? '賞与' : '給与';
-      const message = `保存済みの明細を1件削除します。\n\n${label} / ${record.form.targetMonth}分 / ${kind}\nファイル: ${record.fileName}\n\n解析・入力情報とFinance連携用の収入情報からこの明細を除外します。\n暗号化PDF原本はOneDriveに残りますが、アプリの明細一覧からは参照できなくなります。\n復元には削除前のバックアップなどが必要です。\n\n本当に削除しますか？`;
-      if (!window.confirm(message)) return;
-      deletingRecordIds.add(record.id);
-      remove.disabled = true;
-      appStatus.loading('明細を削除しています…');
-      try {
-        await deleteRecord(record.id, recordSignature(record));
-        appStatus.success('明細を削除しました');
-      } catch (error) {
-        if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
-          appStatus.clear();
-          window.alert(incompleteDeleteIncomeNotice());
-        }else{
-          appStatus.error(error instanceof Error?error.message:String(error));
-          window.alert(`削除処理を完了できませんでした。\n${error instanceof Error ? error.message : String(error)}`);
-        }
-      } finally {
-        deletingRecordIds.delete(record.id);
-        remove.disabled = false;
-        await refreshDashboard();
-      }
+    remove.disabled = deletionBusy() || dashboardLoading || dashboardStale;
+    if(pending){
+      item.classList.add('statement-item--pending');
+      remove.className='btn btn--secondary';remove.textContent='元に戻す';
+      const mark=document.createElement('span');mark.className='pending-deletion-mark';mark.textContent='削除待ち';detail.append(mark);
+    }
+    remove.addEventListener('click', () => {
+      if (deletionBusy()||dashboardLoading||dashboardStale||!saved.some(r=>r.id===record.id&&recordSignature(r)===recordSignature(record)))return;
+      if(!pendingDeletion.size)deletionAuthorization=captureOperationAuthorization();
+      if(!deletionAuthorization?.())return;
+      pendingDeletion.toggle({id:record.id,signature:recordSignature(record),label:deletionLabel(record)});
+      render();
     });
     actions.append(edit, download, remove);
     item.append(left, actions);
@@ -452,16 +516,18 @@ function render(): void {
   periodLabel.textContent = isCalendar
     ? `${year}年1月〜12月 ・ 支給日基準`
     : `${year}年4月〜${year + 1}年3月 ・ 給与対象年月基準`;
-  const yearRecords = selectedPeriodRecords();
+  const periodRecords = selectedPeriodRecords();
+  const yearRecords = selectDashboardIncome(periodRecords, bonusToggle.checked);
+  const listRecords = selectDashboardStatements(periodRecords, statementKind);
   renderMonthlyRegistration(year, isCalendar);
   const main = yearRecords.filter(item => item.form.job === 'main');
   const side = yearRecords.filter(item => item.form.job === 'side');
-  sideZipButton.disabled = exportingSideZip || side.length === 0 || dashboardLoading || dashboardStale;
-  sideZipButton.title = side.length ? `表示中の副業明細${side.length}件の原本PDFをZIPで保存` : '表示中の副業PDFはありません';
-  if (!exportingSideZip) sideZipStatus.textContent = '';
+  const exportCount = periodRecords.filter(item => item.form.job === 'side').length;
+  sideZipButton.disabled = exportingSideZip || exportCount === 0 || dashboardLoading || dashboardStale;
+  sideZipButton.title = exportCount ? `選択期間の副業PDF全${exportCount}件をZIP保存（賞与を含む）` : '選択期間の副業PDFはありません';
   const forecast = forecastToggle.checked
-    ? isCalendar ? calculateCalendarForecast(saved, year, new Date(), bonusToggle.checked)
-      : calculateAnnualForecast(saved, year, new Date(), bonusToggle.checked)
+    ? isCalendar ? calculateCalendarForecast(saved, year, new Date(), bonusToggle.checked,employerDirectory)
+      : calculateAnnualForecast(saved, year, new Date(), bonusToggle.checked,employerDirectory)
     : null;
   const projected = forecast?.estimates ?? [];
   periodLabel.textContent += forecastToggle.checked ? ' / 見込みは画面表示のみ' : '';
@@ -480,11 +546,12 @@ function render(): void {
   updateSummary('main', withEstimates(summary(main), mainProjected), main.length + mainProjected.length);
   updateSummary('side', withEstimates(summary(side), sideProjected), side.length + sideProjected.length,
     side.filter(item => item.form.kind === 'salary').length + sideProjected.filter(item => item.kind === 'salary').length);
-  renderList('main', main);
-  renderList('side', side);
+  renderList('main', listRecords.filter(item => item.form.job === 'main'));
+  renderList('side', listRecords.filter(item => item.form.job === 'side'));
+  renderPendingDeletion();
 }
 function changeMode(mode: PeriodMode): void {
-  if (periodMode === mode) return;
+  if (!dashboardHasView || periodMode === mode) return;
   periodMode = mode;
   visibleCounts.main = 50; visibleCounts.side = 50;
   updateYearOptions();
@@ -493,19 +560,31 @@ function changeMode(mode: PeriodMode): void {
 }
 fiscalModeButton.addEventListener('click', () => changeMode('fiscal'));
 calendarModeButton.addEventListener('click', () => changeMode('calendar'));
-yearSelect.addEventListener('change', () => { visibleCounts.main = 50; visibleCounts.side = 50; persistPeriodSelection(); render(); });
-bonusToggle.addEventListener('change', () => { visibleCounts.main = 50; visibleCounts.side = 50; render(); });
-forecastToggle.addEventListener('change', render);
+yearSelect.addEventListener('change', () => { if(!dashboardHasView)return; visibleCounts.main = 50; visibleCounts.side = 50; persistPeriodSelection(); render(); });
+bonusToggle.addEventListener('change', () => {if(dashboardHasView)render();});
+for (const input of Array.from(document.querySelectorAll<HTMLInputElement>('input[name="statement-kind"]'))) {
+  input.addEventListener('change', () => {
+    if (!input.checked || !['all','salary','bonus'].includes(input.value)) return;
+    statementKind = input.value as StatementKindFilter;
+    visibleCounts.main = 50; visibleCounts.side = 50;
+    if (dashboardHasView) render();
+  });
+}
+forecastToggle.addEventListener('change', () => { forecastPanel.open=false; if(dashboardHasView)render(); });
 let dashboardValidUntil=0;
 let dashboardMutationEpoch='';
 let dashboardLoading=false;
 let dashboardHasView=false;
 let dashboardStale=false;
-async function refreshDashboard(forceFresh=false): Promise<void> {
-  if(dashboardLoading)return;
+function updatePeriodControls():void{
+ const disabled=!dashboardHasView;
+ for(const control of [yearSelect,fiscalModeButton,calendarModeButton,bonusToggle,forecastToggle,...Array.from(document.querySelectorAll<HTMLInputElement>('input[name="statement-kind"]'))])control.disabled=disabled;
+}
+async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind;message:string}): Promise<void> {
+  if(dashboardLoading||deletionBusy())return;
   const hadView=dashboardHasView;
   dashboardLoading=true;
-  if(!hadView)registrationPanel.hidden = true;
+  if(!hadView){registrationPanel.hidden = true;renderList('main',[],'読み込み中…');renderList('side',[],'読み込み中…');}
   appStatus.loading(hadView?'OneDriveで最新データを再確認しています…':'明細データを読み込んでいます…');
   const indicator=document.getElementById('payroll-data-freshness');
   const freshness=hadView?'rechecking':'checking';
@@ -513,19 +592,21 @@ async function refreshDashboard(forceFresh=false): Promise<void> {
   const refreshButton=document.querySelector<HTMLButtonElement>('#payroll-refresh-data');
   if(refreshButton)refreshButton.disabled=true;
   // Keep last complete data visible while rechecking. Block cloud mutations, not local filters.
-  document.querySelectorAll<HTMLButtonElement>('.statement-item__actions .btn--delete').forEach(button=>{button.disabled=true;});
+  document.querySelectorAll<HTMLButtonElement>('.statement-item__actions [data-record-id]').forEach(button=>{button.disabled=true;});
+  renderPendingDeletion();
   const preferred=initialYear??currentPeriodYear();
   periodLabel.setAttribute('aria-busy','true');
-  yearSelect.disabled=!hadView;
-  bonusToggle.disabled=!hadView;
-  forecastToggle.disabled=!hadView;
+  updatePeriodControls();
   sideZipButton.disabled=true;
   try {
-    saved = await loadRecordSummaries({
+    let nextDirectory:EmployerEntry[]=[];
+    const nextSaved = await loadRecordSummaries({
+      onEmployerDirectory:directory=>{nextDirectory=directory;},
       forceFresh,
       priorityYears:[String(preferred),String(preferred-1)],
       onProgress:message=>{if(!hadView)periodLabel.textContent=message;appStatus.loading(message);},
     });
+    saved=nextSaved;employerDirectory=nextDirectory;legacyDirectory=legacyEmployers(saved,employerDirectory);
     yearSelect.disabled = false;
     bonusToggle.disabled = false;
     forecastToggle.disabled = false;
@@ -534,15 +615,19 @@ async function refreshDashboard(forceFresh=false): Promise<void> {
     dashboardStale=false;
     updateYearOptions();
     render();
-    dashboardHasView=true;
+    dashboardHasView=true;updatePeriodControls();
     dashboardMutationEpoch=mutationEpoch();
     const cache=await summaryCacheInfo();dashboardValidUntil=cache.deadline;
+    if(dashboardMutationEpoch!==mutationEpoch())throw new Error('明細の読み込み中にデータが更新されました。最新データを確認してください。');
     const freshState=cache.cached?'snapshot':'verified';
     if(indicator){indicator.textContent=dashboardFreshnessLabel(freshState);indicator.dataset.freshness=freshState;}
-    appStatus.success(cache.cached?'暗号化スナップショットを表示しています（変更操作時はOneDriveを再検証します）':'明細データを読み込みました');
+    const notice=takeNavigationNotice(authEpoch());
+    const outcome=completion??(notice?navigationFeedback(notice):null);
+    if(outcome)appStatus.show(outcome.kind,outcome.message);
+    else appStatus.success(cache.cached?'暗号化スナップショットを表示しています（変更操作時はOneDriveを再検証します）':'明細データを読み込みました');
   } catch (error) {
-    console.error('保存済み明細を読み込めませんでした。', error);
-    appStatus.error(`明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);
+    console.error('保存済み明細を読み込めませんでした。');
+    appStatus.error(`${completion?completion.message+'\n':''}明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);
     dashboardStale=dashboardHasView;
     const failedState=dashboardHasView?'stale':'unavailable';
     if(indicator){indicator.textContent=dashboardFreshnessLabel(failedState);indicator.dataset.freshness=failedState;}
@@ -555,35 +640,51 @@ async function refreshDashboard(forceFresh=false): Promise<void> {
       periodLabel.textContent = `保存済み明細の読み込みに失敗しました。OneDriveへの接続と暗号化保管庫をご確認ください。${error instanceof Error ? ` (${error.message})` : ''}`;
       periodLabel.setAttribute('role', 'alert');
       periodLabel.style.color = 'var(--color-danger)';
+      renderList('main',[],'明細を取得できませんでした');renderList('side',[],'明細を取得できませんでした');
       yearSelect.disabled = true;bonusToggle.disabled = true;forecastToggle.disabled = true;
       sideZipButton.disabled = true;
     }
     // The last verified screen is preserved for read-only use; saving is blocked.
   } finally {
     periodLabel.removeAttribute('aria-busy');
-    dashboardLoading=false;
+    dashboardLoading=false;updatePeriodControls();
     if(refreshButton)refreshButton.disabled=false;
-    document.querySelectorAll<HTMLButtonElement>('.statement-item__actions .btn--delete').forEach(button=>{
-      const id=Number(button.dataset.recordId);
-      button.disabled=dashboardStale||deletingRecordIds.has(id);
+    document.querySelectorAll<HTMLButtonElement>('.statement-item__actions [data-record-id]').forEach(button=>{
+      button.disabled=dashboardStale||deletionBusy();
     });
+    renderPendingDeletion();
     if(dashboardHasView&&!dashboardStale)
       sideZipButton.disabled=exportingSideZip||selectedPeriodRecords().every(item=>item.form.job!=='side');
   }
 }
 // Back/forward cache does not imply a changed dataset. Only mutations or TTL expiry force a reload.
 window.addEventListener('pageshow', event => {
- if(event.persisted && (dashboardMutationEpoch!==mutationEpoch()||Date.now()>=dashboardValidUntil))
-  void refreshDashboard(true);
+ if(event.persisted){
+  if(dashboardHasView)render();
+  if(!dashboardHasView||dashboardStale||dashboardMutationEpoch!==mutationEpoch()||Date.now()>=dashboardValidUntil)void refreshDashboard(true);
+ }
 });
-// フッターの操作領域へだけ追加し、説明文と動的ボタンを均等配置しない。
-const footerActions=document.querySelector<HTMLElement>('.site-footer__actions');
-if(footerActions&&!footerActions.querySelector('#payroll-refresh-data')) {
+// Remote changes invalidate the view without forcing a load while another tab is writing.
+window.addEventListener('storage',event=>{
+ if((event.key===NAVIGATION_MUTATION_KEY||event.key===null)&&dashboardHasView&&dashboardMutationEpoch!==mutationEpoch()){
+  dashboardStale=true;
+  const indicator=document.getElementById('payroll-data-freshness');
+  if(indicator){indicator.textContent=dashboardFreshnessLabel('stale');indicator.dataset.freshness='stale';}
+  document.querySelectorAll<HTMLButtonElement>('.statement-item__actions [data-record-id]').forEach(button=>{button.disabled=true;});
+  sideZipButton.disabled=true;renderPendingDeletion();
+ }
+});
+window.addEventListener('focus',()=>{
+ if(dashboardHasView&&dashboardMutationEpoch!==mutationEpoch()&&!dashboardLoading&&!deletionBusy()&&!exportingSideZip)void refreshDashboard(true);
+});
+// Keep refresh next to the page title; the independent lock action stays in the footer.
+const refreshActions=document.querySelector<HTMLElement>('.dashboard-sync');
+if(refreshActions&&!refreshActions.querySelector('#payroll-refresh-data')) {
  const control=document.createElement('span');control.className='payroll-data-sync';
  const state=document.createElement('span');state.id='payroll-data-freshness';state.textContent='確認中…';
  state.setAttribute('role','status');state.setAttribute('aria-live','polite');
- const refresh=document.createElement('button');refresh.id='payroll-refresh-data';refresh.type='button';refresh.className='site-footer__button';refresh.textContent='最新を確認';
+ const refresh=document.createElement('button');refresh.id='payroll-refresh-data';refresh.type='button';refresh.className='site-footer__button';refresh.textContent='最新データを確認';
  refresh.addEventListener('click',()=>{void refreshDashboard(true);});
- control.append(state,refresh);footerActions.append(control);
+ control.append(state,refresh);refreshActions.append(control);
 }
 void refreshDashboard();

@@ -1,6 +1,7 @@
 /** OneDrive保存のUX回帰テスト。実アカウント・ネットワーク不要。 */
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {build} from 'esbuild';
 const source = relative => readFileSync(new URL('../'+relative,import.meta.url),'utf8');
@@ -8,27 +9,36 @@ const keyWorker=source('public/payroll-cloud-session.js');
 const fakeSelf = {};
 let now=0;
 const WorkerDate={now:()=>now};
-vm.runInNewContext(keyWorker,{self:fakeSelf,Date:WorkerDate,Map,RegExp});
+vm.runInNewContext(keyWorker,{self:fakeSelf,Date:WorkerDate,Map,RegExp,crypto:webcrypto});
 const port = ()=>({onmessage:null,start(){},messages:[],postMessage(msg){this.messages.push(msg);}});
 const a=port(),b=port();
 fakeSelf.onconnect({ports:[a]});fakeSelf.onconnect({ports:[b]});
 const key={type:'secret',algorithm:{name:'AES-GCM'},extractable:false};
-a.onmessage({data:{id:1,action:'set',scope:'client:account',key,salt:'salt1'}});
+// Obtain the live worker generation as the browser client does.
+a.onmessage({data:{id:0,action:'generation',scope:'client:account'}});
+const generation=a.messages.at(-1).result;
+assert.match(generation,/^[0-9a-f-]{36}$/i);
+a.onmessage({data:{id:1,action:'set',scope:'client:account',generation,key,salt:'salt1'}});
 assert.equal(a.messages.at(-1).result,true);
-b.onmessage({data:{id:2,action:'get',scope:'client:account'}});
+b.onmessage({data:{id:2,action:'get',scope:'client:account',generation}});
 assert.equal(b.messages.at(-1).result.key,key,'別ページでも同じCryptoKeyインスタンスを利用');
-b.onmessage({data:{id:3,action:'get',scope:'client:another'}});
+b.onmessage({data:{id:3,action:'get',scope:'client:another',generation}});
 assert.equal(b.messages.at(-1).result,null,'Microsoftアカウントごとに鍵を分離');
 now=30*60*1000+1;
-b.onmessage({data:{id:4,action:'get',scope:'client:account'}});
+b.onmessage({data:{id:4,action:'get',scope:'client:account',generation}});
 assert.equal(b.messages.at(-1).result,null,'一定時間経過でセッション鍵は期限切れ');
-a.onmessage({data:{id:5,action:'set',scope:'client:account',key,salt:'salt1'}});
-b.onmessage({data:{id:6,action:'clear',scope:'client:account'}});
-a.onmessage({data:{id:7,action:'get',scope:'client:account'}});
+a.onmessage({data:{id:5,action:'set',scope:'client:account',generation,key,salt:'salt1'}});
+b.onmessage({data:{id:6,action:'clear',scope:'client:account',generation}});
+a.onmessage({data:{id:7,action:'get',scope:'client:account',generation}});
 assert.equal(a.messages.at(-1).result,null,'解除・切替時は明示的に鍵を消去');
 const fakeExport={type:'secret',algorithm:{name:'AES-GCM'},extractable:true};
-a.onmessage({data:{id:8,action:'set',scope:'client:account',key:fakeExport,salt:'salt1'}});
+a.onmessage({data:{id:8,action:'set',scope:'client:account',generation,key:fakeExport,salt:'salt1'}});
 assert.equal(a.messages.at(-1).result,null,'抽出可能な鍵の共有を拒否');
+// A missing generation must not be accepted, including after a valid unlock.
+a.onmessage({data:{id:9,action:'set',scope:'client:account',key,salt:'salt1'}});
+assert.equal(a.messages.at(-1).result,null,'世代なしの鍵登録を拒否');
+a.onmessage({data:{id:10,action:'get',scope:'client:account',generation}});
+assert.equal(a.messages.at(-1).result,null,'拒否した鍵が保存されていない');
 console.log('PASS: SharedWorkerメモリ鍵、アカウント分離、30分失効、明示削除');
 
 // Graph URLとフォルダーIDの不要な往復を検出。

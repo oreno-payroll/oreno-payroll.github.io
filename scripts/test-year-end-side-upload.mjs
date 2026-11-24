@@ -31,8 +31,8 @@ assert.match(ui,/function updateDrafts\(preserveReview=false\)/,'avoid discardin
 assert.match(html,/class="mobile-file-picker-wrap"/,'use standard mobile picker wrapper');
 assert.match(standard,/class="mobile-file-picker-wrap"/,'ordinary upload uses same mobile picker wrapper');
 assert.match(html,/class="btn btn--primary mobile-file-picker"/,'same mobile button classes');
-assert.match(html,/id="yea-pdf-dropzone"[\s\S]*?ここにPDFをドロップ/,'normal drop target wording');
-assert.match(html,/枠内をクリックして選択 \/ 複数PDFのドロップにも対応/,'normal drop target guidance');
+assert.match(html,/id="yea-pdf-dropzone"[\s\S]*?PDFを追加する/,'normal drop target wording');
+assert.match(html,/クリックして選択、またはここにPDFをドロップ（複数可）/,'normal drop target guidance');
 assert.match(html,/PDFのみ・1件25MBまで・最大30件/,'standard privacy label');
 assert.doesNotMatch(html,/副業の給与・賞与明細のみ/,'do not repeat known document template limitation in drop area');
 assert.doesNotMatch(css,/\.yea-upload-left \.zone-content\{[^}]*min-height/,'no private desktop drop target size override');

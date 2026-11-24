@@ -95,5 +95,5 @@ assert.match(edit,/getOriginalForVerifiedEdit\(/);
 assert.match(edit,/updateRecordMetadata\(updated/);
 assert.match(dashboard,/const before=await loadRecordSummaries\(\)/);
 assert.match(dashboard,/const after=await loadRecordSummaries\(\)/);
-assert.match(dashboard,/getOriginalForCurrentView\(item\.id,recordSignature\(item\)\)/);
+assert.match(dashboard,/getOriginalForBatchExport\(item\.id,recordSignature\(item\)\)/);
 console.log('PASS: UI keeps safe view handoff and bulk export uses two verification snapshots instead of N full refreshes');

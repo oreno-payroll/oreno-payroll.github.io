@@ -1,5 +1,6 @@
 import { createAppStatus } from './ui/appStatus';
-/** PDF原本はクリック時だけ取得する。Chrome内蔵PDFビューアには名前付きURLで渡す。 */
+/** PDF原本はクリック時だけ取得する。ファイル名を履歴・タブタイトルに渡さない。 */
+import {readNavigationParams,replaceNavigationParams} from './ui/navigationParams';
 import { getRecord } from './storage/payrollStore';
 import { receivePdfHandoff } from './pdf/handoff';
 import {receiveYearEndPdf} from './pdf/yearEndHandoff';
@@ -9,6 +10,8 @@ import {createTabLockCoordinator} from './cloud/tabLock';
 const status = document.getElementById('pdf-status');
 const appStatus=createAppStatus(status);
 const reader = document.getElementById('pdf-reader') as HTMLIFrameElement | null;
+document.title='Payroll | PDF原本';
+if(reader)reader.title='PDF原本';
 let fallbackUrl: string | undefined;
 let locked=false;
 const locks=createTabLockCoordinator(()=>{
@@ -38,17 +41,22 @@ async function removeLegacyWorker(): Promise<void> {
 async function start(): Promise<void> {
   if (!status || !reader) throw new Error('PDF表示画面の構成に問題があります。');
   const startEpoch=locks.epoch();
-  const params=new URLSearchParams(location.search);
+  const keys=['id','yearend','handoff'] as const;
+  const params=readNavigationParams(location,keys);
+  const ticket=params.get('handoff');
+  const ambiguous=keys.some(key=>params.getAll(key).length>1)||(params.has('id')&&params.has('yearend'));
+  // Retain the selected ID, but remove a one-use ticket before any async work,
+  // including failures. Old query links are converted after the initial request.
+  params.delete('handoff');
+  replaceNavigationParams(params,keys);
+  if(ambiguous)throw new Error('PDF原本のIDが不正です。');
   const yearEndId=params.get('yearend');
   if(yearEndId!==null){
-   const ticket=new URLSearchParams((location.hash??'').slice(1)).get('handoff')??'';
    if(!ticket)throw new Error('年末調整画面からPDFを開いてください。');
     const payload=await receiveYearEndPdf(yearEndId,ticket);
     requirePdfMime(payload.pdf);
     const verifiedPdf=await asVerifiedPdfBlob(payload.pdf);
     assertUnlocked(startEpoch);
-   const clean=new URL(location.href);clean.hash='';window.history.replaceState(window.history.state,'',clean.href);
-   document.title=payload.fileName;reader.title=payload.fileName;
    await removeLegacyWorker();assertUnlocked(startEpoch);
     fallbackUrl=URL.createObjectURL(verifiedPdf);
    reader.src=fallbackUrl;reader.hidden=false;
@@ -62,24 +70,15 @@ async function start(): Promise<void> {
   }
   // 通常のクリックでは、認証済みのホームタブから検証済みPDFのみを受け取る。
   // 直接URLを開いた場合やBroadcastChannel非対応時は、従来の認証経路へ戻る。
-  const ticket = new URLSearchParams((location.hash ?? '').slice(1)).get('handoff');
+  if (ticket!==null && !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(ticket))throw new Error('PDF閲覧チケットが不正です。');
   if (ticket) appStatus.loading('元のタブからPDFを受信しています…');
   const transferred = ticket ? await receivePdfHandoff(id,ticket,()=>{
     appStatus.loading('PDF原本を取得・検証しています…');
   }) : null;
-  if (transferred) {
-    // 閲覧用の一時的なチケットをブラウザの履歴に残さない。
-    const clean = new URL(location.href);
-    clean.hash = '';
-    window.history.replaceState(window.history.state,'',clean.href);
-  }
   const record = transferred ?? await getRecord(id);
   if (!record) throw new Error('このPDF原本は削除済みか、保存されていません。');
 
-  // 外側のタブ名は常に保存済みファイル名を使用。
   assertUnlocked(startEpoch);
-  document.title = record.fileName;
-  reader.title = record.fileName;
   await removeLegacyWorker();
   assertUnlocked(startEpoch);
   const verifiedPdf=await asVerifiedPdfBlob(record.pdf);

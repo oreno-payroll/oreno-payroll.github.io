@@ -267,11 +267,17 @@ async function prepared(){
 }
 {
  const code=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
- assert.match(code,/export async function loadRecords\(onProgress/);
- assert.match(code,/const list=await vault\.refresh\(\)/);
- assert.match(code,/Math\.min\(2,list\.length\)/);
- assert.match(code,/payrollSnapshot\(latest\)/);
- assert.doesNotMatch(code,/for\(const item of list\)\{const record=await getRecord/);
+ const backup=code.match(/export async function loadRecords\(onProgress[\s\S]*?(?=\nexport async function inspectReplacementConflicts\()/)?.[0];
+ assert.ok(backup,'backup function must remain independently auditable');
+ assert.match(code,/const freshReadOnlyOptions\s*=\s*\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}/);
+ assert.match(backup,/const list=await vault\.refresh\(freshReadOnlyOptions\)/);
+ assert.match(backup,/Math\.min\(2,list\.length\)/);
+ assert.match(backup,/const latest=await vault\.refresh\(freshReadOnlyOptions\)/);
+ assert.equal((backup.match(/vault\.refresh\(/g)??[]).length,2);
+ assert.ok(backup.indexOf('const list=await vault.refresh')<backup.indexOf('await vault.original(item)'));
+ assert.ok(backup.indexOf('await Promise.all')<backup.indexOf('const latest=await vault.refresh'));
+ assert.match(backup,/JSON\.stringify\(payrollSnapshot\(latest\)\)!==JSON\.stringify\(snapshot\)/);
+ assert.doesNotMatch(backup,/\bgetRecord\s*\(/);
  console.log('PASS: backup loads annual JSON once, fetches PDFs at concurrency 2, verifies a final snapshot');
 }
 

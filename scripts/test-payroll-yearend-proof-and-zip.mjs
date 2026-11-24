@@ -87,7 +87,7 @@ async function simulate(failId=0){
  const side=Array.from({length:8},(_,i)=>({id:i+1,fileName:`mock${i+1}.pdf`}));
  const scope={
   sideZipStatus:{textContent:''},appStatus:{loading:()=>{}},exportMode:'calendar',exportYear:'2026',
-  recordSignature:x=>String(x.id),getOriginalForCurrentView:async(id,sig)=>{
+  recordSignature:x=>String(x.id),getOriginalForBatchExport:async(id,sig)=>{
    assert.equal(sig,String(id));inFlight++;max=Math.max(max,inFlight);
    await new Promise(resolve=>setTimeout(resolve,(9-id%3)*2));inFlight--;
    if(id===failId)throw Error('synthetic PDF read failed');

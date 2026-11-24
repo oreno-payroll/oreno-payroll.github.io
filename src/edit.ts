@@ -6,6 +6,7 @@ import {authEpoch} from './cloud/snapshot';
 import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 import {preparePdfHandoff} from './pdf/handoff';
+import {readNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
 import {capturePdfHandoffAuthorization,captureOperationAuthorization,cloudVault} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,type SavedPayrollSummary} from './storage/payrollStore';
@@ -39,12 +40,14 @@ const currentReview=$<HTMLElement>('edit-current-review');
 const historyReview=$<HTMLElement>('edit-review-history');
 // ホームで選択した集計モードと年を、編集・削除後の戻り先にも引き継ぐ。
 // 旧形式の ?fy=2025 もそのまま利用できる。
-const originParams = new URLSearchParams(window.location.search);
+const editKeys=['id','mode','year','fy','hintYear'] as const;
+const originParams = readNavigationParams(window.location,editKeys);
+migrateLegacyNavigation(originParams,editKeys);
 const originMode = originParams.get('mode') === 'calendar' ? 'calendar' : 'fiscal';
 const originYear = originParams.get('year') ?? originParams.get('fy');
 const homeHref = originYear && /^\d{4}$/.test(originYear) &&
   Number(originYear) >= 1900 && Number(originYear) <= 2200
-  ? `../index.html?mode=${originMode}&year=${encodeURIComponent(originYear)}`
+  ? `../index.html#mode=${originMode}&year=${encodeURIComponent(originYear)}`
   : '../index.html';
 document.querySelectorAll<HTMLAnchorElement>('a[href="../index.html"]').forEach(link => {
   link.setAttribute('href', homeHref);
@@ -303,12 +306,13 @@ window.addEventListener('pagehide',()=>{if(!saving){deletionPending=false;deleti
 window.addEventListener('pageshow',event=>{if(event.persisted)updateUI();});
 appStatus.loading('保存済み明細を読み込んでいます…');
 void (async () => {
-  const id = Number(new URLSearchParams(location.search).get('id'));
-  if (!Number.isSafeInteger(id) || id <= 0) { showError('明細IDが不正です。ホームに戻って選び直してください。'); return; }
+  const rawId=originParams.get('id')??'';
+  const id = Number(rawId);
+  if (originParams.getAll('id').length!==1 || !/^\d+$/.test(rawId) || !Number.isSafeInteger(id) || id <= 0) { showError('明細IDが不正です。ホームに戻って選び直してください。'); return; }
   try {
     // Priority-only hint, not a trusted statement location. CloudVault still
     // validates the whole indexed snapshot before returning any editable record.
-    const yearHint=new URLSearchParams(location.search).get('hintYear')??undefined;
+    const yearHint=originParams.get('hintYear')??undefined;
     record = await getRecordSummary(id,yearHint);
     if (!record) { showError('保存済み明細が見つかりません。'); return; }
     employerDirectory=await (await cloudVault()).readEmployerDirectory();
@@ -318,7 +322,7 @@ void (async () => {
     $('record-name').textContent = record.fileName;
     $('record-details').textContent = `PDF ${record.pdfSize < 1024 * 1024 ? `${Math.max(1, Math.round(record.pdfSize / 1024))} KB` : `${(record.pdfSize / 1024 / 1024).toFixed(1)} MB`}`;
     const link = $<HTMLAnchorElement>('original-pdf');
-    link.href = `../view/index.html?id=${encodeURIComponent(String(record.id))}`;
+    link.href = `../view/index.html#id=${encodeURIComponent(String(record.id))}`;
     // Opens a new viewer tab synchronously; the already-unlocked editor transfers
     // only the verified PDF Blob over a one-use, lock-aware BroadcastChannel.
     const startHandoff=()=>preparePdfHandoff(link,record!.id,async()=>({

@@ -123,7 +123,11 @@ export async function getRecordSummary(id:number,untrustedYearHint?:string):Prom
  const {originalId:_,originalMonth:__,...summary}=record;
  return summary;
 }
-/** A direct edit-page download verifies the current signature before fetching the PDF. */
+/** Compare the physical original reference as well as user-visible metadata. */
+function originalReferenceSignature(record:CloudRecord):string {
+ return JSON.stringify([record.originalId,record.originalMonth]);
+}
+/** All single-PDF operations verify the live annual inventory before and after fetching. */
 export async function getOriginalForVerifiedEdit(id:number,expectedSignature:string):Promise<Blob> {
  if(!Number.isSafeInteger(id)||id<=0||!expectedSignature)throw new Error('原本の取得条件が不正です。');
  const vault=await cloudVault();
@@ -131,27 +135,33 @@ export async function getOriginalForVerifiedEdit(id:number,expectedSignature:str
  const record=current.find(r=>r.id===id);
  if(!record||recordSignature(record)!==expectedSignature)
   throw new Error('明細が別の画面で更新されました。再読み込みして原本を開いてください。');
+ const reference=originalReferenceSignature(record);
  const pdf=await vault.original(record); // size + SHA-256 authenticated
  const after=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
  const latest=after.find(r=>r.id===id);
- if(!latest||recordSignature(latest)!==expectedSignature)
+ if(!latest||recordSignature(latest)!==expectedSignature||originalReferenceSignature(latest)!==reference)
   throw new Error('PDF取得中に明細が更新されました。再読み込みしてください。');
  return pdf;
 }
 export async function getRecord(id:number):Promise<SavedPayrollRecord|undefined> {
- const vault=await cloudVault();const list=await vault.refresh();const rec=list.find(r=>r.id===id);
+ if(!Number.isSafeInteger(id)||id<=0)throw new Error('明細IDが不正です。');
+ const vault=await cloudVault();
+ const list=await vault.refresh(freshReadOnlyOptions);
+ const rec=list.find(r=>r.id===id);
  if(!rec)return undefined;
+ const signature=recordSignature(rec),reference=originalReferenceSignature(rec);
  const {originalId:_,originalMonth:__,pdfSize:___,pdfType:____,...rest}=rec;
  const pdf=await vault.original(rec);
+ const after=await vault.refresh(freshReadOnlyOptions);
+ const latest=after.find(r=>r.id===id);
+ if(!latest||recordSignature(latest)!==signature||originalReferenceSignature(latest)!==reference)
+  throw new Error('PDF取得中に明細が更新されました。再読み込みしてください。');
  return {...rest,pdf};
 }
-/**
- * 閲覧専用: ホームで読み込み・検証済みの年度別明細を再利用する。
- * 読み取りに限り索引の全年度再取得を省き、暗号化PDF原本だけを取得する。
- * 元タブの認証済み鍵を使い、PDFサイズ・SHA-256の照合は vault.original() が行う。
- * 保存・編集・削除の際のOneDrive再検証には一切影響しない。
+/** Only for a batch export bracketed by fresh full-inventory checks in the caller.
+ * Single-PDF viewing and downloads must use the verified pre/post paths above.
  */
-export async function getOriginalForCurrentView(id:number,expectedSignature:string):Promise<Blob> {
+export async function getOriginalForBatchExport(id:number,expectedSignature:string):Promise<Blob> {
  const vault=await cloudVault();
  const rec=vault.records().find(r=>r.id===id);
  if(!rec||recordSignature(rec)!==expectedSignature)

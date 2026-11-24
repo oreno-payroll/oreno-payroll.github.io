@@ -40,10 +40,10 @@ class Channel {
 }
 const handoff=runInNewContext(
  strip(read('src/pdf/handoff.ts').replace(/^export /gm,''))+'\npreparePdfHandoff',
- {BroadcastChannel:Channel,crypto:webcrypto,Blob,URL,setTimeout,clearTimeout},
+ {BroadcastChannel:Channel,crypto:webcrypto,Blob,URL,URLSearchParams,setTimeout,clearTimeout},
 );
 const pdf=new Blob(['%PDF-1.7\nTEST ONLY'],{type:'application/pdf'});
-const link=()=>({href:'https://payroll.example/view/index.html?id=42'});
+const link=()=>({href:'https://payroll.example/view/index.html#id=42'});
 const messages=channel=>channel.sent.map(message=>message.action);
 const tick=async()=>{for(let i=0;i<5;i++)await Promise.resolve();};
 
@@ -52,7 +52,7 @@ let allowed=true;
 const normal=link();
 handoff(normal,42,async()=>({pdf,fileName:'test.pdf'}),()=>allowed);
 let channel=Channel.instances.at(-1);
-let ticket=new URL(normal.href).hash.slice('#handoff='.length);
+let ticket=new URLSearchParams(new URL(normal.href).hash.slice(1)).get('handoff');
 channel.onmessage({data:{action:'ready',id:42,ticket}});
 await tick();
 assert.deepEqual(messages(channel),['loading','pdf']);
@@ -64,7 +64,7 @@ allowed=true;
 let finish,loadStarted=false;
 const waiting=link();
 handoff(waiting,42,()=>{loadStarted=true;return new Promise(resolve=>{finish=resolve;});},()=>allowed);
-channel=Channel.instances.at(-1);ticket=new URL(waiting.href).hash.slice('#handoff='.length);
+channel=Channel.instances.at(-1);ticket=new URLSearchParams(new URL(waiting.href).hash.slice(1)).get('handoff');
 channel.onmessage({data:{action:'ready',id:42,ticket}});
 assert.equal(loadStarted,true);
 allowed=false;
@@ -80,7 +80,7 @@ allowed=true;
 let loads=0;
 const beforeReady=link();
 handoff(beforeReady,42,async()=>{loads++;return {pdf,fileName:'private.pdf'};},()=>allowed);
-channel=Channel.instances.at(-1);ticket=new URL(beforeReady.href).hash.slice('#handoff='.length);
+channel=Channel.instances.at(-1);ticket=new URLSearchParams(new URL(beforeReady.href).hash.slice(1)).get('handoff');
 allowed=false;
 channel.onmessage({data:{action:'ready',id:42,ticket}});
 await tick();
@@ -93,7 +93,7 @@ const count=Channel.instances.length;
 const denied=link();
 handoff(denied,42,async()=>{throw new Error('must not load');},()=>false);
 assert.equal(Channel.instances.length,count);
-assert.equal(denied.href,'https://payroll.example/view/index.html?id=42');
+assert.equal(denied.href,'https://payroll.example/view/index.html#id=42');
 
 assert.match(read('src/main.ts'),/capturePdfHandoffAuthorization\(\)/,'dashboard must bind the guard per click');
 assert.match(read('src/view.ts'),/assertUnlocked\(startEpoch\)/,'receiver continues checking lock before display');

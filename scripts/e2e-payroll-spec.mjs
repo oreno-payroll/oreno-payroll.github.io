@@ -285,3 +285,38 @@ test('zero consent rejects stale inputs and never auto-selects itself',async({pa
  await page.reload();
  await expect(zero).not.toBeChecked();
 });
+
+// Round 4-C: ID issued for an individual upload, never silently inferred from main/side.
+test('employer identity is opt-in and independent of the salary role',async({page})=>{
+ await page.goto('/upload/index.html');
+ const id=page.locator('#employer-id');
+ await expect(id).toHaveCount(1);
+ await page.locator('input[type="file"]').first().setInputFiles({
+  name:'synthetic-employer.pdf',mimeType:'application/pdf',buffer:syntheticOnePagePdf(),
+ });
+ await expect(page.locator('#review-content')).toBeVisible();
+ await expect(id).toHaveValue('');
+ // Synthetic text does not identify a payroll profile: neither role is chosen.
+ // Issuing an employer ID must not silently choose a role on the user's behalf.
+ const main=page.locator('#review-form input[name="job"][value="main"]');
+ const side=page.locator('#review-form input[name="job"][value="side"]');
+ await expect(main).not.toBeChecked();
+ await expect(side).not.toBeChecked();
+ await page.locator('#employer-create').click();
+ const first=await id.inputValue();
+ expect(first).toMatch(/^emp_[0-9a-f]{32}$/);
+ await expect(main).not.toBeChecked();
+ await expect(side).not.toBeChecked();
+ // Use real visible labels, preserving Playwright's pointer hit-testing.
+ await page.locator('#review-form input[name="job"][value="main"] + span').click();
+ await expect(main).toBeChecked();
+ await expect(id).toHaveValue(first);
+ await page.locator('#review-form input[name="job"][value="side"] + span').click();
+ await expect(side).toBeChecked();
+ await expect(id).toHaveValue(first);
+ await id.fill('main');
+ expect(await id.evaluate(el=>el.checkValidity())).toBe(false);
+ await id.fill(first);
+ await page.reload();
+ await expect(id).toHaveValue('');
+});

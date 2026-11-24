@@ -5,6 +5,7 @@ import {capturePdfHandoffAuthorization} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import {deleteRecord,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,type SavedPayrollSummary} from './storage/payrollStore';
 import {reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
+import {validEmployerId,createEmployerId} from './storage/employerIdentity';
 import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
 import { showInlineError, clearInlineError } from './ui/feedback';
@@ -41,11 +42,20 @@ let pdfDownloading=false;
 let saving = false;
 let leavingAfterSave = false;
 
+const employerInput=$<HTMLInputElement>('employer-id');
+const employerCreate=$<HTMLButtonElement>('employer-create');
+employerCreate.addEventListener('click',()=>{
+ if(saving||!record)return;
+ if(employerInput.value.trim()){employerInput.focus();employerInput.select();return;}
+ employerInput.value=createEmployerId();employerInput.focus();employerInput.select();updateUI();
+});
+employerInput.addEventListener('input',()=>{clearInlineError(errorView);updateUI();});
 function hideConditional(kind: string): void {
   form.querySelectorAll<HTMLElement>('[data-bonus-only]').forEach(el => { el.hidden = kind !== 'bonus'; });
   form.querySelectorAll<HTMLElement>('[data-salary-only]').forEach(el => { el.hidden = kind === 'bonus'; });
 }
 function fillForm(values: Record<string, string>): void {
+  employerInput.value=record?.employerId??'';
   for (const control of Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input[name],select[name]'))) {
     if (control.type === 'radio' && control instanceof HTMLInputElement) control.checked = values[control.name] === control.value;
     else control.value = values[control.name] ?? '';
@@ -71,12 +81,13 @@ function hasUnsavedChanges(): boolean {
     const oldValue = key === 'workDays' ? normalizeWorkDays(previous[key] ?? '') : (previous[key] ?? '');
     if ((current[key] ?? '') !== oldValue) return true;
   }
-  return false;
+  return (employerInput.value.trim()||undefined)!==record.employerId;
 }
 function updateUI(): void {
   if (!record) return;
   const values = getValues();
   const { errors, warnings } = validatePayrollForm(values);
+  if(!validEmployerId(employerInput.value.trim()||undefined))errors.unshift('勤務先IDの形式が不正です。');
   confirmDiff.parentElement!.hidden = warnings.length === 0;
   const changed = hasUnsavedChanges();
   status.textContent = errors[0] ?? (warnings.length ? warnings.join(' / ') : changed
@@ -112,6 +123,8 @@ form.addEventListener('submit', event => event.preventDefault());
 confirmDiff.addEventListener('change', () => { clearInlineError(errorView); updateUI(); });
 saveButton.addEventListener('click', async () => {
   if (!record || saving || !hasUnsavedChanges()) return;
+  const employerId=employerInput.value.trim()||undefined;
+  if(!validEmployerId(employerId)){showError('勤務先IDの形式が不正です。');return;}
   const formValues = applicablePayrollForm(getValues());
   const checked = validatePayrollForm(formValues);
   if (checked.errors.length) { showError(checked.errors[0]); return; }
@@ -124,6 +137,7 @@ saveButton.addEventListener('click', async () => {
       ...record,
       fileName: storedPdfName(formValues.job, formValues.kind, formValues.paymentDate, record.originalFileName ?? record.fileName),
       form: formValues,
+      employerId,
       zeroResolution: reconcilePayrollZeroResolution(record.zeroResolution,formValues),
       warningsAcknowledged: checked.warnings.length ? confirmDiff.checked : record.warningsAcknowledged,
       reviewedIssues: checked.warnings.length ? checked.warnings : record.reviewedIssues,

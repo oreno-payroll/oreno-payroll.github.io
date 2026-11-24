@@ -1,4 +1,7 @@
 /** Payrollの会計年度は「支給日」ではなく、明細の給与対象年月で区分する。 */
+export function monthStringFromIndex(index:number):string {
+ return `${Math.floor(index/12)}-${String(index%12+1).padStart(2,'0')}`;
+}
 const MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
 
 export function targetMonthOf(form: { targetMonth?: string }): string | null {

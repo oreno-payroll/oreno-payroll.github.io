@@ -2,15 +2,16 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 echo '[Payroll] pre-push: full security gate'
-# All pushed heads must be this checked-out commit, never an uninspected ref.
-head="$(git rev-parse HEAD)"
-while read -r local_ref local_sha remote_ref remote_sha; do
-  [ -n "${local_ref:-}" ] || continue
-  if [ "$local_sha" != "$head" ]; then
-    echo "NG: push対象が検証中のHEADと違います: $local_ref" >&2
-    exit 1
-  fi
-done
+# Feature-branch deletions send no code. Reject unsafe refs, but permit a safe
+# deletion without pretending the zero commit SHA equals the current HEAD.
+set +e
+bash scripts/verify-push-ref-policy.sh "$(git rev-parse HEAD)"
+policy=$?
+set -e
+if [ "$policy" -eq 10 ]; then
+ echo '[Payroll] pre-push: feature-branch deletion only, no code pushed'; exit 0
+fi
+[ "$policy" -eq 0 ] || exit 1
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo 'NG: push前に未コミットのソース変更があります。' >&2; exit 1
 fi

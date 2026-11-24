@@ -118,7 +118,7 @@ const vaultApi=runInNewContext(strip(read('src/cloud/vault.ts'))+'\n({PayrollVau
  isCollision:e=>/collision/.test(e?.message??''),
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),
  fiscalYearOfTargetMonth:m=>Number(m.slice(0,4)),payrollPeriodKey:r=>r.form.paymentDate,
- isValidPayrollSemantics:()=>true,toPublicIncomeRecord:()=>({}),
+ isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||/^emp_[0-9a-f]{32}$/.test(v),toPublicIncomeRecord:()=>({}),
  clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
  PayrollPartialSuccessError:class extends Error{},
 });

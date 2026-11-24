@@ -38,6 +38,14 @@
                       <label><input type="radio" name="kind" value="bonus" required><span>賞与</span></label>
                     </div>
                   </fieldset>
+                  <div class="field employer-identity" aria-label="独立した勤務先ID">
+                    <label class="field__label" for="employer-id">勤務先ID <span class="field__optional">任意・会社が変われば別ID</span></label>
+                    <div class="employer-identity__row">
+                      <input class="input" id="employer-id" type="text" maxlength="36" pattern="emp_[0-9a-f]{32}" autocomplete="off" spellcheck="false" placeholder="未設定（従来どおり）">
+                      <button class="btn btn--secondary btn--small" id="employer-create" type="button">新しいIDを発行</button>
+                    </div>
+                    <small class="employer-identity__help">同じ会社では発行済みIDを貼り付けて再利用。会社名や社員番号は入力しないでください。過去明細には自動設定しません。</small>
+                  </div>
                   <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" name="targetMonth" type="month" required></label>
                   <label class="field"><span class="field__label">実際の支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
                 </div>

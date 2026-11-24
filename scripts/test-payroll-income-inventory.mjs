@@ -65,7 +65,7 @@ const sandbox={
  clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
  isCollision:error=>error?.message==='ETag collision',
  fiscalYearOfTargetMonth:month=>Number(month.slice(0,4)),isValidPayrollSemantics:()=>true,
- payrollPeriodKey:r=>r.form.paymentDate,toPublicIncomeRecord:undefined,
+  payrollPeriodKey:r=>r.form.paymentDate,toPublicIncomeRecord:undefined,validEmployerId:value=>value===undefined||/^emp_[0-9a-f]{32}$/.test(value),
  MAX_RECORDS:10000,MAX_TOTAL_PDF_BYTES:1_000_000_000,
  beginPerfOperation:()=>({measure:async(_name,work)=>work(),finish:()=>{}}),
  PayrollPartialSuccessError:class PayrollPartialSuccessError extends Error{},

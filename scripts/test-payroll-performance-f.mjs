@@ -49,7 +49,7 @@ const common={crypto:webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Arra
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_kind,text)=>JSON.parse(text),encryptJson:async(_kind,data)=>JSON.stringify(data),decryptBytes:async()=>pdf,
  isCollision:()=>false,clearNavigationSnapshot:()=>{snapshot=null},rememberNavigationSnapshot:async(s,t,k,data)=>{snapshot={s,t,k,data,expires:Date.now()+120000}},
  restoredNavigationSnapshot:async(s,t,k)=>snapshot&&snapshot.s===s&&snapshot.t===t&&snapshot.k===k&&snapshot.expires>Date.now()?snapshot:null,
- fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,payrollPeriodKey:r=>r.form.paymentDate,
+ fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||/^emp_[0-9a-f]{32}$/.test(v),payrollPeriodKey:r=>r.form.paymentDate,
  beginPerfOperation:()=>({measure:async(_,fn)=>fn(),finish(){}}),MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:1e9,
  PayrollPartialSuccessError:class extends Error{},toPublicIncomeRecord:()=>{throw Error('not needed')},setTimeout};
 const {PayrollVault}=runInNewContext(strip(read('src/cloud/vault.ts'))+'\n({PayrollVault})',common);

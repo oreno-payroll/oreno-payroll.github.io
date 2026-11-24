@@ -1,11 +1,15 @@
 /** Published Finance income fields only. Do not export salary statement detail/PDFs.
  * Keep a stable Payroll numeric ID so corrected/reimported salaries replace prior values.
  */
+import {validEmployerId} from '../storage/employerIdentity.ts';
 export interface PublicIncomeRecord {
   id:number;paymentDate:string;targetMonth:string;job:string;kind:string;
+  /** Optional v1 extension; legacy entries omit this key rather than guessing. */
+  employerId?:string;
   netPaymentYen:number;grossPaymentYen:number;taxablePaymentYen?:number;revision:number;
 }
-export function toPublicIncomeRecord(record:{id:number;revision?:number;form:Record<string,string>}):PublicIncomeRecord {
+export function toPublicIncomeRecord(record:{id:number;revision?:number;employerId?:string;form:Record<string,string>}):PublicIncomeRecord {
+  if(!validEmployerId(record.employerId))throw new Error('収入連携用の勤務先IDが不正です。');
   const form=record.form;
   const net=Number(form.net),gross=Number(form.gross);
   const taxableText=(form.taxable??'').trim();
@@ -19,5 +23,6 @@ export function toPublicIncomeRecord(record:{id:number;revision?:number;form:Rec
      !['main','side'].includes(form.job)||!['salary','bonus'].includes(form.kind))
     throw new Error('収入連携データの支給日や勤務先が不正です。');
   return {id:record.id,paymentDate:form.paymentDate,targetMonth:form.targetMonth,job:form.job,kind:form.kind,
+    ...(record.employerId?{employerId:record.employerId}:{}),
     netPaymentYen:net,grossPaymentYen:gross,...(taxable===undefined?{}:{taxablePaymentYen:taxable}),revision:record.revision??1};
 }

@@ -13,6 +13,7 @@ import { parsePayroll, type PdfTextCell, type PayrollParseResult } from "./pdf/p
 import { saveRecordsSkippingDuplicates, type SavedPayrollRecordInput } from "./storage/payrollStore";
 import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
 import {createPayrollSemantics} from './storage/payrollSemantics';
+import {validEmployerId,createEmployerId} from './storage/employerIdentity';
 import {emptyOptionalAmounts,prepareOptionalZeros,ZERO_OPTIONAL_AMOUNT_LABELS} from './storage/payrollZeroResolution';
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
@@ -40,6 +41,7 @@ interface Entry {
   /** PDF解析で値が自動転記された欄。手動修正時に解除する。 */
   autoFields?: Set<FieldKey>;
   form: FormValues;
+  employerId?:string;
   parsed?: PayrollParseResult;
   previewUrl?: string;
   /** このPDFに紐づく警告の確認。別PDFへの切り替えでは変えない。 */
@@ -70,6 +72,8 @@ const listEmpty = $<HTMLDivElement>("file-list-empty");
 const reviewEmpty = $<HTMLDivElement>("review-empty");
 const reviewContent = $<HTMLDivElement>("review-content");
 const reviewForm = $<HTMLFormElement>("review-form");
+const employerInput = $<HTMLInputElement>("employer-id");
+const employerCreate = $<HTMLButtonElement>("employer-create");
 const readResult = $<HTMLDivElement>("read-result");
 const validationMessage = $<HTMLParagraphElement>("validation-message");
 const validateButton = $<HTMLButtonElement>("validate-button");
@@ -105,7 +109,7 @@ window.addEventListener('pageshow',()=>{
 });
 function zeroCandidatesFingerprint(items: readonly Entry[]): string {
   return JSON.stringify(items.map(entry=>[entry.id,entry.hash??'',entry.status,
-    FIELDS.map(field=>entry.form[field]),entry.parsed?.missingFields??[]]));
+    FIELDS.map(field=>entry.form[field]),entry.employerId??null,entry.parsed?.missingFields??[]]));
 }
 zeroCheckbox.addEventListener('change',()=>{
   zeroConsentFingerprint=zeroCheckbox.checked?zeroCandidatesFingerprint(candidates()):null;
@@ -229,6 +233,7 @@ function reviewFingerprint(entry: Entry): string {
   return JSON.stringify([
     entry.status,
     FIELDS.map(key => entry.form[key]),
+    entry.employerId??null,
     entry.parsed?.profile ?? null,
     entry.parsed?.warnings ?? [],
     entry.parsed?.missingFields ?? [],
@@ -471,6 +476,10 @@ function renderReview(): void {
       }
     }
   }
+  employerInput.value=entry.employerId??'';
+  // ID is a separate encrypted-record property, never a new historical form field.
+  employerInput.disabled=entry.status==='queued'||entry.status==='reading'||duplicated().has(entry.id);
+  employerCreate.disabled=employerInput.disabled;
   updateConditionalFields(entry.form.kind);
   // 解析中に入力しても後からPDFの結果で上書きされないよう、完了まで編集不可。
   const isReading = entry.status === "queued" || entry.status === "reading" || duplicated().has(entry.id);
@@ -696,6 +705,24 @@ clearButton.addEventListener("click", () => {
   render();
   notice("選択中のPDFを一覧から削除しました。保存済みデータは削除されません。");
 });
+function setEntryEmployerId(value:string):void {
+ const entry=selectedEntry();if(!entry)return;
+ const next=value.trim()||undefined;
+ if(entry.employerId===next)return;
+ entry.employerId=next;
+ setReviewed(entry,false);
+ entry.validationFeedback=undefined;
+ validationMessage.hidden=true;
+ renderFileList();updateSaveState();
+}
+employerInput.addEventListener('input',()=>setEntryEmployerId(employerInput.value));
+employerCreate.addEventListener('click',()=>{
+ const entry=selectedEntry();if(!entry||employerCreate.disabled)return;
+ if(employerInput.value.trim()){employerInput.focus();employerInput.select();notice('発行済みのIDを変更する場合は、先に入力欄を空にしてください。');return;}
+ const id=createEmployerId();employerInput.value=id;setEntryEmployerId(id);
+ employerInput.focus();employerInput.select();
+ notice('新しい勤務先IDを発行しました。同じ勤務先の別PDFにも貼り付けてください。');
+});
 reviewForm.addEventListener("input", event => {
   const target = event.target;
   const entry = selectedEntry();
@@ -750,9 +777,9 @@ validateButton.addEventListener("click", () => {
   if (!entry || duplicated().has(entry.id)) return;
   if (entry.status === "queued" || entry.status === "reading") return;
   const checked = validatePayrollForm(entry.form);
-  if (!reviewForm.reportValidity() || checked.errors.length || entry.status === "error") {
+  if (!reviewForm.reportValidity() || !validEmployerId(entry.employerId) || checked.errors.length || entry.status === "error") {
     setReviewed(entry, false);
-    setValidationFeedback(entry, checked.errors[0] ?? "入力形式またはPDFの状態を確認してください。", true);
+    setValidationFeedback(entry, !validEmployerId(entry.employerId)?"勤務先IDは『新しいIDを発行』で生成した形式を使ってください。":checked.errors[0] ?? "入力形式またはPDFの状態を確認してください。", true);
   } else if (hasReviewIssue(entry)) {
     // 警告・不足項目を原本と照合したことを明示的なボタン操作で承認する。
     // 同じ操作を別のPDFに移動しても再度求めない。
@@ -789,7 +816,7 @@ function updateSaveState(): void {
   const pending = entries.some(entry => entry.status === "queued" || entry.status === "reading");
   const uploadable = candidates();
   const issueEntries = uploadable.filter(hasReviewIssue);
-  const invalidEntry = uploadable.find(entry => formError(entry) !== null);
+  const invalidEntry = uploadable.find(entry => formError(entry)||!validEmployerId(entry.employerId));
   const badPdf = uploadable.find(entry => entry.status === "error");
   const unreviewed = issueEntries.filter(entry => !isReviewed(entry));
   validateButton.disabled = locked;
@@ -831,7 +858,7 @@ function updateSaveState(): void {
   } else if (badPdf) {
     saveStatus.textContent = `「${badPdf.file.name}」はPDFとして正常に読めないため保存できません。削除して再追加してください。`;
   } else if (invalidEntry) {
-    saveStatus.textContent = `「${invalidEntry.file.name}」：${formError(invalidEntry)}`;
+    saveStatus.textContent = `「${invalidEntry.file.name}」：${!validEmployerId(invalidEntry.employerId)?'勤務先IDの形式が不正です。':formError(invalidEntry)}`;
   } else if (unreviewed.length) {
     saveStatus.textContent = `${unreviewed.length}件が未確認です。左の「要確認」を選び、右側の「入力内容をチェック」を押してください。`;
   } else if (zeroContradictions.length) {
@@ -844,10 +871,10 @@ function updateSaveState(): void {
 saveButton.addEventListener("click", async () => {
   if (saving || saveButton.disabled) return;
   const uploadable = candidates();
-  const errorEntry = uploadable.find(entry => formError(entry));
+  const errorEntry = uploadable.find(entry => formError(entry)||!validEmployerId(entry.employerId));
   if (errorEntry) {
     selectFile(errorEntry.id);
-    notice(`「${errorEntry.file.name}」の入力内容を確認してください。`);
+    notice(`「${errorEntry.file.name}」の勤務先IDまたは入力内容を確認してください。`);
     return;
   }
   if (uploadable.some(entry => entry.status === "error")) {
@@ -891,6 +918,7 @@ saveButton.addEventListener("click", async () => {
       fileHash: entry.hash,
       form: prepared.form,
       zeroResolution: prepared.zeroResolution,
+      ...(entry.employerId?{employerId:entry.employerId}:{}),
       semantics: createPayrollSemantics(entry.form,entry.parsed),
       pages: entry.pages,
       warningsAcknowledged: hasReviewIssue(entry) && isReviewed(entry),

@@ -552,15 +552,34 @@ test('settings overview separates categories and retains only in-page drafts',as
 // Measure the real source markup and shared CSS in a static, synthetic fixture.
 // No application script is run, no auth gate is bypassed, and no data is loaded.
 test('shared disclosure, statement columns and settings spacing stay aligned', async ({ page }) => {
+ // Keep the checked-in HTML intact. Block scripts and network access instead
+ // of attempting to sanitize HTML with regular expressions. Only explicitly
+ // approved local stylesheet files are added to the isolated document.
+ const pages = new Set(['index.html','upload/index.html','edit/index.html',
+  'year-end-assist/index.html','backup/index.html']);
+ const styles = new Map(['ress','style','dashboard','cloud','theme','upload','vault','year-end-assist']
+  .map(name=>{const url=new URL(`../public/styles/${name}.css`,import.meta.url);return [url.href,url];}));
+ const fixtureCsp = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'";
+ await page.route('**/*',route=>route.abort('blockedbyclient'));
  const fixture = async name => {
+  if (!pages.has(name)) throw new Error('Unknown static fixture');
   const url = new URL('../public/'+name,import.meta.url);
-  const html = readFileSync(url,'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'')
-   .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/g,'')
-   .replace(/<link rel="stylesheet"[^>]*>/g,tag=>{
-    const href=tag.match(/href="([^"]+)"/)[1].split('?')[0];
-    return '<style>'+readFileSync(new URL(href,url),'utf8')+'</style>';
-   });
-  await page.setContent(html);
+  const html = readFileSync(url,'utf8');
+  if (!html.includes('<head>')) throw new Error('Missing fixture head');
+  // Insert the restrictive policy before any executable markup. The source's
+  // own CSP remains in place as an additional policy.
+  await page.setContent(html.replace('<head>',`<head><meta http-equiv="Content-Security-Policy" content="${fixtureCsp}">`));
+  const hrefs = await page.locator('link[rel="stylesheet"]').evaluateAll(links=>links.map(link=>link.getAttribute('href')));
+  expect(hrefs.length).toBeGreaterThan(0);
+  for (const href of hrefs) {
+   const stylesheet = new URL(href,url);
+   stylesheet.search = '';
+   const source = styles.get(stylesheet.href);
+   if (!source) throw new Error('Unexpected static fixture stylesheet');
+   await page.addStyleTag({content:readFileSync(source,'utf8')});
+  }
+  await expect(page.locator('meta[http-equiv="Content-Security-Policy"]').first()).toHaveAttribute('content',fixtureCsp);
+  await expect(page.locator('#payroll-cloud-gate')).toHaveCount(0);
  };
  for (const theme of ['light','dark']) {
   await fixture('index.html');

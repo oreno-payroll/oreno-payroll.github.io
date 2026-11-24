@@ -20,6 +20,7 @@ const result=await build({stdin:{contents:[
 const {PayrollVault,PayrollGraph,GraphError,decryptJson,encryptJson,getRecordSummary,updateRecordMetadata,recordSignature,saveRecordsSkippingDuplicates,deleteRecords,inspectAdditiveRestore,restoreAdditiveRecords,inspectReplacementRestoreBaseline,replaceAllRecords,inspectEmployerAssignment,assignEmployers,prepareOptionalZeros,reconcilePayrollZeroResolution,inspectUploadRecovery,uploadRecoveryAttempt,requireSafeUploadRecovery,bindPayrollGraphIdentity,MicrosoftSignInRequiredError}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
 const enc=new TextEncoder();
 class FakeGraph{
+ async withWriteLock(operation){return operation();}
  files=new Map(); writes=[]; trashed=[]; beforeTrash=undefined; trashFault=undefined; revision=0; fault=undefined; discard=undefined;
  path(parts,name){return [...parts,name].join('/');}
  async read(parts,name){const row=this.files.get(this.path(parts,name));return row?{...row}:null;}
@@ -34,6 +35,12 @@ class FakeGraph{
  async write(parts,name,text,prior,limit){const p=this.path(parts,name),old=this.files.get(p);if(prior?old?.etag!==prior.etag:!!old)throw new GraphError(412,'conflict');if(this.fault?.(p,old))throw new Error('synthetic write interruption');const size=enc.encode(text).length;assert.ok(size<=limit);this.writes.push(p);if(this.discard?.(p,old))return;this.files.set(p,{id:p,etag:'e'+(++this.revision),text,size});}
 }
 async function setup(){const graph=new FakeGraph();let vault=new PayrollVault(graph);await vault.unlock('synthetic-integrity-passphrase',true);const {key,salt}=vault.sessionKey();globalThis.__p1p7Vault=vault;return {graph,key,get vault(){return vault;},async reopen(){vault.lock();vault=new PayrollVault(graph);await vault.unlockWithKey(key,salt);await vault.refresh({forceFresh:true});globalThis.__p1p7Vault=vault;return vault;}};}
+async function removeFixtureHash(ctx,id){
+ const path='payroll/statements/2026.enc',file=ctx.graph.files.get(path),doc=await decryptJson('year',file.text,ctx.key);
+ delete doc.records.find(r=>r.id===id).fileHash;
+ await ctx.graph.write(['payroll','statements'],'2026.enc',await encryptJson('year',doc,ctx.key,ctx.vault.sessionKey().salt),file,30000000);
+ await ctx.reopen();
+}
 const A='emp_'+'a'.repeat(32),B='emp_'+'b'.repeat(32);
 async function sample(n,employerId,month='2026-12'){
  const bytes=enc.encode('%PDF-1.7\nSynthetic fixture '+n+'\n%%EOF');const fileHash=Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
@@ -84,9 +91,9 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
 {
  const make=()=>{let state={clientId:'client-a',accountId:'account-a',authEpoch:'auth-a',lockEpoch:'lock-a'};const guard=bindPayrollGraphIdentity(()=>state);return {guard,switch(){state={...state,accountId:'account-b'};},lock(){state={...state,lockEpoch:'lock-b'};}};};
  const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
- const a=make(),token=deferred();let sent=0;const g=new PayrollGraph(()=>token.promise,async()=>{sent++;return Response.json({});},()=>{},undefined,a.guard);const pending=g.request('/synthetic');a.switch();token.resolve('synthetic-token');await assert.rejects(pending,MicrosoftSignInRequiredError);assert.equal(sent,0);
- const b=make(),refresh=deferred(),entered=deferred();let reads=0;const h=new PayrollGraph('synthetic-token',async()=>{reads++;return new Response(null,{status:401});},()=>{},{invalidate:()=>{},refresh:()=>{entered.resolve();return refresh.promise;}},b.guard);const recovery=h.request('/synthetic');await entered.promise;b.lock();refresh.resolve('synthetic-refresh');await assert.rejects(recovery,MicrosoftSignInRequiredError);assert.equal(reads,1);
- const c=make();let chunks=0;const u=new PayrollGraph('synthetic-token',async(_url,init)=>{if(init.method==='POST')return Response.json({uploadUrl:'https://synthetic.invalid/upload'});chunks++;c.lock();return new Response(null,{status:202});},()=>{},undefined,c.guard);u.folder=async()=> 'folder';await assert.rejects(u.write(['payroll'],'sample.enc','x'.repeat(4000000),{id:'file',etag:'old'},5000000),MicrosoftSignInRequiredError);assert.equal(chunks,1);
+ const a=make(),token=deferred();let sent=0;const g=new PayrollGraph(()=>token.promise,async()=>{sent++;return Response.json({});},()=>{},undefined,a.guard, false);const pending=g.request('/synthetic');a.switch();token.resolve('synthetic-token');await assert.rejects(pending,MicrosoftSignInRequiredError);assert.equal(sent,0);
+ const b=make(),refresh=deferred(),entered=deferred();let reads=0;const h=new PayrollGraph('synthetic-token',async()=>{reads++;return new Response(null,{status:401});},()=>{},{invalidate:()=>{},refresh:()=>{entered.resolve();return refresh.promise;}},b.guard, false);const recovery=h.request('/synthetic');await entered.promise;b.lock();refresh.resolve('synthetic-refresh');await assert.rejects(recovery,MicrosoftSignInRequiredError);assert.equal(reads,1);
+ const c=make();let chunks=0;const u=new PayrollGraph('synthetic-token',async(_url,init)=>{if(init.method==='POST')return Response.json({uploadUrl:'https://synthetic.invalid/upload'});chunks++;c.lock();return new Response(null,{status:202});},()=>{},undefined,c.guard, false);u.folder=async()=> 'folder';await assert.rejects(u.write(['payroll'],'sample.enc','x'.repeat(4000000),{id:'file',etag:'old'},5000000),MicrosoftSignInRequiredError);assert.equal(chunks,1);
  console.log('PASS P7: deferred token, 401 refresh and signed upload are stopped at changed identity/lock boundaries');
 }
 
@@ -106,10 +113,10 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  assert.equal(writes.filter(p=>p.includes('/statements/')).length,2,'one conditional write per affected annual shard');
  assert.equal(writes.filter(p=>p.includes('/income/')).length,1,'one income write per affected payment year');
  assert.equal(writes.filter(p=>p.includes('/originals/')).length,0);
- assert.equal([...ctx.graph.files.keys()].filter(p=>p.includes('/originals/')).length,0,'selected originals trashed after sync');
- assert.equal(ctx.graph.trashed.length,3);
+ assert.equal([...ctx.graph.files.keys()].filter(p=>p.includes('/originals/')).length,3,'selected originals retained after sync');
+ assert.equal(ctx.graph.trashed.length,0);
  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
- console.log('PASS deletion batch: preflight all targets, two annual shards, one payment year, selected originals trashed');
+ console.log('PASS deletion batch: preflight all targets, two annual shards, one payment year, selected originals retained');
 }
 {
  const ctx=await setup(),a=await sample(24,A),b=await sample(25,A,'2027-04');b.form.paymentDate='2027-04-27';
@@ -141,8 +148,14 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  // A separate detached object, from an interrupted upload, must not be touched.
  const originals=[...ctx.graph.files].filter(([p])=>p.includes('/originals/'));
  const unrelated=originals[0][0].replace(/[^/]+$/,crypto.randomUUID()+'.enc');ctx.graph.files.set(unrelated,{...originals[0][1],id:unrelated});
+ await deleteRecords(targets);
+ const beforeTrash=await ctx.vault.inspectDetachedOriginals();
+ const selected=beforeTrash.originals.filter(item=>item.id!==unrelated);
+ assert.equal(selected.length,2);
+ await ctx.vault.trashDetachedOriginal(beforeTrash,selected[0]);
  ctx.graph.trashFault=()=>ctx.graph.trashed.length===1;
- await assert.rejects(deleteRecords(targets),e=>e.name==='PayrollPartialSuccessError'&&e.stage==='original-trash');
+ const nextReport=await ctx.vault.inspectDetachedOriginals();
+ await assert.rejects(ctx.vault.trashDetachedOriginal(nextReport,nextReport.originals.find(item=>item.id===selected[1].id)),/synthetic trash interruption/);
  assert.equal(ctx.graph.trashed.length,1);assert.ok(ctx.graph.files.has(unrelated));
  ctx.graph.trashFault=undefined;await ctx.reopen();assert.equal(ctx.vault.records().length,0);
  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
@@ -168,7 +181,9 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  const ctx=await setup();await saveRecordsSkippingDuplicates([await sample(35,A)]);await ctx.reopen();
  const target=ctx.vault.records()[0];const key=[...ctx.graph.files.keys()].find(p=>p.includes('/originals/'));
  ctx.graph.beforeTrash=()=>{const item=ctx.graph.files.get('payroll/income/2027.enc');ctx.graph.files.set('payroll/income/2027.enc',{...item,text:'synthetic damaged income',etag:'changed'});};
- await assert.rejects(deleteRecords([{id:target.id,signature:recordSignature(target)}]),e=>e.stage==='original-trash');
+ await deleteRecords([{id:target.id,signature:recordSignature(target)}]);
+ const detached=await ctx.vault.inspectDetachedOriginals();
+ await assert.rejects(ctx.vault.trashDetachedOriginal(detached,detached.originals[0]));
  assert.equal(ctx.graph.trashed.length,0);assert.ok(ctx.graph.files.has(key));
  console.log('PASS original trash: income changes immediately before DELETE block trash');
 }
@@ -184,7 +199,9 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  const ctx=await setup();await saveRecordsSkippingDuplicates([await sample(37,A)]);await ctx.reopen();
  const target=ctx.vault.records()[0];const key=[...ctx.graph.files.keys()].find(p=>p.includes('/originals/'));
  ctx.graph.beforeTrash=()=>{const item=ctx.graph.files.get('payroll/statements/2026.enc');ctx.graph.files.set('payroll/statements/2025.enc',{...item,id:'synthetic orphan annual'});};
- await assert.rejects(deleteRecords([{id:target.id,signature:recordSignature(target)}]),e=>e.stage==='original-trash');
+ await deleteRecords([{id:target.id,signature:recordSignature(target)}]);
+ const detached=await ctx.vault.inspectDetachedOriginals();
+ await assert.rejects(ctx.vault.trashDetachedOriginal(detached,detached.originals[0]));
  assert.equal(ctx.graph.trashed.length,0);assert.ok(ctx.graph.files.has(key));
  console.log('PASS original trash: newly appearing orphan annual blocks DELETE');
 }
@@ -196,7 +213,7 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  const g=new PayrollGraph(async()=> 'synthetic-token',async(_url,init)=>{
   calls++;assert.equal(guarded,1);assert.equal(init.method,'DELETE');assert.equal(init.headers['If-Match'],item.etag);
   if(fail)return new Response(null,{status:503});missing=true;return new Response(null,{status:204});
- });
+ }, undefined, undefined, undefined, false);
  g.listFolder=async()=>[item];g.metadata=async()=>missing?null:{id:item.id,etag:item.etag};
  await assert.rejects(g.trashPayrollOriginal(path,item,async()=>{throw new Error('synthetic stale source');}),/stale source/);assert.equal(calls,0);
  fail=true;await assert.rejects(g.trashPayrollOriginal(path,item,async()=>{guarded++;}),/503/);assert.equal(calls,1);
@@ -248,7 +265,7 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
 {
  const ctx=await setup(),a=await sample(53,A),b=await sample(54,A,'2027-04');
  const old={...a,id:600,savedAt:'2026-11-24T00:00:00Z'};delete old.fileHash;
- await ctx.vault.save(old);await ctx.reopen();
+ await ctx.vault.save({...old,fileHash:a.fileHash});await removeFixtureHash(ctx,old.id);
  const backup=[{...old,id:601,form:{...old.form,targetMonth:'2027-05'}},{...b,id:602,savedAt:old.savedAt}];delete backup[1].fileHash;
  const plan=await inspectAdditiveRestore(backup);assert.equal(plan.samePdf,1);assert.equal(plan.add,1);
  await restoreAdditiveRecords(backup,plan.signature);await ctx.reopen();
@@ -270,7 +287,8 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
 // Integrated audit fixes: use real storage APIs, not mocked control flow.
 {
  const ctx=await setup(),a=await sample(100,undefined,'2026-10');
- await ctx.vault.save({...a,fileHash:undefined,id:123,savedAt:'2026-11-01T00:00:00.000Z',revision:1});await ctx.reopen();
+ await ctx.vault.save({...a,id:123,savedAt:'2026-11-01T00:00:00.000Z',revision:1});await removeFixtureHash(ctx,123);
+ await assert.rejects(ctx.vault.original(ctx.vault.records()[0]),/SHA-256/);
  const n=ctx.graph.writes.length;
  const result=await saveRecordsSkippingDuplicates([{...a,employerId:A,form:{...a.form,targetMonth:'2026-11',paymentDate:'2026-11-27'}}]);
  assert.equal(result.saved,0);assert.equal(result.skipped[0].reason,'saved-pdf');assert.equal(ctx.graph.writes.length,n);
@@ -305,11 +323,11 @@ async function replacementFixture(){
  const {ctx,keep,drop,backup,baseline}=await replacementFixture();
  await replaceAllRecords([backup],baseline);await ctx.reopen();
  assert.deepEqual(ctx.vault.records().map(r=>r.id),[keep.id]);assert.equal(ctx.vault.records()[0].form.gross,'12000');
- assert.equal(ctx.vault.records()[0].originalId,keep.originalId);assert.equal(ctx.graph.trashed.length,1);
- assert.ok(ctx.graph.trashed.some(p=>p.endsWith(drop.originalId+'.enc')));
- assert.ok(!(await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
+ assert.equal(ctx.vault.records()[0].originalId,keep.originalId);assert.equal(ctx.graph.trashed.length,0);
+ assert.ok([...ctx.graph.files.keys()].some(p=>p.endsWith(drop.originalId+'.enc')));
+ assert.ok((await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
- console.log('PASS A1: successful exact replacement preserves kept originals, trashes excluded originals and verifies Finance');
+ console.log('PASS A1: successful exact replacement preserves kept originals, retains excluded originals and verifies Finance');
 }
 {
  const {ctx,backup,baseline}=await replacementFixture();
@@ -327,8 +345,8 @@ async function replacementFixture(){
  assert.equal(ctx.vault.records().length,2);const actual=ctx.vault.records().find(r=>r.id===keep.id);
  assert.equal(actual.originalId,keep.originalId);assert.equal(actual.originalMonth,keep.originalMonth);assert.equal(actual.form.targetMonth,'2028-04');
  assert.equal(ctx.vault.records().find(r=>r.id===234).fileHash,added.fileHash);
- assert.ok(ctx.graph.trashed.some(p=>p.endsWith(drop.originalId+'.enc')));
- assert.ok(!(await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
+ assert.ok([...ctx.graph.files.keys()].some(p=>p.endsWith(drop.originalId+'.enc')));
+ assert.ok((await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027','2028'])),[]);
  console.log('PASS A1: whole restore fiscal-year move, new ID, removed ID and both payment years verified');
 }
@@ -346,14 +364,16 @@ async function replacementFixture(){
  const {ctx,keep,drop}=await replacementFixture();
  const changed={...keep,form:{...keep.form,targetMonth:drop.form.targetMonth,paymentDate:drop.form.paymentDate},employerId:drop.employerId};
  await updateRecordMetadata(changed,[{id:drop.id,signature:recordSignature(drop)}],recordSignature(keep));await ctx.reopen();
- assert.deepEqual(ctx.vault.records().map(r=>r.id),[keep.id]);assert.equal(ctx.graph.trashed.length,1);assert.ok(ctx.graph.trashed[0].endsWith(drop.originalId+'.enc'));
+ assert.deepEqual(ctx.vault.records().map(r=>r.id),[keep.id]);assert.equal(ctx.graph.trashed.length,0);assert.ok((await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
  assert.ok((await ctx.vault.original(ctx.vault.records()[0])).size>0);
- console.log('PASS A2: duplicate cleanup uses verified original trash and retains the edited original');
+ console.log('PASS A2: duplicate cleanup preserves detached originals and retains the edited original');
 }
 {
  const {ctx,drop,backup,baseline}=await replacementFixture();
  ctx.graph.trashFault=()=>true;
- await assert.rejects(replaceAllRecords([backup],baseline),e=>e.stage==='original-trash');await ctx.reopen();
+ await replaceAllRecords([backup],baseline);await ctx.reopen();
+ const detached=await ctx.vault.inspectDetachedOriginals();
+ await assert.rejects(ctx.vault.trashDetachedOriginal(detached,detached.originals.find(r=>r.uuid===drop.originalId)),/synthetic trash interruption/);
  assert.equal(ctx.vault.records().length,1);assert.ok((await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
  console.log('PASS A2: replacement partial trash failure preserves detached original, no repeated deletion');

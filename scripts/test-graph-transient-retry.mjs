@@ -11,7 +11,7 @@ const path='/me/drive/special/approot';
  const graph=new PayrollGraph('test-token',async(url,init)=>{
   calls++;assert.equal(url,BASE+path);assert.equal(init.method,'GET');
   return calls===1?Response.json({error:{code:'tooManyRequests'}},{status:429,headers:{'Retry-After':'0'}}):ok({id:'root'});
- });
+ }, undefined, undefined, undefined, false);
  assert.equal(await graph.root(), 'root');
  assert.equal(calls,2,'429 with Retry-After=0 should repeat GET');
 }
@@ -19,7 +19,7 @@ const path='/me/drive/special/approot';
  let calls=0;
  const graph=new PayrollGraph('test-token',async()=>{
   calls++;return calls<3?Response.json({error:{code:'ServiceUnavailable'}},{status:503,headers:{'Retry-After':'0'}}):ok({id:'root'});
- });
+ }, undefined, undefined, undefined, false);
  assert.equal(await graph.root(), 'root');
  assert.equal(calls,3);
 }
@@ -27,7 +27,7 @@ const path='/me/drive/special/approot';
  let calls=0;
  const graph=new PayrollGraph('test-token',async()=>{
   calls++;return Response.json({error:{code:'tooManyRequests'}},{status:429,headers:{'Retry-After':'120'}});
- });
+ }, undefined, undefined, undefined, false);
  await assert.rejects(graph.root(),error=>error instanceof GraphError && error.status===429);
  assert.equal(calls,1,'when Retry-After exceeds cap, do not retry too early');
 }
@@ -36,7 +36,7 @@ const path='/me/drive/special/approot';
  const graph=new PayrollGraph('token-old',async(_,init)=>{
   calls++;return init.headers.Authorization==='Bearer token-old'
    ? Response.json({error:{code:'Unauthenticated'}},{status:401}):ok({id:'root'});
- },()=>{}, {invalidate(){invalidations++;},async refresh(){renewals++;return 'token-new';}});
+ },()=>{}, {invalidate(){invalidations++;},async refresh(){renewals++;return 'token-new';}}, undefined, false);
  assert.equal(await graph.root(),'root');
  assert.deepEqual([calls,renewals,invalidations],[2,1,1]);
 }
@@ -45,7 +45,7 @@ const path='/me/drive/special/approot';
  const graph=new PayrollGraph('test-token',async(_,init)=>{
   if(init.method!=='PUT')return ok({id:'root'});
   writes++;return Response.json({error:{code:'throttled'}},{status:503,headers:{'Retry-After':'0'}});
- });
+ }, undefined, undefined, undefined, false);
  await assert.rejects(graph.write(['payroll'],'test.enc','cipher',null,1000),error=>error instanceof GraphError && error.status===503);
  assert.equal(writes,1,'never retry an uncertain PUT');
 }
@@ -61,7 +61,7 @@ const path='/me/drive/special/approot';
   if(p.endsWith('/me/drive/items/root:/payroll'))return ok({id:'folder'});
   if(p.endsWith('/me/drive/items/folder:/test.enc'))return ok({id:'test-id',eTag:'etag',size:6,'@microsoft.graph.downloadUrl':signedUrl});
   throw new Error('unexpected Graph endpoint');
- });
+ }, undefined, undefined, undefined, false);
  const file=await graph.read(['payroll'],'test.enc',1000);
  assert.equal(file?.text,'cipher');assert.equal(signedAttempts,2);
 }

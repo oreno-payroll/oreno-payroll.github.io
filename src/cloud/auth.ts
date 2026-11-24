@@ -194,7 +194,7 @@ function payrollGraph():PayrollGraph {
  },{
   invalidate:()=>{guard();invalidateAfter401();},
   refresh:()=>boundToken(true),
- },guard);
+ },guard,true);
 }
 /** Called only from an explicit user click. Background operations never redirect. */
 export async function reconnectMicrosoftAccount():Promise<void>{

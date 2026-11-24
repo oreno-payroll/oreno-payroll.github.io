@@ -31,7 +31,7 @@ export function navigationFeedback(notice:NavigationNotice):NavigationFeedback {
  switch(notice.operation){
   case 'upload-saved':return {kind:'success',message:`明細${notice.count}件を保存しました。Finance連携データも更新済みです。`};
   case 'edit-saved':return {kind:'success',message:'明細の変更を保存しました。Finance連携データも更新済みです。'};
-  case 'delete-saved':return {kind:'success',message:'明細を削除しました。Finance連携と未参照になったPDF原本の整理も確認済みです。'};
+  case 'delete-saved':return {kind:'success',message:'明細を削除しました。Finance連携を確認しました。暗号化PDF原本は保全しています。'};
   case 'edit-income-partial':return {kind:'partial',message:'明細の変更は保存済みです。設定画面からFinance連携を更新してください。'};
   case 'edit-cleanup-partial':return {kind:'partial',message:'明細の変更は保存済みですが、重複明細の整理は未完了です。最新データを確認してください。'};
   case 'edit-year-partial':return {kind:'partial',message:'明細の変更は移動先年度に保存済みですが、移動元年度の整理は未完了の可能性があります。最新データを確認してください。'};

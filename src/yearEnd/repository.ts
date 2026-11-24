@@ -110,6 +110,15 @@ export class YearEndRepository {
   return value;
  }
  private async access():Promise<Access> {const vault=await cloudVault();return vault.yearEndAccess();}
+ private async withMutation<T>(operation:(a:Access)=>Promise<T>):Promise<T>{
+  const initial=await this.access();
+  return initial.graph.withWriteLock(async()=>{
+   const a=await this.access();
+   if(a.graph!==initial.graph||a.key!==initial.key||a.salt!==initial.salt||a.path.join('/')!==initial.path.join('/'))
+    throw new Error('保管庫の接続先または暗号世代が変更されました。再読み込みしてください。');
+   return operation(a);
+  });
+ }
  private personPath(a:Access,id:PersonId):string[]{return [...a.path,'persons',id];}
  private async readJson<T>(a:Access,kind:Exclude<Kind,'original'>,path:string[],name:string,max:number,directChild=false):Promise<Read<T>|null>{
   const file=directChild?await a.graph.read(path,name,max,true):await a.graph.read(path,name,max);if(!file)return null;
@@ -117,7 +126,7 @@ export class YearEndRepository {
  }
  private async writeJson(a:Access,kind:Exclude<Kind,'original'>,path:string[],name:string,value:unknown,prior:RemoteFile|null,max:number):Promise<RemoteFile>{
   const live=await this.access();
-  if(live.path.join('/')!==a.path.join('/')||live.key!==a.key||live.salt!==a.salt)
+  if(live.graph!==a.graph||live.path.join('/')!==a.path.join('/')||live.key!==a.key||live.salt!==a.salt)
    throw new Error('保管庫の暗号世代または鍵が変更されています。再読み込みしてください。');
   const encrypted=await encryptJson(kinds[kind],value,a.key,a.salt);
   await a.graph.write(path,name,encrypted,prior,max);
@@ -203,8 +212,9 @@ export class YearEndRepository {
   return (await this.activeProfile(a,id)).profile;
  }
  async createPerson(displayName:string,alias=''):Promise<PersonProfile>{
+  return this.withMutation(async a=>{
   if(!safeText(displayName)||alias.length>80||/[\u0000-\u001f]/.test(alias))throw new Error('表示名・補助識別名の形式が不正です。');
-  const a=await this.access(),id=randomPersonId(),at=new Date().toISOString();
+  const id=randomPersonId(),at=new Date().toISOString();
   // Establish an empty encrypted index before placing any person profile in the folder.
   const initial=await this.readIndex(a);
   if(!initial.file){
@@ -220,13 +230,16 @@ export class YearEndRepository {
    catch(error){if(isCollision(error))continue;throw error;}
   }
   throw new Error('従業員登録が競合しました。再実行してください。孤立したプロフィールは自動削除しません。');
+  });
  }
  async renamePerson(id:PersonId,name:string,alias:string,expectedName?:string):Promise<PersonProfile>{
+  return this.withMutation(async a=>{
   asPersonId(id);if(!safeText(name)||alias.length>80||/[\u0000-\u001f]/.test(alias))throw new Error('表示名が不正です。');
-  const a=await this.access(),current=await this.profile(a,id);
+  const current=await this.profile(a,id);
   if(expectedName!==undefined&&(current.value.displayName!==expectedName||current.value.alias!==alias))throw new Error('従業員名が更新されました。最新の一覧を確認してください。');
   const next={...current.value,displayName:clean(name),alias:clean(alias),updatedAt:new Date().toISOString()};
   await this.assertActive(a,id);await this.writeJson(a,'profile',this.personPath(a,id),'profile.enc',next,current.file,MAX_PROFILE);return next;
+  });
  }
  private async yearContext(a:Access,id:PersonId,year:number,create:boolean):Promise<{profile:Read<PersonProfile>;activeIndex:Read<PersonIndex>;data:YearData;file:RemoteFile|null;yearFile:string|null}>{
   asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
@@ -379,12 +392,13 @@ export class YearEndRepository {
   await this.writeJson(a,'year',[...this.personPath(a,id),'years'],name+'.enc',data,prior,MAX_YEAR);
  }
  async addDocument(id:PersonId,year:number,file:File,draft:DraftDocument,confirmed:boolean):Promise<DocumentRecord>{
+  return this.withMutation(async a=>{
   if(!confirmed)throw new Error('登録先と解析結果の最終確認が必要です。');
   asPersonId(id);if(!validYear(year)||!validDate(draft.paymentDate)||Number(draft.paymentDate.slice(0,4))!==year)throw new Error('選択した暦年と支給年月日が一致しません。');
   if(!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(draft.targetMonth)||!['salary','bonus'].includes(draft.kind))throw new Error('給与・賞与の区分または対象月が不正です。');
   const taxable=checkedMoney(draft.taxable);if(documentAmountWarnings(draft).length)throw new Error('支給額の検算に矛盾があります。一括保存画面から確認してください。');if(!(file instanceof Blob)||file.size<5||file.size>MAX_UPLOAD||file.type&&!['application/pdf','application/x-pdf',''].includes(file.type))throw new Error('PDF原本は25MB以内で指定してください。');
   const bytes=await file.arrayBuffer();if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw new Error('PDFのヘッダーが不正です。');
-  const digest=await hash(bytes);const a=await this.access(),current=await this.yearContext(a,id,year,true);
+  const digest=await hash(bytes);const current=await this.yearContext(a,id,year,true);
   if(current.data.documents.some(x=>x.fileHash===digest))throw new Error('同じPDFがこの従業員の年度に登録済みです。');
   // A PDF registered in another calendar year for the SAME person is still a duplicate.
   for(const otherYear of Object.keys(current.profile.value.yearFiles)){
@@ -416,6 +430,7 @@ export class YearEndRepository {
   try{await this.saveYear(a,id,year,current.file,next,current.yearFile,current);}
   catch(error){throw new Error('原本PDFは暗号化保存されましたが、年度データの確定に失敗しました。二重登録せず状態を確認してください。',{cause:error});}
   return record;
+  });
  }
  /** Update all payroll fields, optionally staging a different PDF original.
   * A replacement uses a NEW immutable encrypted original. The annual ETag is
@@ -428,6 +443,7 @@ export class YearEndRepository {
    updates:Array<{documentId:string;expectedRevision:number;draft:DraftDocument}>,
    additions:Array<{file:File;draft:DraftDocument}>,acknowledgedAmountWarning=false,onProgress?:(done:number,total:number)=>void,
    deletions:Array<{documentId:string;expectedRevision:number}>=[]):Promise<{data:YearData;yearFiles:PersonProfile['yearFiles'];cleanupPending:number}>{
+  return this.withMutation(async a=>{
   asPersonId(id);if(!validYear(year))throw new Error('保存先の暦年が不正です。');
   if(!updates.length&&!additions.length&&!deletions.length)throw new Error('保存する明細がありません。');
   if(updates.length+additions.length+deletions.length>50)throw new Error('一度に保存できる明細が多すぎます。');
@@ -448,7 +464,7 @@ export class YearEndRepository {
   }
   const perf=yearEndPerf('yearend-pdf-batch');let perfSuccess=false;
   try{
-  const a=await this.access(),context=await this.yearContext(a,id,year,Boolean(additions.length));
+  const context=await this.yearContext(a,id,year,Boolean(additions.length));
   const now=new Date().toISOString();
   let working:YearData={...context.data,documents:[...context.data.documents],estimates:[...context.data.estimates],
    bonusEstimates:[...context.data.bonusEstimates],noPaymentMonths:[...context.data.noPaymentMonths],history:[...context.data.history]};
@@ -554,28 +570,15 @@ export class YearEndRepository {
   }
   try{await this.saveYear(a,id,year,context.file,working,context.yearFile,context);}
   catch(error){throw new Error(pending.length?'暗号化PDF原本は保存されましたが、年度データの確定に失敗しました。二重登録せず再読み込みしてください。':'年度データの保存に失敗しました。再読み込みしてください。',{cause:error});}
-  // The annual ETag commit is authoritative. Original PDFs are moved to the
-  // OneDrive recycle bin only AFTER that successful commit. Cleanup failures
-  // cannot turn a committed save into an ambiguous retryable failure.
-  let cleanupPending=0;
-  if(removed.length){
-   const path=[...this.personPath(a,id),'originals'];
-   try{
-    const listed=await a.graph.listFolder(path);
-    if(!listed)throw new Error('原本フォルダを確認できません。');
-    const byName=new Map(listed.map(file=>[file.name,file]));
-    for(const record of removed){
-     const file=byName.get(record.id+'.enc');
-     if(!file||file.folder){cleanupPending++;continue;}
-     try{await a.graph.trashFile(path,file);}catch{cleanupPending++;}
-    }
-   }catch{cleanupPending=removed.length;}
-  }
+  // The annual commit is authoritative; keep encrypted originals for recovery.
+  const cleanupPending=removed.length;
   perfSuccess=true;
   return {data:working,yearFiles:context.profile.value.yearFiles,cleanupPending};
   }finally{perf.finish(perfSuccess);}
+  });
  }
  async updateDocument(id:PersonId,year:number,documentId:string,draft:DraftDocument,replacement:File|null=null):Promise<{cleanupPending:boolean}> {
+  return this.withMutation(async a=>{
   asDocumentId(documentId);asPersonId(id);
   if(!validYear(year)||!validDate(draft.paymentDate)||Number(draft.paymentDate.slice(0,4))!==year)
    throw new Error('支給日が選択中の年と一致しません。');
@@ -585,7 +588,7 @@ export class YearEndRepository {
   if(documentAmountWarnings(draft).length)throw new Error('支給額の検算に矛盾があります。一括保存画面から確認してください。');
   for(const k of ['gross','transportation','nonTaxable','healthInsurance','pension','employmentInsurance','incomeTax','residentTax'] as const)
    if(draft[k]!==null)checkedMoney(draft[k]);
-  const a=await this.access(),context=await this.yearContext(a,id,year,false);
+  const context=await this.yearContext(a,id,year,false);
   const prior=context.data.documents.find(r=>r.id===documentId);
   if(!prior)throw new Error('変更対象の明細が見つかりません。再読み込みしてください。');
   const incomingMonth=monthOf(draft.paymentDate);
@@ -642,22 +645,16 @@ export class YearEndRepository {
    history:[...context.data.history,{at:now,kind:'document-corrected',month:monthOf(prior.paymentDate),oldValue:prior.taxable,newValue:updated.taxable,documentId:updated.id}]};
   try{await this.saveYear(a,id,year,context.file,next,context.yearFile,context);}
   catch(error){throw new Error(bytes?'差し替えPDFは暗号化保存されましたが、明細の確定に失敗しました。元の明細は保持されています。再読み込みしてください。':'明細の更新に失敗しました。',{cause:error});}
-  let cleanupPending=false;
-  if(bytes){
-   try{
-    const originalPath=[...this.personPath(a,id),'originals'];
-    const old=(await a.graph.listFolder(originalPath))?.find(f=>f.name===prior.id+'.enc');
-    if(!old||old.folder)throw new Error('旧PDF原本の所在を確認できません。');
-    await a.graph.trashFile(originalPath,old);
-   }catch{cleanupPending=true;}
-  }
+  const cleanupPending=Boolean(bytes); // Intentionally retained, not a failed write.
   return {cleanupPending};
+  });
  }
  /** Delete one saved record with optimistic ETag protection. Invalidate forecasts
   * that reference it; move the encrypted PDF to OneDrive trash after the cutover. */
  async deleteDocument(id:PersonId,year:number,documentId:string):Promise<{cleanupPending:boolean}>{
+  return this.withMutation(async a=>{
   asDocumentId(documentId);asPersonId(id);
-  const a=await this.access(),context=await this.yearContext(a,id,year,false);
+  const context=await this.yearContext(a,id,year,false);
   const record=context.data.documents.find(r=>r.id===documentId);
   if(!record)throw new Error('削除対象の明細が見つかりません。最新データを読み込み直してください。');
   if(context.data.history.length>=1000)throw new Error('変更履歴の保存上限です。削除を中断しました。');
@@ -667,44 +664,44 @@ export class YearEndRepository {
    confirmedAt:null,
    history:[...context.data.history.filter(event=>event.documentId!==record.id),{at:new Date().toISOString(),kind:'document-deleted',month:monthOf(record.paymentDate),documentId:record.id}]};
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
-  let cleanupPending=false;
-  try{
-   const path=[...this.personPath(a,id),'originals'];
-   const file=(await a.graph.listFolder(path))?.find(f=>f.name===record.id+'.enc');
-   if(!file||file.folder)throw new Error('削除済みPDF原本の所在を確認できません。');
-   await a.graph.trashFile(path,file);
-  }catch{cleanupPending=true;}
+  const cleanupPending=true; // Intentionally retain the encrypted original.
   return {cleanupPending};
+  });
  }
  async correctDocument(id:PersonId,year:number,documentId:string,newTaxable:number):Promise<void>{
+  return this.withMutation(async a=>{
   asDocumentId(documentId);checkedMoney(newTaxable);
-  const a=await this.access(),context=await this.yearContext(a,id,year,false);
+  const context=await this.yearContext(a,id,year,false);
   const prior=context.data.documents.find(r=>r.id===documentId);if(!prior)throw new Error('対象の明細が見つかりません。');
   if(documentAmountWarnings({...prior,taxable:newTaxable}).length)throw new Error('金額の検算に矛盾があります。一括保存画面から確認してください。');
   const now=new Date().toISOString();const updated={...prior,taxable:newTaxable,revision:prior.revision+1,updatedAt:now,source:'manual-confirmed' as const};
   const next:YearData={...context.data,documents:context.data.documents.map(r=>r.id===documentId?updated:r),confirmedAt:null,
    history:[...context.data.history,{at:now,kind:'document-corrected' as const,month:monthOf(prior.paymentDate),oldValue:prior.taxable,newValue:newTaxable,documentId:prior.id}]};
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
+  });
  }
  async preview(id:PersonId,year:number,method:EstimateMethod,months:string[],manual:Record<string,number>):Promise<ForecastPreview>{
   return forecastPreview(await this.year(id,year),method,months,manual);
  }
  async commitForecast(id:PersonId,year:number,preview:ForecastPreview):Promise<void>{
-  const a=await this.access(),context=await this.yearContext(a,id,year,true);
+  return this.withMutation(async a=>{
+  const context=await this.yearContext(a,id,year,true);
   const manual:Record<string,number>={};for(const e of preview.estimated)Object.assign(manual,{[e.month]:e.amount});
   const fresh=forecastPreview(context.data,preview.method,preview.months,manual);
   if(JSON.stringify(fresh.references)!==JSON.stringify(preview.references))throw new Error('参考給与の金額が変更されました。見込みを再計算してください。');
   if(JSON.stringify(fresh.estimated.map(e=>[e.month,e.amount,e.references]))!==JSON.stringify(preview.estimated.map(e=>[e.month,e.amount,e.references])))throw new Error('見込み計算の根拠が更新されました。プレビューし直してください。');
   const next={...context.data,estimates:[...context.data.estimates.filter(e=>!preview.months.includes(e.month)),...fresh.estimated],confirmedAt:null};
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
+  });
  }
  /** Replace the complete salary forecast only after the user presses Save.
   * Legacy no-payment markers are folded into explicit zero-yen estimates on this write.
   * The original forecast state and calculation references prevent stale-tab overwrites. */
  async replaceForecast(id:PersonId,year:number,method:EstimateMethod,months:string[],overrides:Record<string,number>,
    previousEstimates:Estimate[],previousNoPaymentMonths:string[],expectedReferences:ForecastPreview['references']):Promise<void>{
+  return this.withMutation(async a=>{
   asPersonId(id);
-  const a=await this.access(),context=await this.yearContext(a,id,year,true);
+  const context=await this.yearContext(a,id,year,true);
   if(JSON.stringify(context.data.estimates)!==JSON.stringify(previousEstimates)||
    JSON.stringify(context.data.noPaymentMonths)!==JSON.stringify(previousNoPaymentMonths))
    throw new Error('別の画面で見込みが更新されました。再読み込みしてから保存してください。');
@@ -716,6 +713,7 @@ export class YearEndRepository {
   if(!next.noPaymentMonths.length&&JSON.stringify(next.estimates)===JSON.stringify(context.data.estimates)&&
     !context.data.noPaymentMonths.length)return;
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
+  });
  }
  /** Commit salary and bonus draft in a single encrypted annual-file update.
   * Protect against changed salary references, old estimates and other-tab edits. */
@@ -723,10 +721,11 @@ export class YearEndRepository {
   previousEstimates:Estimate[],previousNoPaymentMonths:string[],expectedReferences:ForecastPreview['references'],
    previousBonusEstimates:Estimate[],bonusDraft?:{month:string;amount:number}|{month:string;remove:true},
    salaryUpdate=true):Promise<void>{
+  return this.withMutation(async a=>{
   asPersonId(id);
   const perf=yearEndPerf('yearend-forecast');let perfSuccess=false;
   try{
-  const a=await this.access(),context=await this.yearContext(a,id,year,true);
+  const context=await this.yearContext(a,id,year,true);
   if(JSON.stringify(context.data.estimates)!==JSON.stringify(previousEstimates)||
    JSON.stringify(context.data.noPaymentMonths)!==JSON.stringify(previousNoPaymentMonths)||
    JSON.stringify(context.data.bonusEstimates)!==JSON.stringify(previousBonusEstimates))
@@ -769,38 +768,47 @@ export class YearEndRepository {
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
   perfSuccess=true;
   }finally{perf.finish(perfSuccess);}
+  });
  }
  async commitBonusEstimate(id:PersonId,year:number,month:string,amount:number):Promise<void>{
+  return this.withMutation(async a=>{
   asPersonId(id);checkedMoney(amount);
-  const a=await this.access(),context=await this.yearContext(a,id,year,true);
+  const context=await this.yearContext(a,id,year,true);
   bonusEstimatePreview(context.data,month,amount);
   const forecast={month,amount,method:'manual' as const,references:[],updatedAt:new Date().toISOString()};
   const next:YearData={...context.data,bonusEstimates:[...context.data.bonusEstimates.filter(e=>e.month!==month),forecast],confirmedAt:null};
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
+  });
  }
  async setNoPay(id:PersonId,year:number,month:string,noPay:boolean):Promise<void>{
+  return this.withMutation(async a=>{
   if(!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)||Number(month.slice(0,4))!==year)throw new Error('対象月が不正です。');
-  const a=await this.access(),context=await this.yearContext(a,id,year,true);
+  const context=await this.yearContext(a,id,year,true);
   if(noPay&&(context.data.documents.some(d=>d.kind==='salary'&&monthOf(d.paymentDate)===month)||context.data.estimates.some(e=>e.month===month)))throw new Error('実績または見込みが存在する月は支給なしにできません。');
   const next={...context.data,noPaymentMonths:noPay?[...new Set([...context.data.noPaymentMonths,month])]:context.data.noPaymentMonths.filter(m=>m!==month),confirmedAt:null};
   await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
+  });
  }
  /** No silent autosave: encrypted year JSON, checked with ETag and the existing write verification. */
  async saveYearMemo(id:PersonId,year:number,memo:string):Promise<void>{
+  return this.withMutation(async a=>{
   asPersonId(id);
   if(!validYearMemo(memo))throw new Error('年度メモは16,000文字以内で入力してください。');
   const perf=yearEndPerf('yearend-memo');let success=false;
   try{
-   const a=await this.access(),context=await this.yearContext(a,id,year,true);
+   const context=await this.yearContext(a,id,year,true);
    if((context.data.memo??'')===memo){success=true;return;}
    const next:YearData={...context.data,memo};
    await this.saveYear(a,id,year,context.file,next,context.yearFile,context);
    success=true;
   }finally{perf.finish(success);}
+  });
  }
  async recordConfirmation(id:PersonId,year:number):Promise<void>{
-  const a=await this.access(),context=await this.yearContext(a,id,year,true);
+  return this.withMutation(async a=>{
+  const context=await this.yearContext(a,id,year,true);
   await this.saveYear(a,id,year,context.file,{...context.data,confirmedAt:new Date().toISOString()},context.yearFile,context);
+  });
  }
  /** Read-only complete snapshot of the separate year-end namespace. All plaintext stays in RAM. */
  async exportBackupSnapshot(progress:(message:string)=>void=()=>{}):Promise<YearEndBackupData>{
@@ -1007,7 +1015,8 @@ export class YearEndRepository {
  /** Non-destructive restore: bring back missing or deleted people, keep active people untouched. */
  async restoreBackupSnapshot(data:YearEndBackupData,progress:(message:string)=>void=()=>{},
   options:{resumeVerifiedOrphans?:boolean}={}):Promise<{restored:number;skipped:number}>{
-  const a=await this.access();
+  return this.withMutation(async a=>{
+
   // Do not use readIndex() here: an interrupted first restore can have files but no index yet.
   const storedIndex=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
   const current:Read<PersonIndex>=storedIndex?{...storedIndex,value:validateIndex(storedIndex.value)}:
@@ -1121,6 +1130,7 @@ export class YearEndRepository {
   const merged=[...current.value.persons.map(p=>revived.get(p.id)??p),...entries.filter(p=>!indexed.has(p.id))];
   await this.writeJson(a,'index',a.path,'index.enc',{...emptyIndex(),persons:merged},current.file,MAX_INDEX);
   return {restored:entries.length,skipped};
+  });
  }
  /** 一括ZIP用。年度JSONは一度だけ取得し、各原本は最大3件並列で取得・復号・SHA-256照合。書込みなし。 */
  async originalsForYear(id:PersonId,year:number):Promise<VerifiedYearEndPdf[]> {
@@ -1163,7 +1173,8 @@ export class YearEndRepository {
  }
  /** Tombstone before trash: any stale client is refused by assertActive(). */
  async deletePerson(id:PersonId,expected?:{state:'active'|'deleting';displayName:string;alias:string}):Promise<{trashed:number;otherVersions:number}> {
-  asPersonId(id);const a=await this.access();let index=await this.readIndex(a);
+  return this.withMutation(async a=>{
+  asPersonId(id);let index=await this.readIndex(a);
   let person=index.value.persons.find(p=>p.id===id);if(!person||person.state==='deleted')throw new Error('対象の従業員は登録されていません。');
   if(expected&&person.state!==expected.state)throw new Error('従業員の削除状態が更新されました。最新の一覧を確認してください。');
   if(person.state==='active'){
@@ -1194,5 +1205,6 @@ export class YearEndRepository {
   if(index.value.persons.find(p=>p.id===id)?.state!=='deleting')throw new Error('削除記録が他端末で更新されました。');
   await this.writeJson(a,'index',a.path,'index.enc', {...index.value,persons:index.value.persons.map(p=>p.id===id?{...p,state:'deleted',updatedAt:new Date().toISOString()}:p)},index.file,MAX_INDEX);
   return {trashed,otherVersions:checked-1};
+  });
  }
 }

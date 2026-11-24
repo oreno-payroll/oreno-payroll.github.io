@@ -37,7 +37,8 @@ console.log('PASS: Payroll専用暗号形式、AAD、IV、改ざん検出、ID�
  const rememberedKey=await c.deriveKey('browser-key-preservation-test',rememberedSalt);
  const indexText=await c.encryptJson('index',{format:'payroll-index-v1',years:[],incomeYears:[]},rememberedKey,rememberedSalt);
  let remote=indexText;
- const graph={async read(parts,name){assert.deepEqual(parts,['payroll']);assert.equal(name,'index.enc');return {id:'index',etag:'e',text:remote,size:remote.length};}};
+ const graph={
+ async withWriteLock(operation){return operation();},async read(parts,name){assert.deepEqual(parts,['payroll']);assert.equal(name,'index.enc');return {id:'index',etag:'e',text:remote,size:remote.length};}};
  const candidate=new orig.PayrollVault(graph);
  await candidate.unlockWithKey(rememberedKey,rememberedSalt);
  const wrongSalt=c.createSalt();
@@ -85,7 +86,7 @@ const makeGraph = (source, metaSize) => {
     });
     throw Error('想定外のテスト通信: '+url.split('?')[0]);
   };
-  return new graphModule.PayrollGraph('test-token',fake);
+  return new graphModule.PayrollGraph('test-token',fake, undefined, undefined, undefined, false);
 };
 const htmlBody='<html><title>Sign in</title></html>';
 await assert.rejects(
@@ -139,7 +140,9 @@ const createZeroIndexMock = ({extra=false, indexBytes='', metadataSize=0} = {}) 
   }
   throw Error('予期しないクラウド通信: '+url.split('?')[0]);
  };
- return {graph:new graphModule.PayrollGraph('fake-token',mock),stats:()=>({patchCount,putCount,urls})};
+ const graph=new graphModule.PayrollGraph('fake-token',mock, undefined, undefined, undefined, false);
+ graph.withWriteLock=operation=>operation(); // This fixture tests only empty-index archive.
+ return {graph,stats:()=>({patchCount,putCount,urls})};
 };
 {
  const {graph,stats}=createZeroIndexMock();

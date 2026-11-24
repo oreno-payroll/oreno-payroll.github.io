@@ -19,6 +19,7 @@ const put=(path,name,value)=>{
  store.set(key,{id:key,etag:`revision-${++seq}`,size:encoder.encode(text).byteLength,text});
 };
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(path,name){
   const key=join(path,name);calls.body.push(key);
   if(hookRead)await hookRead(key);
@@ -130,7 +131,7 @@ assert.equal(count(calls.body,'/index.enc'),1,'one fresh active index plus a fin
 assert.equal(count(calls.meta,'/index.enc'),1,'active state is rechecked at final write');
 assert.equal(count(calls.body,'/profile.enc'),1,'verified unchanged profile needs one ciphertext GET');
 assert.equal(count(calls.meta,'/profile.enc'),1,'final profile identity and ETag are validated');
-assert.equal(calls.access,2,'initial access and immediate pre-write generation/key check remain');
+assert.equal(calls.access,3,'initial access, locked access and immediate pre-write generation/key checks remain');
 assert.equal(count(calls.body,'/years/'),2,'live year JSON and post-write readback still occur');
 assert.equal(count(calls.writes,'/years/'),1,'one ETag-protected annual write');
 assert.equal((await repo.year(id,2026)).memo,'保存済みの年度メモ');

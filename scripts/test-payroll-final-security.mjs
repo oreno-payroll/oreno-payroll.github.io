@@ -43,7 +43,7 @@ const doc={format:'payroll-annual-v1',records:[rec],deleted:[]};
   assert.match(path,/\/items\/folder:\/2026.enc$/);
   if(new Headers(init.headers).get('if-none-match')===tag){conditional++;return new Response(null,{status:304});}
   return Response.json({id:'item',eTag:tag,size:content.length,'@microsoft.graph.downloadUrl':signed});
- });
+ }, undefined, undefined, undefined, false);
  await assert.rejects(graph.read(['payroll'],'2026.enc',20),/世代が変更/);
  assert.equal((await graph.read(['payroll'],'2026.enc',20)).etag,'B');assert.equal(downloads,2);
  assert.equal((await graph.read(['payroll'],'2026.enc',20)).etag,'B');assert.equal(conditional,1);assert.equal(downloads,2);

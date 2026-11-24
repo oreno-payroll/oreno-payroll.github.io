@@ -47,7 +47,7 @@ const make=()=>{
   }
   throw Error('unexpected mock HTTP call: '+method+' '+url);
  };
- const graph=new PayrollGraph('mock-token',http,()=>state.mutation++);
+ const graph=new PayrollGraph('mock-token',http,()=>state.mutation++, undefined, undefined, false);
  graph.folder=async()=> 'folder-1';
  const parts=['payroll','statements'],name='2026.enc',limit=10_000;
  const read=()=>graph.read(parts,name,limit);

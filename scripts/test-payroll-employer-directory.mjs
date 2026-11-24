@@ -9,6 +9,7 @@ const A='emp_'+'a'.repeat(32),B='emp_'+'b'.repeat(32),C='emp_'+'c'.repeat(32);
 const a={id:A,name:'架空勤務先A',role:'main',current:true},b={id:B,name:'架空勤務先B',role:'main',current:false},c={id:C,name:'架空勤務先C',role:'side',current:true};
 const enc=new TextEncoder();
 class FakeGraph{
+ async withWriteLock(operation){return operation();}
  files=new Map();writes=0;discard=false;conflictOnce=false;serial=0;
  path(parts,name){return [...parts,name].join('/');}
  async read(parts,name){const item=this.files.get(this.path(parts,name));return item?{...item}:null;}

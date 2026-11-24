@@ -23,7 +23,7 @@ function testGraph(method,statuses){
  const graph=new PayrollGraph(async()=> 'cached-token',async (url,init)=>{
   sent++;reads.push({url,init});const status=statuses.shift()??200;
   return new Response(JSON.stringify(status===200?{id:'folder1'}:{error:{code:'invalidAuthenticationToken'}}),{status,headers:{'content-type':'application/json'}});
- },()=>{}, {invalidate(){invalidated++;},async refresh(){refreshes++;return 'fresh-token';}});
+ },()=>{}, {invalidate(){invalidated++;},async refresh(){refreshes++;return 'fresh-token';}}, undefined, false);
  return {graph,records:()=>({sent,refreshes,invalidated,reads}),method};
 }
 {

@@ -52,7 +52,7 @@ const remote=async (url,init={})=>{
  if(method==='PUT'&&pathname.includes('/august:/')){put++;return Response.json({id:'encrypted',size:3});}
  throw new Error(`unexpected mock Graph request ${method} ${pathname}`);
 };
-const g=new graph.PayrollGraph('mock-token',remote);
+const g=new graph.PayrollGraph('mock-token',remote, undefined, undefined, undefined, false);
 await g.write(['payroll','originals','2026','08'],'sample.enc','abc',null,200);
 assert.equal(folderMissing,1);
 assert.equal(created,1);

@@ -31,6 +31,7 @@ assert.match(ui,/pendingEdits\(\).*pendingDeletions\.size/);
 const store=new Map();let sequence=0,yearWrites=0,deletedOriginals=0,failYear=false,failTrash=false;
 const events=[];const pathKey=(path,name)=>[...path,name].join('/');
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(path,name){const v=store.get(pathKey(path,name));return v?{...v}:null;},
  async write(path,name,text,expected){
   const k=pathKey(path,name),current=store.get(k);
@@ -71,18 +72,18 @@ const repo=new api.YearEndRepository();
 const deletion=(record)=>({documentId:record.id,expectedRevision:record.revision});
 // Only deletion, no uploaded PDF. A single year write must precede recycle-bin cleanup.
 const deleted=await repo.saveDocumentsBatch(id,2026,[],[],false,undefined,[deletion(docs[0]),deletion(docs[1])]);
-assert.equal(deleted.data.documents.length,1);assert.equal(deleted.cleanupPending,0);
-assert.equal(yearWrites,1);assert.equal(deletedOriginals,2);
-assert.deepEqual(events,['year-commit','trash','trash']);
+assert.equal(deleted.data.documents.length,1);assert.equal(deleted.cleanupPending,2);
+assert.equal(yearWrites,1);assert.equal(deletedOriginals,0);
+assert.deepEqual(events,['year-commit']);
 assert.equal(deleted.data.estimates.length,0,'a removed PDF cannot retain salary forecast references');
 assert.ok(deleted.data.history.some(e=>e.kind==='document-deleted'&&e.documentId===a));
 // A stale revision must fail before changing the annual file or originals.
 await assert.rejects(repo.saveDocumentsBatch(id,2026,[],[],false,undefined,[deletion(docs[0])]),/更新されています/);
-assert.equal(yearWrites,1);assert.equal(deletedOriginals,2);
+assert.equal(yearWrites,1);assert.equal(deletedOriginals,0);
 // Failed annual ETag commit must NOT trash any original.
 failYear=true;
 await assert.rejects(repo.saveDocumentsBatch(id,2026,[],[],false,undefined,[deletion(docs[2])]),/年度データの保存に失敗/);
-assert.equal(yearWrites,1);assert.equal(deletedOriginals,2);
+assert.equal(yearWrites,1);assert.equal(deletedOriginals,0);
 failYear=false;
 // A removal and new import are committed atomically, once, after verifying the PDF.
 const incoming=Object.assign(new Blob(['%PDF-1.7 synthetic income sample'],{type:'application/pdf'}),{name:'march.pdf'});
@@ -93,13 +94,13 @@ const mixed=await repo.saveDocumentsBatch(id,2026,[],[{file:incoming,draft:incom
 assert.equal(yearWrites,beforeMixed+1,'a new PDF and pending deletion require one year commit');
 assert.equal(mixed.data.documents.length,1);
 assert.equal(mixed.data.documents[0].taxable,245000);
-assert.equal(mixed.cleanupPending,0);
-assert.equal(deletedOriginals,3);
+assert.equal(mixed.cleanupPending,1);
+assert.equal(deletedOriginals,0);
 // After successful annual commit, trash can fail without making a second save necessary.
 failTrash=true;
 const committed=await repo.saveDocumentsBatch(id,2026,[],[],false,undefined,[deletion(mixed.data.documents[0])]);
 assert.equal(committed.cleanupPending,1);assert.equal(committed.data.documents.length,0);
-assert.equal(yearWrites,3);assert.equal(deletedOriginals,3);
+assert.equal(yearWrites,3);assert.equal(deletedOriginals,0);
 assert.equal((await repo.year(id,2026)).documents.length,0);
 // Replace a complete year's source PDFs without intermediate saves. The exact
 // same hashes MUST be allowed when their old records are staged for deletion.
@@ -120,9 +121,9 @@ for(const row of replacementFiles)seed(originalPath,row.old.id+'.enc','encrypted
 const beforeFull=yearWrites;
 const fullReplacement=await repo.saveDocumentsBatch(id,2026,[],replacementFiles.map(({file,draft})=>({file,draft})),false,undefined,replacementFiles.map(r=>deletion(r.old)));
 assert.equal(fullReplacement.data.documents.length,10);
-assert.equal(fullReplacement.cleanupPending,0);
+assert.equal(fullReplacement.cleanupPending,10);
 assert.equal(yearWrites,beforeFull+1,'10 removals + 10 imports are committed in one annual write');
 assert.equal(JSON.stringify(fullReplacement.data.documents.map(r=>r.fileHash).sort()),JSON.stringify(replacementFiles.map(r=>r.old.fileHash).sort()));
-assert.equal(deletedOriginals,13,'all ten old originals are recycled after the annual commit');
+assert.equal(deletedOriginals,0,'old originals are retained after the annual commit');
 assert.equal((await repo.year(id,2026)).documents.length,10);
-console.log('PASS: compact in-list deletion UX, local-only X, undo all, revision guard, one annual commit, safe trash order, cleanup failure');
+console.log('PASS: compact in-list deletion UX, local-only X, undo all, revision guard, one annual commit, original retention');

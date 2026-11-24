@@ -27,7 +27,7 @@ const encoder=new TextEncoder();
   if(url.includes('statements:/')){files++;return new Response(null,{status:404});}
   throw new Error('unexpected path: '+url.split('?')[0]);
  };
- const g=new PayrollGraph('token',http);
+ const g=new PayrollGraph('token',http, undefined, undefined, undefined, false);
  const result=await Promise.all(Array.from({length:10},(_,i)=>g.read(['payroll','statements'],`${2020+i}.enc`,100)));
  assert.equal(result.filter(x=>x!==null).length,0);
  assert.equal(rootCalls,1,'only one concurrent app-folder root request');
@@ -47,7 +47,7 @@ const encoder=new TextEncoder();
   }
   return new Response(null,{status:404});
  };
- const g=new PayrollGraph('token',http);
+ const g=new PayrollGraph('token',http, undefined, undefined, undefined, false);
  assert.equal(await g.read(['payroll'],'file.enc',100),null);
  assert.equal(roots,2,'a transient 503 must retry the read-only root lookup once');
  console.log('PASS: a transient root 503 is retried and recovers');
@@ -63,7 +63,7 @@ const encoder=new TextEncoder();
   }
   return new Response(null,{status:404});
  };
- const g=new PayrollGraph('token',http);
+ const g=new PayrollGraph('token',http, undefined, undefined, undefined, false);
  await assert.rejects(g.read(['payroll'],'file.enc',100),/HTTP 503/);
  assert.equal(roots,3,'a persistent 503 must stop after two safe retries');
  assert.equal(await g.read(['payroll'],'file.enc',100),null);
@@ -71,6 +71,7 @@ const encoder=new TextEncoder();
  console.log('PASS: persistent root 503 fails after bounded retries; next lookup recovers');
 }
 class FakeGraph {
+ async withWriteLock(operation){return operation();}
  files=new Map(); reads=new Map(); writes=new Map(); yearStarts=[]; activeYears=0;maxYears=0;
  path(parts,name){return [...parts,name].join('/');}
  async read(parts,name){

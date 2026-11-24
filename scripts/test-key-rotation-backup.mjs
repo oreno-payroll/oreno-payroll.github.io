@@ -12,6 +12,7 @@ const result=await build({
 const {PayrollVault,InterruptedRotationError,GraphError,encryptJson,decryptJson,encryptBytes}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].contents).toString('base64'));
 const encoder=new TextEncoder();
 class FakeGraph {
+ async withWriteLock(operation){return operation();}
  files=new Map(); failOn=null; modifyOnMetadata=null; writes=[];reads=[];
  path(parts,name){return [...parts,name].join('/');}
  async read(parts,name){
@@ -296,13 +297,29 @@ async function prepared(){
  console.log('PASS: backup screen exposes controlled key rotation, download progress and success state');
 }
 
-// A2: old-copy authorization is issued only for a confirmed current-original trash.
+// A2: normal deletion preserves originals; only explicit verified trash authorizes old-copy cleanup.
+async function preservedOriginalAfterDeletion(graph,vault,record,current,old){
+ const currentBefore=graph.files.get(current),oldBefore=graph.files.get(old);
+ assert.ok(currentBefore);assert.ok(oldBefore);
+ await vault.removeBatch([{id:record.id,matches:r=>r.originalId===record.originalId}]);
+ assert.ok(!vault.records().some(r=>r.id===record.id),'statement deletion must be committed');
+ assert.deepEqual(graph.files.get(current),currentBefore,'normal deletion must preserve the current encrypted original');
+ assert.deepEqual(graph.files.get(old),oldBefore,'normal deletion must preserve the old encrypted original');
+ const index=await decryptJson('index',graph.files.get('payroll/index.enc').text,vault.sessionKey().key);
+ assert.equal(index.originalTrashHistory,undefined,'preservation must not authorize old-copy cleanup');
+ const report=await vault.inspectDetachedOriginals();
+ const candidate=report.originals.find(x=>x.uuid===record.originalId&&x.month===record.originalMonth);
+ assert.ok(candidate,'explicit cleanup must discover the preserved original');
+ assert.equal(candidate.id,currentBefore.id);assert.equal(candidate.etag,currentBefore.etag);
+ return {report,candidate};
+}
 {
  const {graph,vault}=await prepared();const record=vault.records()[0];
  const {generation}=await vault.changePassphrase(previous,changed);
  const current=`payroll/versions/${generation}/originals/2026/11/${record.originalId}.enc`,old=`payroll/originals/2026/11/${record.originalId}.enc`;
  const annualPath=`payroll/versions/${generation}/statements/2026.enc`,beforeAnnual=graph.files.get(annualPath);
- await vault.removeBatch([{id:record.id,matches:r=>r.originalId===record.originalId}]);
+ const {report,candidate}=await preservedOriginalAfterDeletion(graph,vault,record,current,old);
+ await vault.trashDetachedOriginal(report,candidate,new Set(['2026']));
  assert.ok(!graph.files.has(current));assert.ok(graph.files.has(old));
  const reopened=new PayrollVault(graph);await reopened.unlock(changed);await reopened.refresh({forceFresh:true});
  const key=reopened.sessionKey().key;
@@ -324,8 +341,9 @@ async function prepared(){
 for(const failReceipt of [false,true]){
  const {graph,vault}=await prepared();const record=vault.records()[0];const {generation}=await vault.changePassphrase(previous,changed);
  const current=`payroll/versions/${generation}/originals/2026/11/${record.originalId}.enc`,old=`payroll/originals/2026/11/${record.originalId}.enc`;
+ const {report,candidate}=await preservedOriginalAfterDeletion(graph,vault,record,current,old);
  graph.failTrash=!failReceipt;graph.failReceipt=failReceipt;
- await assert.rejects(vault.removeBatch([{id:record.id,matches:r=>r.originalId===record.originalId}]),e=>e.stage==='original-trash');
+ await assert.rejects(vault.trashDetachedOriginal(report,candidate,new Set(['2026'])),failReceipt?/test offline/:/synthetic trash failure/);
  graph.failOn=null;graph.failTrash=false;graph.failReceipt=false;
  const reopened=new PayrollVault(graph);await reopened.unlock(changed);await reopened.refresh({forceFresh:true});
  const index=await decryptJson('index',graph.files.get('payroll/index.enc').text,reopened.sessionKey().key);

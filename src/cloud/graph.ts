@@ -39,7 +39,81 @@ export class GraphError extends Error {
 }
 export const isCollision = (e: unknown): boolean => e instanceof GraphError && (e.status === 409 || e.status === 412);
 export interface CloudFolderItem {id:string;name:string;etag:string;folder:boolean;size:number}
+// A generation-independent sibling of payroll/, shared by personal and year-end writes.
+// The body is random ownership evidence only: no account, salary, key or timestamp.
+export const PAYROLL_WRITE_LOCK_NAME='payroll-write-lock-v1.bin';
+type WriteOwner={id:string;etag:string;text:string};
+const LOCK_RETAINED='書き込みロックが残っている可能性があります。再保存せず、設定の書き込みロック復旧手順を確認してください。';
 export class PayrollGraph {
+  private writeLockBusy=false;
+  private writeOwner:WriteOwner|null=null;
+  private writeAttempted=false;
+  private writeUncertain=false;
+  private requireWriteOwner():void {
+    if((this.enforceOperationLock||this.writeLockBusy)&&!this.writeOwner)
+      throw new Error('書き込みロックを取得していないため、OneDriveへの変更を拒否しました。');
+  }
+  private async verifyWriteOwner():Promise<void> {
+    this.requireWriteOwner();
+    const owner=this.writeOwner;if(!owner)return;
+    const current=await this.metadata([],PAYROLL_WRITE_LOCK_NAME);
+    if(!current||current.id!==owner.id||current.etag!==owner.etag||current.size!==owner.text.length)
+      throw new Error('書き込みロックの所有権が変化しました。保存を中断しました。');
+    this.assertCurrent();
+  }
+  /** The lock is never expired or stolen. A lost reply must not authorize a write.
+   * Hold across the complete multi-file operation and its readbacks, not per PUT. */
+  async withWriteLock<T>(operation:()=>Promise<T>):Promise<T> {
+    this.assertCurrent();
+    if(this.writeLockBusy)throw new Error('この画面で別の保存処理を実行中です。完了後に読み直してください。');
+    this.writeLockBusy=true;this.writeAttempted=false;this.writeUncertain=false;
+    try {
+      const parent=await this.root();
+      const text=(crypto.randomUUID()+crypto.randomUUID()).replace(/-/g,'');
+      const path=`/me/drive/items/${encodeURIComponent(parent)}:/${PAYROLL_WRITE_LOCK_NAME}:/content?@microsoft.graph.conflictBehavior=fail`;
+      let created:Item;
+      try {
+        const response=await this.request(path,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:new TextEncoder().encode(text)},false,undefined,true);
+        if(response.status!==201)throw new Error('ロック新規作成の応答が不正です。');
+        created=await response.json() as Item;
+      }catch(error){
+        if(isCollision(error))throw new Error('他の端末・タブで保存中か、前回の書き込みロックが残っています。時間切れによる自動解除は行いません。設定の書き込みロック復旧手順を確認してください。');
+        throw new Error('書き込みロックの取得を確認できません。'+LOCK_RETAINED,{cause:error});
+      }
+      if(!created.id||!created.eTag||created.name!==PAYROLL_WRITE_LOCK_NAME||created.size!==text.length)
+        throw new Error('書き込みロックの作成結果が一致しません。'+LOCK_RETAINED);
+      const proof=await this.read([],PAYROLL_WRITE_LOCK_NAME,64).catch(error=>{throw new Error(LOCK_RETAINED,{cause:error});});
+      if(!proof||proof.id!==created.id||proof.etag!==created.eTag||proof.text!==text||proof.size!==text.length)
+        throw new Error('書き込みロックの所有権を確認できません。'+LOCK_RETAINED);
+      this.writeOwner={id:proof.id,etag:proof.etag,text};
+      const release=async()=>{
+        const owner=this.writeOwner!;
+        const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+        if(!live||live.id!==owner.id||live.etag!==owner.etag||live.text!==owner.text||live.size!==owner.text.length)
+          throw new Error('書き込みロックの所有権が変化しました。解除しません。');
+        const response=await this.request(`/me/drive/items/${encodeURIComponent(owner.id)}`,{
+          method:'DELETE',headers:{'If-Match':owner.etag},
+        },false,undefined,true);
+        if(response.status!==204)throw new Error('書き込みロックの解除結果を確認できません。');
+      };
+      let result:T;
+      try{result=await operation();}
+      catch(error){
+        // Even a late readback failure can mean a multi-file operation partially
+        // committed. Retain the lock instead of guessing that all writes settled.
+        if(this.writeAttempted||this.writeUncertain){
+          if(error instanceof Error){error.message+=' '+LOCK_RETAINED;throw error;}
+          throw new Error(LOCK_RETAINED,{cause:error});
+        }
+        try{await release();}catch(releaseError){throw new Error(LOCK_RETAINED,{cause:releaseError});}
+        throw error;
+      }
+      if(this.writeUncertain)throw new Error('保存中の通信結果が不明です。'+LOCK_RETAINED);
+      try{await release();}catch(error){throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
+      return result;
+    }finally{this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.writeUncertain=false;}
+  }
+
   private rootId: string | undefined;
   private rootPending:Promise<string>|undefined;
   private folders = new Map<string,string>();
@@ -69,12 +143,12 @@ export class PayrollGraph {
     this.encryptedReadCacheBytes+=bytes;
   }
 
-  constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>},private readonly assertCurrent:()=>void=()=>{}) {}
-  private async request(path: string, init: RequestInit = {}, accept304=false,beforeSend?:()=>Promise<void>): Promise<Response> {
+  constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>},private readonly assertCurrent:()=>void=()=>{},private readonly enforceOperationLock=true) {}
+  private async request(path: string, init: RequestInit = {}, accept304=false,beforeSend?:()=>Promise<void>,lockControl=false): Promise<Response> {
     this.assertCurrent();
     const method=(init.method??'GET').toUpperCase();
     const readonly=method==='GET'||method==='HEAD';
-    if(!readonly){this.clearEncryptedReadCache();this.onMutation();}
+    if(!readonly&&!lockControl){this.requireWriteOwner();this.clearEncryptedReadCache();this.onMutation();}
     let bearer=typeof this.token==='function'?await this.token():this.token;
     this.assertCurrent();
     const graphUrl=`${BASE}${path}`;
@@ -82,6 +156,7 @@ export class PayrollGraph {
       const started=performance.now();
       this.assertCurrent();
       if(beforeSend){await beforeSend();this.assertCurrent();}
+      if(!readonly&&!lockControl){await this.verifyWriteOwner();if(this.writeOwner)this.writeAttempted=true;}
       try{const response=await this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});this.assertCurrent();return response;}
       finally{observeGraphTransfer('graph-api',performance.now()-started);}
     };
@@ -90,6 +165,7 @@ export class PayrollGraph {
       let r:Response;
       try {r=await send();}
       catch(error){
+        if(!readonly&&!lockControl&&this.writeOwner)this.writeUncertain=true;
         this.assertCurrent(); // A retired session is not a transient network failure.
         // GET/HEAD だけ、通信中断にも限定回数のバックオフを適用。
         if(readonly&&retries<READ_RETRIES){observeGraphRetry();await pause(350*2**retries++);continue;}
@@ -112,6 +188,7 @@ export class PayrollGraph {
       }
       // HTTP 304 is allowed only by an explicitly conditional, read-only caller.
       if (!r.ok && !(readonly&&accept304&&r.status===304)) {
+        if(!readonly&&!lockControl&&this.writeOwner&&r.status!==409&&r.status!==412)this.writeUncertain=true;
         let code = '';
         try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
         this.assertCurrent();
@@ -389,7 +466,7 @@ export class PayrollGraph {
         throw new Error('読み込み中に保管庫の保存操作が始まりました。再読み込みしてください。');
       const file={id:item.id!,etag:item.eTag!,text,size:item.size};
       // Profile, annual and income ciphertext only. Never cache encrypted PDFs.
-      if(!parts.includes('originals'))this.rememberEncryptedRead(cacheKey,file,byteLength);
+      if(name!==PAYROLL_WRITE_LOCK_NAME&&!parts.includes('originals'))this.rememberEncryptedRead(cacheKey,file,byteLength);
       return file;
     };
     const body = response.body;
@@ -470,6 +547,7 @@ export class PayrollGraph {
   /** 初回作成中断で残った「0バイト索引」を、明示同意後に非破壊で退避する。
    * 他のPayrollファイルがあれば新規作成を禁止し、既存データを保護する。 */
   async archiveEmptyIndex(): Promise<string> {
+  return this.withWriteLock(async()=>{
     const parent = await this.folder(['payroll'],false);
     if (!parent) throw new Error('Payrollフォルダーが見つかりません。');
     const list = await (await this.request(`/me/drive/items/${encodeURIComponent(parent)}/children?$select=id,name,size,eTag&$top=200`)).json() as {
@@ -499,7 +577,8 @@ export class PayrollGraph {
     const remaining = await this.read(['payroll'],'index.enc',1_000_000);
     if (remaining) throw new Error('退避後も旧索引が見つかります。新規作成を中止しました。');
     return archive;
-  }
+  });
+ }
   async write(parts: string[], name: string, text: string, prior: Pick<RemoteFile,'id'|'etag'>|null, limit: number, progress?:(sent:number,total:number)=>void): Promise<void> {
     this.assertCurrent();
     if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('クラウドファイル名が不正です。');
@@ -549,6 +628,7 @@ export class PayrollGraph {
     for(let start=0;start<bytes.length;start+=size) {
       this.assertCurrent();
       const end=Math.min(start+size,bytes.length);
+      await this.verifyWriteOwner();
       const response=await this.http(session.uploadUrl,{
         method:'PUT',credentials:'omit',headers:{'Content-Range':`bytes ${start}-${end-1}/${bytes.length}`},body:bytes.slice(start,end),
       });
@@ -566,6 +646,9 @@ export class PayrollGraph {
       }
       progress?.(end,bytes.length);
     }
+    } catch(error) {
+      if(this.writeOwner&&!isCollision(error))this.writeUncertain=true;
+      throw error;
     } finally {
       // Both success and failure invalidate all encrypted bodies and pending GETs.
       // Keep this after the final signed PUT (or its failure), never only after

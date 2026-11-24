@@ -28,6 +28,7 @@ const scope='00000000-0000-0000-0000-000000000000:account-a';
 const pass='test-only-strong-passphrase-for-mock';
 const enc=new TextEncoder();
 class FakeCloud{
+ async withWriteLock(operation){return operation();}
  files=new Map();reads=0;
  path(parts,name){return [...parts,name].join('/')}
  read(parts,name){this.reads++;return Promise.resolve(this.files.get(this.path(parts,name))??null)}
@@ -111,7 +112,7 @@ const remote=async(url,init={})=>{
   return Response.json({id:'item-created',size:init.body.byteLength});
  throw Error('Unexpected fake request');
 };
-const graph=new PayrollGraph('test-only-access-token',remote,invalidateNavigationSnapshot);
+const graph=new PayrollGraph('test-only-access-token',remote,invalidateNavigationSnapshot, undefined, undefined, false);
 await graph.write(['payroll'],'test.enc','encrypted-bytes',null,200);
 assert.equal(tab.getItem('payroll-navigation-snapshot-v1'),null,'actual Graph writes invalidate snapshot');
 console.log('PASS: Graph write prevents using old display data after save');

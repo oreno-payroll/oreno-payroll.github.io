@@ -29,6 +29,7 @@ for(const year of years)put(`payroll/statements/${year}.enc`,document([record(ye
 put(`payroll/originals/2026/05/${originalId}.enc`,'encrypted-only-synthetic-pdf');
 const calls={read:[],metadata:[],inventory:[],write:0};let originalHook=null,inventoryHook=null;
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(parts,name){const path=[...parts,name].join('/');calls.read.push(path);
   if(path.includes('/originals/')&&originalHook)await originalHook(path);
   const file=files.get(path);return file?{...file}:null;},

@@ -48,7 +48,7 @@ function fixture({malformed=false,missing=false,paged=false,create=false,unsafeN
       return Response.json({id:'file-id',size:init.body.byteLength},{status:201});
     throw Error('Unexpected URL or method: '+method+' '+p);
   };
-  return {graph:new PayrollGraph('fixture-token',http),calls,stats:()=>({lists,posts})};
+  return {graph:new PayrollGraph('fixture-token',http, undefined, undefined, undefined, false),calls,stats:()=>({lists,posts})};
 }
 {
   const {graph,calls,stats}=fixture();

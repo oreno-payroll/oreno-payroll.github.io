@@ -931,7 +931,7 @@ async function saveAllDocuments(){
   if(forecastSnapshot)restoreForecastInput(forecastSnapshot);
   if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
   if(result.data.documents.length)uploadAccordion.open=excluded.length>0;
-  if(result.cleanupPending)appStatus.partial(`明細の保存は完了しましたが、削除済みPDF原本${result.cleanupPending}件のごみ箱への移動は未完了です。`);
+  if(result.cleanupPending)appStatus.success(`明細を保存しました。暗号化PDF原本${result.cleanupPending}件は保全しています。`);
   else appStatus.success(excluded.length?`明細を保存しました。重複${excluded.length}件は除外しました。`:'明細を保存しました');
   resetSaveRecoveryStateAfterSuccess();
  }catch(error){

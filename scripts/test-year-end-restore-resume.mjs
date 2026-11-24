@@ -23,6 +23,7 @@ const path=(parts,name)=>[...parts,name].join('/');
 function env(){
  const remote=new Map();let serial=0,writing=0,interruptAt=0,trashCalls=0;
  const graph={
+ async withWriteLock(operation){return operation();},
   async read(parts,name){const r=remote.get(path(parts,name));return r?{...r}:null;},
   async metadata(parts,name){const r=remote.get(path(parts,name));return r?{etag:r.etag,id:r.id}:null;},
   async write(parts,name,text,prior){

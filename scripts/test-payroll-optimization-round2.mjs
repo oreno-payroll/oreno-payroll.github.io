@@ -19,6 +19,7 @@ put('payroll/index.enc',index);
 for(const y of years)put(`payroll/statements/${y}.enc`,annual([baseRecord(Number(y),y)]));
 const calls={read:[],meta:[],list:[]},reset=()=>{for(const v of Object.values(calls))v.length=0;};
 const graph={
+ async withWriteLock(operation){return operation();},
  async read(parts,name){const p=[...parts,name].join('/');calls.read.push(p);return files.get(p)??null;},
  async metadata(parts,name){const p=[...parts,name].join('/');calls.meta.push(p);const f=files.get(p);return f?{id:f.id,etag:f.etag,size:f.size}:null;},
  async listFolder(parts){const p=parts.join('/')+'/';calls.list.push(p);return [...files.entries()].filter(([n])=>n.startsWith(p)&&!n.slice(p.length).includes('/')).map(([name,f])=>({name:name.slice(p.length),folder:false,id:f.id,etag:f.etag,size:f.size}));},
@@ -35,7 +36,7 @@ const vault=new PayrollVault(graph);vault.key=key;vault.salt=salt;vault.index=in
 await vault.refresh({forceFresh:true});reset();
 let commits=0;
 vault.storeOriginal=async()=>{};
-vault.syncIncome=async()=>{};
+vault.syncIncomeUnderLock=async()=>{};
 vault.commit=async(year,doc)=>{
  commits++;
  const next=put(`payroll/statements/${year}.enc`,doc),valid=structuredClone(doc);
@@ -84,6 +85,7 @@ const yfiles=new Map(),ycall={index:0,profile:0,annual:0,writes:0},yroot=['payro
 const ypath=(parts,name)=>[...parts,name].join('/');
 const yput=(parts,name,value)=>{const p=ypath(parts,name);yfiles.set(p,toFile(p,value,'y-'+(++seq)));};
 const yg={
+ async withWriteLock(operation){return operation();},
  async read(parts,name){const p=ypath(parts,name);if(name==='index.enc')ycall.index++;else if(name==='profile.enc')ycall.profile++;else if(parts.includes('years'))ycall.annual++;return yfiles.get(p)??null;},
  async metadata(parts,name){const f=yfiles.get(ypath(parts,name));return f?{id:f.id,etag:f.etag,size:f.size}:null;},
  async listFolder(){return [];},

@@ -33,6 +33,7 @@ const initial=()=>{
 };
 const reset=()=>{calls.read.length=0;calls.meta.length=0;calls.listed.length=0;calls.write.length=0;};
 const graph={
+ async withWriteLock(operation){return operation();},
  hookRead:null,hookList:null,hookAfterWrite:null,
  async read(parts,name){
   const k=path(parts,name);calls.read.push(k);

@@ -22,6 +22,7 @@ const mod=await import('data:text/javascript;base64,'+Buffer.from(output.outputF
 const {PayrollVault,GraphError,encryptJson,encryptBytes,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,recordSignature}=mod;
 const encode=new TextEncoder();
 class FakeGraph{
+ async withWriteLock(operation){return operation();}
  files=new Map();reads=new Map();writes=new Map();
  path(parts,name){return [...parts,name].join('/');}
  put(path,text){this.files.set(path,{id:path,etag:'e'+(++this.revision),text,size:encode.encode(text).byteLength});}

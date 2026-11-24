@@ -88,7 +88,7 @@
               <p class="section-kicker">FILES</p>
               <h2>取り込みファイル <span class="count-badge" id="file-count">0件</span></h2>
             </div>
-            <button class="btn btn--ghost btn--small" type="button" id="clear-files" hidden>すべて削除</button>
+            <button class="btn btn--ghost btn--small" type="button" id="clear-files" hidden>選択したPDFをすべて外す</button>
           </div>
           <div class="progress-wrap" id="progress-wrap" role="status" aria-live="polite" hidden>
             <div class="progress-copy"><span>文字情報を確認しています</span><span id="progress-text">0 / 0</span></div>
@@ -206,6 +206,14 @@
             <div class="save-feedback__top"><span id="save-stage">準備中</span><span id="save-elapsed">経過 0:00</span></div>
             <div id="save-progress-track" class="save-feedback__track is-indeterminate" role="progressbar" aria-label="PDF送信の進捗" aria-valuemin="0" aria-valuemax="100"><div id="save-progress-fill" class="save-feedback__fill"></div></div>
             <p id="save-guidance" class="save-feedback__guidance">保存中はページを移動しないでください。</p>
+          </div>
+          <div id="upload-save-recovery" class="upload-save-recovery" hidden role="status" aria-live="polite">
+            <strong>保存結果の再確認が必要です</strong>
+            <p id="upload-save-recovery-status">OneDriveの状態を確認するまで再保存できません。</p>
+            <div class="upload-save-recovery__actions">
+              <button type="button" class="btn btn--secondary" id="upload-save-recheck">OneDriveの状態を再確認</button>
+              <button type="button" class="btn btn--secondary" id="upload-save-reload" disabled>保存済みデータを読み直す</button>
+            </div>
           </div>
           <div id="save-duplicates" class="save-duplicates" hidden aria-label="保存から除外したファイル">
             <strong id="save-duplicate-title" class="save-duplicates__title"></strong>

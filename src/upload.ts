@@ -10,7 +10,9 @@ import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 import { createCoordinateDiagnostic } from "./pdf/diagnostic";
 import { redactCoordinateDiagnostic } from "./pdf/redactDiagnostic";
 import { parsePayroll, type PdfTextCell, type PayrollParseResult } from "./pdf/payrollParser";
-import { saveRecordsSkippingDuplicates, type SavedPayrollRecordInput } from "./storage/payrollStore";
+import { saveRecordsSkippingDuplicates, recordSignature, type SavedPayrollRecordInput } from "./storage/payrollStore";
+import { cloudVault } from "./cloud/auth";
+import { inspectUploadRecovery, type UploadRecoveryAttempt } from "./storage/uploadRecovery";
 import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayrollForm, type PayrollFieldKey } from "./storage/payrollValidation";
 import {createPayrollSemantics} from './storage/payrollSemantics';
 import {validEmployerId,createEmployerId} from './storage/employerIdentity';
@@ -125,6 +127,10 @@ const saveElapsed = $<HTMLElement>("save-elapsed");
 const saveProgress = $<HTMLElement>("save-progress-track");
 const saveProgressFill = $<HTMLElement>("save-progress-fill");
 const saveGuidance = $<HTMLElement>("save-guidance");
+const uploadRecovery = $<HTMLElement>("upload-save-recovery");
+const uploadRecoveryStatus = $<HTMLElement>("upload-save-recovery-status");
+const uploadRecoveryRecheck = $<HTMLButtonElement>("upload-save-recheck");
+const uploadRecoveryReload = $<HTMLButtonElement>("upload-save-reload");
 const saveDuplicates = $<HTMLElement>("save-duplicates");
 const saveDuplicateList = $<HTMLUListElement>("save-duplicate-list");
 const saveDuplicateTitle = $<HTMLElement>("save-duplicate-title");
@@ -136,6 +142,10 @@ let nextId = 1;
 let reading = false;
 let saving = false;
 let leavingAfterSave = false;
+let uploadSaveRecoveryRequired=false;
+let uploadSaveRecoveryChecked=false;
+let uploadSaveRecoveryChecking=false;
+let uploadSaveAttempt:UploadRecoveryAttempt[]=[];
 let wasParsing=false;
 let saveTick:ReturnType<typeof setInterval>|undefined;
 let saveStartedAt=0;
@@ -495,7 +505,7 @@ function render(): void {
   updateSaveState();
 }
 function removeFile(id: number): void {
-  if (saving) return;
+  if (saving || uploadSaveRecoveryChecking) return;
   const entry = entries.find(item => item.id === id);
   if (entry) abortEntry(entry);
   if (entry?.previewUrl) URL.revokeObjectURL(entry.previewUrl);
@@ -505,7 +515,7 @@ function removeFile(id: number): void {
   render();
 }
 function addFiles(files: File[]): void {
-  if (saving) { notice("保存処理中はPDFを追加できません。"); return; }
+  if (saving || uploadSaveRecoveryChecking) { notice("保存処理中はPDFを追加できません。"); return; }
   if (!files.length) return;
   saveFeedback.hidden=true;
   let rejected = 0;
@@ -806,13 +816,15 @@ function zeroIntroducedWarnings(entry: Entry): string[] {
   return validatePayrollForm(prepared.form).warnings.filter(warning=>!before.has(warning));
 }
 function updateSaveState(): void {
-  const locked = saving || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
+  const locked = saving || uploadSaveRecoveryChecking || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
-  fileInput.disabled = saving;
-  mobileFilePicker.disabled = saving;
-  dropZone.setAttribute("aria-disabled",saving?"true":"false");
-  clearButton.disabled = saving;
-  for (const button of Array.from(fileList.querySelectorAll<HTMLButtonElement>("button"))) button.disabled = saving;
+  fileInput.disabled = saving || uploadSaveRecoveryChecking;
+  mobileFilePicker.disabled = saving || uploadSaveRecoveryChecking;
+  dropZone.setAttribute("aria-disabled",saving||uploadSaveRecoveryChecking?"true":"false");
+  clearButton.disabled = saving || uploadSaveRecoveryChecking;
+  for (const button of Array.from(fileList.querySelectorAll<HTMLButtonElement>("button"))) button.disabled = saving || uploadSaveRecoveryChecking;
+  uploadRecoveryRecheck.disabled = saving || uploadSaveRecoveryChecking || !uploadSaveRecoveryRequired;
+  uploadRecoveryReload.disabled = saving || uploadSaveRecoveryChecking || !uploadSaveRecoveryRequired || !uploadSaveRecoveryChecked;
   const pending = entries.some(entry => entry.status === "queued" || entry.status === "reading");
   const uploadable = candidates();
   const issueEntries = uploadable.filter(hasReviewIssue);
@@ -842,17 +854,19 @@ function updateSaveState(): void {
     item.textContent=`${entry.file.name}：${fields.map(field=>ZERO_OPTIONAL_AMOUNT_LABELS[field]).join('・')}`;
     return item;
   }));
-  saveButton.disabled = saving || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
+  saveButton.disabled = saving || uploadSaveRecoveryRequired || uploadSaveRecoveryChecking || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
   saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
   const isEmpty=entries.length===0;
   workspace.classList.toggle('is-empty',isEmpty);
   saveBar.classList.toggle('is-empty',isEmpty&&!saving);
   saveStatus.hidden=isEmpty&&!saving;
-  uploadGuide.textContent=isEmpty?'PDFを追加してください。':saving?'OneDriveへ保存しています…':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
+  uploadGuide.textContent=uploadSaveRecoveryRequired?'前回の保存結果が未確認です。OneDriveを再照合してください。':isEmpty?'PDFを追加してください。':saving?'OneDriveへ保存しています…':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
   if (saving) {
     saveStatus.textContent = `${entries.length}件のPDFと明細を保存しています…`;
   } else if (!entries.length) {
     saveStatus.textContent = "";
+  } else if (uploadSaveRecoveryRequired) {
+    saveStatus.textContent = "保存結果の確認が必要です。OneDriveの照合が完了するまで再保存できません。";
   } else if (pending) {
     saveStatus.textContent = `PDFの解析完了後に保存できます（全${entries.length}件）。`;
   } else if (badPdf) {
@@ -868,9 +882,35 @@ function updateSaveState(): void {
     saveStatus.textContent = `${uploadable.length}件を保存できます。${duplicateCount ? `一覧内の同一PDF ${duplicateCount}件は対象外。` : ""}既存データとの重複はスキップします。`;
   }
 }
+uploadRecoveryRecheck.addEventListener('click',()=>{void(async()=>{
+  if(saving||uploadSaveRecoveryChecking||!uploadSaveRecoveryRequired)return;
+  uploadSaveRecoveryChecking=true;uploadSaveRecoveryChecked=false;updateSaveState();
+  uploadRecoveryStatus.textContent='OneDriveの年度別明細と暗号化PDF原本を照合しています…';
+  try{
+    const report=await inspectUploadRecovery(await cloudVault(),uploadSaveAttempt,recordSignature);
+    uploadSaveRecoveryChecked=true;
+    uploadRecoveryStatus.textContent=`OneDriveの照合が完了しました。対象${report.attempted}件のうち、${report.saved}件は保存済みです。再開前に「保存済みデータを読み直す」を押してください。`;
+  }catch(error){
+    uploadRecoveryStatus.textContent=`安全な再保存を確認できませんでした：${error instanceof Error?error.message:'通信エラー'}。この画面で再保存しないでください。`;
+  }finally{uploadSaveRecoveryChecking=false;updateSaveState();}
+ })()});
+uploadRecoveryReload.addEventListener('click',()=>{void(async()=>{
+  if(saving||uploadSaveRecoveryChecking||!uploadSaveRecoveryRequired||!uploadSaveRecoveryChecked)return;
+  if(!window.confirm('選択中のPDFと未保存の入力内容を破棄して、最新のOneDrive保存状態を読み直します。必要なPDFは再度選択してください。続けますか？'))return;
+  uploadSaveRecoveryChecking=true;uploadSaveRecoveryChecked=false;updateSaveState();
+  uploadRecoveryStatus.textContent='画面を戻す直前にOneDriveを再照合しています…';
+  try{
+    await inspectUploadRecovery(await cloudVault(),uploadSaveAttempt,recordSignature);
+    leavingAfterSave=true; // The user confirmed discarding drafts; bypass only the local beforeunload prompt.
+    window.location.reload();
+  }catch(error){
+    uploadRecoveryStatus.textContent=`再確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}。再保存しないでください。`;
+  }finally{uploadSaveRecoveryChecking=false;updateSaveState();}
+ })()});
 saveButton.addEventListener("click", async () => {
-  if (saving || saveButton.disabled) return;
+  if (saving || uploadSaveRecoveryRequired || saveButton.disabled) return;
   const uploadable = candidates();
+  const attempt:UploadRecoveryAttempt[]=uploadable.map(entry=>({targetMonth:entry.form.targetMonth,fileHash:entry.hash??''}));
   const errorEntry = uploadable.find(entry => formError(entry)||!validEmployerId(entry.employerId));
   if (errorEntry) {
     selectFile(errorEntry.id);
@@ -975,6 +1015,9 @@ saveButton.addEventListener("click", async () => {
     if(!skipped) window.setTimeout(() => window.location.assign('../index.html'), 1500);
   } catch (error) {
     leavingAfterSave = false;
+    // After any uncertain batch failure, block repeat writes until a full read-only recovery.
+    uploadSaveRecoveryRequired=true;uploadSaveRecoveryChecked=false;uploadSaveAttempt=attempt;
+    uploadRecovery.hidden=false;uploadRecoveryStatus.textContent='OneDriveへの保存結果を確認できません。確認が終わるまで再保存しないでください。';
     stopSaveClock();saveFeedback.classList.add('is-failed');
     saveStage.textContent='保存を完了できませんでした';
     saveProgress.classList.remove('is-indeterminate');saveProgressFill.style.width='0%';

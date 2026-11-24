@@ -7,8 +7,10 @@ export default defineConfig({
   testMatch: '**/e2e-payroll-spec.mjs',
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : 1,
+  // Fail on the first regression; do not hide an auth-gate failure behind a retry.
+  retries: 0,
+  // Isolate Chromium cold starts across desktop and mobile to reduce CPU contention.
+  workers: 1,
   timeout: 30_000,
   expect: { timeout: 10_000 },
   reporter: [['list']],

@@ -62,6 +62,8 @@ async function simulate(mode){
   clearGateError:e=>{e.hidden=true;e.textContent='';},
   showGateError:(e,m)=>{errors.push(m);e.hidden=false;e.textContent=m;},
   MicrosoftSignInRequiredError:class extends Error{},
+  microsoftDiagnostic:()=>({message:'Microsoft認証の初期化に失敗しました。'}),
+  offline:()=>false,
   setTimeout:(f,ms)=>{assert.equal(ms,7000);callbacks.set(1,f);return 1;},
   clearTimeout:id=>callbacks.delete(id),
   window:{location:{reload:()=>{reloads++;}}},
@@ -97,7 +99,7 @@ async function simulate(mode){
   }else{
    assert.equal(ui.loginForm.hidden,false,'failed MSAL reveals recovery action');
    assert.equal(ui.checking.hidden,true);
-   assert.match(ui.loginError.textContent,/simulated HTTP 503/);
+   assert.match(ui.loginError.textContent,/Microsoft認証の初期化に失敗/);
   }
  }
  assert.equal(loaded,0);

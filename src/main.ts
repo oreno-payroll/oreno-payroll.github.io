@@ -6,6 +6,7 @@ import { capturePdfHandoffAuthorization } from './cloud/auth';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
 import { deleteRecord, getOriginalForVerifiedEdit, getOriginalForCurrentView, loadRecordSummaries, summaryCacheInfo, recordSignature, type SavedPayrollRecord, type SavedPayrollSummary } from './storage/payrollStore';
 import {PayrollPartialSuccessError} from './storage/operationError';
+import {incompleteDeleteIncomeNotice} from './ui/deleteOutcome';
 import {mutationEpoch} from './cloud/snapshot';
 import { amountOrMissing } from './storage/payrollValidation';
 import { summary, withEstimates, type Summary, type SummaryKey } from './forecast/summary';
@@ -387,10 +388,13 @@ function renderList(job: Job, records: SavedPayrollSummary[]): void {
         await deleteRecord(record.id, recordSignature(record));
         appStatus.success('明細を削除しました');
       } catch (error) {
-        appStatus.error(error instanceof Error?error.message:String(error));
-        if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync')
-          window.alert(`明細の削除は完了していますが、Finance連携の収入同期が未完了です。\n${error.message}`);
-        else window.alert(`削除処理を完了できませんでした。\n${error instanceof Error ? error.message : String(error)}`);
+        if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
+          appStatus.clear();
+          window.alert(incompleteDeleteIncomeNotice());
+        }else{
+          appStatus.error(error instanceof Error?error.message:String(error));
+          window.alert(`削除処理を完了できませんでした。\n${error instanceof Error ? error.message : String(error)}`);
+        }
       } finally {
         deletingRecordIds.delete(record.id);
         remove.disabled = false;

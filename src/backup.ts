@@ -1,4 +1,6 @@
 import { createAppStatus } from './ui/appStatus';
+import {microsoftDiagnostic} from './cloud/msalPolicy';
+import {operationFeedback,type OperationResult} from './ui/operationOutcome';
 /** 暗号化完全バックアップの書出・PDF.jsでの復元前検査・全件置換。 */
 import type {OrphanAnnualYear,DetachedOriginalReport,DetachedOriginal} from './cloud/vault';
 import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, verifyLegacyIndexedDbCloudBeforeDelete, deleteLegacyIndexedDb, loadRecords, loadRecordSummaries, payrollSnapshot, replaceAllRecords } from './storage/payrollStore';
@@ -65,6 +67,10 @@ let loadedDb = false;
 let encryptedFile = false;
 const appStatus=createAppStatus();
 type Operation = {label:string;result:string};
+let operationResult:OperationResult|null=null;
+let operationCancelled=false;
+function finishOperation(status:OperationResult['status'],message?:string):void{operationResult={status,message:message??''};}
+function cancelOperation():void{operationCancelled=true;}
 let currentOperation: Operation|null=null;
 let wasBusy=false;
 const operations: Record<string,Operation>={
@@ -91,16 +97,20 @@ document.addEventListener('click',event=>{
  const target=event.target;
  if(!(target instanceof Element))return;
  const button=target.closest<HTMLButtonElement>('button[id]');
- if(button&&!button.disabled&&operations[button.id])currentOperation=operations[button.id];
+ if(button&&!button.disabled&&operations[button.id]){currentOperation=operations[button.id];operationResult=null;operationCancelled=false;}
 },true);
 function reportStatusTransition(){
  if(busy&&!wasBusy)appStatus.loading(`${currentOperation?.label??'設定を処理'}しています…`);
  if(!busy&&wasBusy){
   const operation=currentOperation;
-  const message=operation?document.getElementById(operation.result)?.textContent?.trim()??'':'';
-  if(/失敗|できません|中断|停止|エラー|未完了|問題|不正/.test(message))appStatus.error(message.slice(0,240));
-  else appStatus.success(`${operation?.label??'設定の処理'}が完了しました`);
-  currentOperation=null;
+  // The operation sets its result explicitly; UI wording never decides success/failure.
+  if(operationCancelled||!operation)appStatus.clear();
+  else {
+   const notification=operationFeedback(operation.label,operationResult);
+   if(notification.kind==='success')appStatus.success(notification.message);
+   else appStatus.error(notification.message);
+  }
+  currentOperation=null;operationResult=null;operationCancelled=false;
  }
  wasBusy=busy;
 }
@@ -179,7 +189,7 @@ function updateButtons(): void {
 function info(message: string, isError = false): void {
   status.textContent = message;
   status.style.color = isError ? 'var(--color-danger)' : 'var(--color-success)';
-  if(isError)appStatus.error(message);
+  if(isError){if(busy)finishOperation('error');appStatus.error(message);}
   else if(busy)appStatus.loading(message);
   else if(message)appStatus.success(message);
 }
@@ -228,7 +238,7 @@ exportButton.addEventListener('click', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
     exportPassword.value = '';
     exportConfirm.value = '';
-    info(`暗号化バックアップを作成しました（${sizes(blob.size)}）。保存先でファイルがあることを確認してください。`);
+    info(`暗号化バックアップを作成しました（${sizes(blob.size)}）。保存先でファイルがあることを確認してください。`);finishOperation('success');
   } catch (error) { info(`バックアップに失敗しました: ${error instanceof Error ? error.message : String(error)}`, true); }
   finally { if(timer)clearInterval(timer);busy = false;updateButtons(); }
 });
@@ -242,7 +252,7 @@ async function verifyRestore(file: File, password?: string): Promise<void> {
     preview = loaded;
     restorePassword.value = '';
     restorePreview.textContent = `検証完了：${loaded.records.length}件 ・ PDF ${sizes(loaded.bytes)}\n作成日時：${new Date(loaded.exportedAt).toLocaleString('ja-JP')}${loaded.unreviewedWarnings ? `\n旧データの検算未承認：${loaded.unreviewedWarnings}件` : ''}${loaded.legacyDuplicates ? `\n旧データの重複候補：${loaded.legacyDuplicates}件` : ''}`;
-    info('バックアップを検証しました。復元内容を確認してください。');
+    info('バックアップを検証しました。復元内容を確認してください。');finishOperation('success');
   } catch (error) {
     preview = undefined;
     restorePreview.textContent = '検証失敗。既存データは変更されていません。';
@@ -284,14 +294,14 @@ restoreButton.addEventListener('click', async () => {
   if (!window.confirm(`現在の${currentCount}件を削除して、バックアップ内の${data.records.length}件で完全に置き換えます。続けますか？`)) return;
   busy = true; updateButtons(); info('全件復元中です。操作完了を確認してください…');
   try {
-    await replaceAllRecords(data.records, snapshot);
+    await replaceAllRecords(data.records, snapshot);finishOperation('success');
     window.location.assign('../index.html');
   } catch (error) {
     // 別タブで変更されていた場合も、古い復元確認を再利用できないようにする。
     resetPreview();
     restorePreview.textContent = '復元を中断しました。バックアップの検証からやり直してください。';
     try { await refreshCount(); } catch { /* データの読み込み失敗は以下の詳細エラーを優先 */ }
-    info(`復元が途中で停止しました。OneDriveの明細を確認してください: ${error instanceof Error ? error.message : String(error)}`, true);
+    info(`復元が途中で停止しました。OneDriveの明細を確認してください: ${error instanceof Error ? error.message : String(error)}`, true);finishOperation('partial');
     busy = false; updateButtons();
   }
 });
@@ -319,6 +329,7 @@ browserKeyForget.addEventListener('click',()=>{void(async()=>{
 })()});
 
 const cloudState=$<HTMLElement>('backup-cloud-status');
+const cloudDiagnostic=$<HTMLElement>('backup-cloud-diagnostic');
 const cloudLogin=$<HTMLButtonElement>('backup-cloud-login');
 const cloudReconnect=$<HTMLButtonElement>('backup-cloud-reconnect');
 const cloudLogout=$<HTMLButtonElement>('backup-cloud-logout');
@@ -329,10 +340,12 @@ async function refreshCloudSettings():Promise<boolean>{
  const state=await cloudConnectionState();
  cloudId.value=state.clientId;
  cloudState.textContent=state.status==='connected'?`Microsoft認証済み · ${state.user??'Microsoftアカウント'}`:
-  state.status==='reauth'?`Microsoftアカウントの再認証が必要 · ${state.user??''}`:
-  state.status==='temporary'?'一時的にMicrosoft認証を確認できません。通信を確認してください。':
+  state.status==='reauth'?`${state.error??'Microsoftアカウントの再認証が必要です。'} · ${state.user??''}`:
+  state.status==='temporary'?(state.error??'Microsoft認証を確認できませんでした。再接続してください。'):
   state.clientId?'Microsoftアカウントが未接続':'Client ID未設定';
  cloudState.dataset.error=String(state.status==='reauth'||state.status==='temporary');
+ cloudDiagnostic.hidden=!state.diagnosticCode;
+ cloudDiagnostic.textContent=state.diagnosticCode?`診断コード：${state.diagnosticCode}（認証情報・個人情報は含みません）`:'';
  cloudLogin.disabled=!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(state.clientId);
  cloudLogin.textContent=state.user?'別のアカウントでログイン':'Microsoftアカウントを選択';
  cloudReconnect.hidden=state.status==='connected'||!state.clientId;
@@ -352,21 +365,34 @@ cloudSave.addEventListener('click',()=>{void(async()=>{
   const changed=await saveCloudClientId(cloudId.value);
   if(changed==='changed'){location.reload();return;}
   cloudState.textContent='Client IDは設定済みです。';
- }catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';}
+ }catch{
+  // Client ID settings failures are not necessarily MSAL errors. Never echo raw
+  // exceptions: local storage, worker and auth failures may include unsafe details.
+  const malformed=!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(cloudId.value.trim());
+  cloudState.textContent=malformed
+   ? 'Client IDの形式が正しくありません。UUID形式を入力してください。'
+   : '接続設定を保存できませんでした。ページを再読み込みして再試行してください。';
+  cloudState.dataset.error='true';
+  cloudDiagnostic.hidden=malformed;
+  cloudDiagnostic.textContent=malformed?'':'診断コード：AUTH_SETTINGS';
+ }
  finally{cloudSave.disabled=false;}
 })()});
 cloudReconnect.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
  cloudReconnect.disabled=true;
  try{await reconnectMicrosoftAccount();await refreshCloudSettings();}
- catch(error){cloudState.textContent=error instanceof Error?error.message:'Microsoft認証を確認できませんでした。';cloudState.dataset.error='true';}
+ catch(error){const info=microsoftDiagnostic(error,typeof navigator!=='undefined'&&navigator.onLine===false);cloudState.textContent=info.message;cloudDiagnostic.hidden=false;cloudDiagnostic.textContent=`診断コード：${info.code}`;cloudState.dataset.error='true';}
  finally{cloudReconnect.disabled=false;}
 })()});
 cloudLogin.addEventListener('click',()=>{void(async()=>{
  if(busy)return;
+ // This action locks ALL Payroll tabs, revokes in-memory keys and can discard unsaved edits.
+ // Do not even start MSAL initialization or the lock flow before the user agrees.
+ if(!window.confirm('別のMicrosoftアカウントへ切り替えると、開いているPayrollのすべてのタブをロックし、メモリ上の復号鍵を消去します。\n他のタブで未保存の編集内容がある場合は失われます。保存を確認してから続けますか？'))return;
  cloudLogin.disabled=true;
  try{await chooseMicrosoftAccount();}
- catch(error){cloudState.textContent=error instanceof Error?error.message:String(error);cloudState.dataset.error='true';cloudLogin.disabled=false;}
+ catch(error){const info=microsoftDiagnostic(error,typeof navigator!=='undefined'&&navigator.onLine===false);cloudState.textContent=info.message;cloudDiagnostic.hidden=false;cloudDiagnostic.textContent=`診断コード：${info.code}`;cloudState.dataset.error='true';cloudLogin.disabled=false;}
 })()});
 let logoutRedirectReady=false;
 cloudLogout.addEventListener('click',()=>{void(async()=>{
@@ -388,7 +414,7 @@ cloudLoad.addEventListener('click',()=>{void(async()=>{
  if(busy||loadedDb)return;
  cloudLoad.disabled=true;
  exportSummary.textContent='OneDriveの明細を読み込んでいます…';
- try{await refreshCount();cloudLoad.hidden=true;}
+ try{await refreshCount();cloudLoad.hidden=true;finishOperation('success');}
  catch(error){
   exportSummary.textContent='OneDrive明細を読み込めませんでした。';
   info(error instanceof Error?error.message:String(error),true);
@@ -425,8 +451,8 @@ orphanCheck.addEventListener('click',()=>{void(async()=>{
   orphanStatus.textContent=orphanYears.length
    ? `孤立した年度：${orphanYears.map(v=>`${v.year}年度（${v.records}件${v.records===0?"・空の年度ファイル":""}）`).join('、')}。内容を確認してから復旧してください。`
    : '索引未登録の明細データは見つかりませんでした。';
-  orphanRecover.hidden=!orphanYears.length;
- }catch(error){orphanStatus.textContent=`検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  orphanRecover.hidden=!orphanYears.length;finishOperation('success');
+ }catch(error){finishOperation('error');orphanStatus.textContent=`検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 orphanRecover.addEventListener('click',()=>{void(async()=>{
@@ -439,8 +465,8 @@ orphanRecover.addEventListener('click',()=>{void(async()=>{
   const count=await vault.recoverOrphanYears(expected);
   orphanYears=undefined;orphanRecover.hidden=true;
   orphanStatus.textContent=`${count}年度を復旧しました。最新の明細一覧を確認してください。`;
-  loadedDb=false;await refreshCount();
- }catch(error){orphanYears=undefined;orphanRecover.hidden=true;orphanStatus.textContent=`復旧を完了できませんでした。年度索引が一部更新済みの可能性があります：${error instanceof Error?error.message:String(error)}`;}
+  loadedDb=false;await refreshCount();finishOperation('success');
+ }catch(error){finishOperation('partial');orphanYears=undefined;orphanRecover.hidden=true;orphanStatus.textContent=`復旧を完了できませんでした。年度索引が一部更新済みの可能性があります：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 $<HTMLButtonElement>('payroll-income-publish').addEventListener('click',()=>{void(async()=>{
@@ -451,8 +477,8 @@ $<HTMLButtonElement>('payroll-income-publish').addEventListener('click',()=>{voi
  try{
   const vault=await cloudVault();
   await vault.syncIncome();
-  label.textContent='全年度のFinance連携データを更新・読み戻し照合しました。';
- }catch(error){label.textContent=`連携データの更新に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;}
+  label.textContent='全年度のFinance連携データを更新・読み戻し照合しました。';finishOperation('success');
+ }catch(error){finishOperation('error');label.textContent=`連携データの更新に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;}
  finally{busy=false;updateButtons();}
 })()});
 
@@ -479,8 +505,8 @@ migrateButton?.addEventListener('click',()=>{void(async()=>{
  try{
   const result=await migrateFromLegacyIndexedDb(message=>{migrateStatus.textContent=message;});
   migrateStatus.textContent=`旧データ ${result.found}件中、新規に${result.migrated}件を移行しました。旧IndexedDBは削除していません。`;
-  await refreshCount();
- }catch(error){migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
+  await refreshCount();finishOperation('success');
+ }catch(error){finishOperation('partial');migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
  })();});
 
@@ -507,12 +533,13 @@ changeButton.addEventListener('click',()=>{void(async()=>{
   changeCurrent.value='';changeNew.value='';changeConfirm.value='';changeAck.checked=false;
   let remembered:'updated'|'not-registered'|'storage-warning';
   try{remembered=await refreshSessionAfterKeyRotation();}
-  catch{changeStatus.textContent='OneDriveの変更は完了しました。セッションの引継ぎに失敗したため、次回は新しいパスフレーズで解除してください。';return;}
+  catch{changeStatus.textContent='OneDriveの変更は完了しました。セッションの引継ぎに失敗したため、次回は新しいパスフレーズで解除してください。';finishOperation('partial');return;}
   changeStatus.textContent=remembered==='updated'?'パスフレーズを変更し、このブラウザの記憶鍵も更新しました。':
    remembered==='storage-warning'?'パスフレーズの変更は完了しましたが、ブラウザ記憶の更新・削除を確認できませんでした。設定から確認してください。':
    'パスフレーズを変更しました。次回の解除には新しいパスフレーズを使用してください。';
+  finishOperation(remembered==='storage-warning'?'partial':'success');
   await refreshBrowserKeyState();
- }catch(error){changeStatus.textContent=`変更を完了できませんでした: ${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('partial');changeStatus.textContent=`変更を完了できませんでした: ${error instanceof Error?error.message:String(error)}`;}
  finally{clearInterval(timer);busy=false;updateButtons();}
 })()});
 
@@ -524,8 +551,8 @@ cloudCheck.addEventListener('click',()=>{void(async()=>{
   const plan=await vault.inspectOldEncryptedData();
   oldCloudPlan=plan;
   cloudStatus.textContent=plan.targets.length?`旧暗号フォルダー ${plan.targets.length}件 / 暗号ファイル ${plan.files}件（約${sizes(plan.bytes)}）。現行の保存世代は対象外です。`:'整理できる旧暗号データはありません。';
-  cloudDelete.hidden=!plan.targets.length;
- }catch(error){cloudStatus.textContent=error instanceof Error?error.message:String(error);}
+  cloudDelete.hidden=!plan.targets.length;finishOperation('success');
+ }catch(error){finishOperation('error');cloudStatus.textContent=error instanceof Error?error.message:String(error);}
  finally{busy=false;updateButtons();}
 })()});
 cloudDelete.addEventListener('click',()=>{void(async()=>{
@@ -537,8 +564,8 @@ cloudDelete.addEventListener('click',()=>{void(async()=>{
  try{
   const vault=await cloudVault();
   const count=await vault.cleanupOldEncryptedData(plan,text=>{cloudStatus.textContent=text;});
-  cloudStatus.textContent=`旧暗号フォルダー ${count}件をごみ箱に移動しました。完全に消す場合はOneDriveのごみ箱も空にしてください。`;
- }catch(error){cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
+  cloudStatus.textContent=`旧暗号フォルダー ${count}件をごみ箱に移動しました。完全に消す場合はOneDriveのごみ箱も空にしてください。`;finishOperation('success');
+ }catch(error){finishOperation('partial');cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 // 暗号化原本の管理は本人用のみ。どの操作も最新年度・索引・原本ETagを再検証する。
@@ -605,8 +632,8 @@ detachedCheck.addEventListener('click',()=>{void(async()=>{
     detachedReport=report;renderDetachedReport(report);
     detachedStatus.textContent=report.originals.length
       ?`未参照の暗号化PDF原本 ${report.originals.length}件（${sizes(report.originals.reduce((sum,item)=>sum+item.size,0))}）。削除済み明細・中断した保存の区別はできません。${report.originals.length>200?'200件ずつ表示します。':''}`
-      :'未参照の暗号化PDF原本はありません。';
-  }catch(error){clearDetachedReport();detachedStatus.textContent=`原本を検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
+      :'未参照の暗号化PDF原本はありません。';finishOperation('success');
+  }catch(error){finishOperation('error');clearDetachedReport();detachedStatus.textContent=`原本を検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
   finally{busy=false;updateButtons();}
 })()});
 // 旧DBは任意検査可能。削除時はOneDriveの全件照合に成功した場合のみ実行する。
@@ -615,8 +642,8 @@ localCheck.addEventListener('click',()=>{void(async()=>{
  localStatus.textContent='この端末の旧IndexedDBを確認しています…';
  try{
   const result=await inspectLegacyIndexedDb();
-  localStatus.textContent=result.exists?`旧IndexedDB：${result.count}件。削除前にOneDriveの全明細・PDF原本を照合します。`:'この端末に旧IndexedDBはありません。';
- }catch(error){localStatus.textContent=`旧DBを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  finishOperation('success');localStatus.textContent=result.exists?`旧IndexedDB：${result.count}件。削除前にOneDriveの全明細・PDF原本を照合します。`:'この端末に旧IndexedDBはありません。';
+ }catch(error){finishOperation('error');localStatus.textContent=`旧DBを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 localDelete.addEventListener('click',()=>{void(async()=>{
@@ -624,12 +651,12 @@ localDelete.addEventListener('click',()=>{void(async()=>{
  try{
   // 誤って空の新規DBを作らず、既存の旧DBだけを列挙する。
   const result=await inspectLegacyIndexedDb();
-  if(!result.exists){localStatus.textContent='この端末に旧IndexedDBはありません。';return;}
-  if(!window.confirm(`この端末の旧IndexedDB（${result.count}件）を削除します。\n削除前にOneDriveへの移行済みデータとPDF原本をすべて照合します。一致しない場合は削除しません。\nバックアップを確認したうえで削除しますか？`))return;
+  if(!result.exists){localStatus.textContent='この端末に旧IndexedDBはありません。';finishOperation('success');return;}
+  if(!window.confirm(`この端末の旧IndexedDB（${result.count}件）を削除します。\n削除前にOneDriveへの移行済みデータとPDF原本をすべて照合します。一致しない場合は削除しません。\nバックアップを確認したうえで削除しますか？`)){cancelOperation();return;}
   await verifyLegacyIndexedDbCloudBeforeDelete(result.count,text=>{localStatus.textContent=text;});
   const deleted=await deleteLegacyIndexedDb(result.count,text=>{localStatus.textContent=text;});
-  localStatus.textContent=`この端末の旧IndexedDBを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;
- }catch(error){localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  localStatus.textContent=`この端末の旧IndexedDBを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;finishOperation('success');
+ }catch(error){finishOperation('partial');localStatus.textContent=`旧DBは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 
@@ -686,8 +713,8 @@ yearEndExport.addEventListener('click',()=>{void(async()=>{
   const anchor=document.createElement('a');anchor.href=url;anchor.download=`payroll-year-end-${stamp}.payroll`;
   document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30_000);
   yearEndPassword.value='';yearEndConfirm.value='';
-  reportYearEnd(`従業員 ${data.persons.length}名、原本 ${data.persons.reduce((n,p)=>n+p.originals.length,0)}件の暗号化バックアップを生成しました（${sizes(encrypted.size)}）。ファイルが保存されたことを確認してください。`);
- }catch(error){yearEndError(error);}
+  reportYearEnd(`従業員 ${data.persons.length}名、原本 ${data.persons.reduce((n,p)=>n+p.originals.length,0)}件の暗号化バックアップを生成しました（${sizes(encrypted.size)}）。ファイルが保存されたことを確認してください。`);finishOperation('success');
+ }catch(error){finishOperation('error');yearEndError(error);}
  finally{busy=false;updateButtons();}
 })()});
 yearEndVerify.addEventListener('click',()=>{void(async()=>{
@@ -710,8 +737,8 @@ yearEndVerify.addEventListener('click',()=>{void(async()=>{
    (plan.canRestore?(plan.restorable?`復元対象は${plan.restorable}名です。`:'復元対象の従業員はいません。'):'OneDriveに未完了・不整合の可能性があるため、復元を開始できません。')+
    (plan.sameNameCollisions?`同名の別データが${plan.sameNameCollisions}名追加されます。従業員別一覧を確認してください。`:'');
   if(!plan.canRestore){yearEndRecheck.hidden=false;await diagnoseIncompleteYearEndRestore(data);}
-  reportYearEnd(plan.canRestore?'バックアップの完全性検査が完了しました。':'バックアップは検証済みです。OneDriveの保存状態を確認してください。');
- }catch(error){yearEndError(error);invalidateYearEndPreview('バックアップの検証に失敗しました。OneDriveのデータは変更していません。');}
+  reportYearEnd(plan.canRestore?'バックアップの完全性検査が完了しました。':'バックアップは検証済みです。OneDriveの保存状態を確認してください。');finishOperation(plan.canRestore?'success':'partial');
+ }catch(error){finishOperation('error');yearEndError(error);invalidateYearEndPreview('バックアップの検証に失敗しました。OneDriveのデータは変更していません。');}
  finally{busy=false;updateButtons();}
 })()});
 yearEndCommit.addEventListener('click',()=>{void(async()=>{
@@ -722,8 +749,8 @@ yearEndCommit.addEventListener('click',()=>{void(async()=>{
  try{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd);
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
-  yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名を復元しました（既存の ${result.skipped}名は変更なし）。`);
- }catch(error){
+  yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名を復元しました（既存の ${result.skipped}名は変更なし）。`);finishOperation('success');
+ }catch(error){finishOperation('partial');
   yearEndAck.checked=false;yearEndRecheck.hidden=false;yearEndPlan=undefined;
   yearEndPreviewLabel.textContent='復元は完了していません。下の保存状況を確認してください。';
   yearEndError(error);
@@ -739,8 +766,8 @@ yearEndResume.addEventListener('click',()=>{void(async()=>{
  try{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd,{resumeVerifiedOrphans:true});
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
-  yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名の復元を完了しました（既存の ${result.skipped}名は変更なし）。`);
- }catch(error){yearEndRecheck.hidden=false;yearEndError(error);await diagnoseIncompleteYearEndRestore(data);}
+  yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名の復元を完了しました（既存の ${result.skipped}名は変更なし）。`);finishOperation('success');
+ }catch(error){finishOperation('partial');yearEndRecheck.hidden=false;yearEndError(error);await diagnoseIncompleteYearEndRestore(data);}
  finally{busy=false;updateButtons();}
 })()});
 

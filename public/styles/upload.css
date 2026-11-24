@@ -410,6 +410,12 @@
 }
 
 /* A duplicate-only or partially skipped save stays on screen until the user reviews it. */
+.upload-save-recovery{display:grid;gap:7px;padding:10px;border:1px solid var(--color-border);border-radius:8px;font-size:12px}
+.upload-save-recovery[hidden]{display:none!important}
+.upload-save-recovery strong{font-weight:800}
+.upload-save-recovery p{margin:0;line-height:1.6;overflow-wrap:anywhere}
+.upload-save-recovery__actions{display:flex;flex-wrap:wrap;gap:7px}
+.upload-save-recovery__actions .btn{min-width:0;white-space:normal}
 .save-duplicates{display:grid;gap:7px;min-width:0;margin-top:5px;padding-top:10px;border-top:1px solid var(--color-border)}
 .save-duplicates__title{font-size:12px;color:var(--state-warning-text);font-weight:800}
 .save-duplicates__list{list-style:none;display:grid;gap:5px;max-height:125px;overflow:auto;margin:0;padding:0}

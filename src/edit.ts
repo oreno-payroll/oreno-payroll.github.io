@@ -10,6 +10,7 @@ import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from '.
 import { storedPdfName } from './storage/fileNaming';
 import { showInlineError, clearInlineError } from './ui/feedback';
 import {PayrollPartialSuccessError} from './storage/operationError';
+import {incompleteDeleteIncomeNotice} from './ui/deleteOutcome';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -189,7 +190,8 @@ deleteButton.addEventListener('click', async () => {
     saving = false;
     const detail=error instanceof Error?error.message:String(error);
     if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
-      window.alert(`給与明細の削除は完了しました。収入連携データの同期だけが未完了です。\n${detail}`);
+      appStatus.clear();
+      window.alert(incompleteDeleteIncomeNotice());
       leavingAfterSave=true;
       window.location.assign(homeHref);
       return;

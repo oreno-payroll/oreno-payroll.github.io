@@ -29,5 +29,10 @@ assert.match(upload, /id="file-input"[^>]*multiple hidden/);
 assert.match(uploadCss, /@media\(max-width:640px\)[\s\S]*?\.upload-zone-card #drop-zone\{display:none\}/);
 assert.match(uploadCss, /\.mobile-file-picker-wrap\{display:flex/);
 assert.match(uploadTs, /mobileFilePicker\.addEventListener\("click", \(\) => \{ if \(!fileInput\.disabled\) fileInput\.click\(\); \}\)/);
-assert.match(uploadTs, /mobileFilePicker\.disabled = saving;/);
+// Both cloud writes and read-only recovery checks must block new PDF selection.
+assert.match(uploadTs, /mobileFilePicker\.disabled = saving \|\| uploadSaveRecoveryChecking;/);
+assert.match(uploadTs, /fileInput\.disabled = saving \|\| uploadSaveRecoveryChecking;/);
+assert.match(uploadTs, /clearButton\.disabled = saving \|\| uploadSaveRecoveryChecking;/);
+assert.match(uploadTs, /saveButton\.disabled = saving \|\| uploadSaveRecoveryRequired \|\| uploadSaveRecoveryChecking \|\|/);
+assert.match(uploadTs, /uploadRecoveryReload\.disabled = saving \|\| uploadSaveRecoveryChecking \|\| !uploadSaveRecoveryRequired \|\| !uploadSaveRecoveryChecked;/);
 console.log('PASS: icon-only settings, matched period controls, back navigation, mobile picker, desktop drop zone');

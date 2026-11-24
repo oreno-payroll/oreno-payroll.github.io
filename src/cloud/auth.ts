@@ -7,7 +7,7 @@ import {createTabLockCoordinator} from './tabLock';
 import {signOutLocallyFirst} from './signOutFlow';
 import {readRememberedBrowserKey,saveRememberedBrowserKey,forgetRememberedBrowserKey,forgetAllRememberedBrowserKeys} from './rememberedBrowser';
 import {createAppStatus} from '../ui/appStatus';
-import {rememberedAccountKey,pickPayrollAccount,needsMicrosoftInteraction,MicrosoftSignInRequiredError,MicrosoftTemporaryError,type MicrosoftConnectionStatus} from './msalPolicy.ts';
+import {rememberedAccountKey,pickPayrollAccount,selectPayrollAccountAfterRedirect,needsMicrosoftInteraction,microsoftSilentTemporaryError,microsoftDiagnostic,MicrosoftSignInRequiredError,MicrosoftTemporaryError,type MicrosoftConnectionStatus,type PayrollRedirectIntent} from './msalPolicy.ts';
 const CLIENT_KEY='finance-onedrive-public-client-id-v1';
 // A BFCache page must never keep using a vault from a previously selected account.
 const pageAuthEpoch=authEpoch();
@@ -77,6 +77,29 @@ function previousAccountId(id:string):string {
 function pinAccount(id:string,user:Account):void {
  try{localStorage.setItem(rememberedAccountKey(id),user.homeAccountId);}catch{}
 }
+const REDIRECT_INTENT_PREFIX='payroll-msal-redirect-intent-v1:';
+const offline=():boolean=>typeof navigator!=='undefined'&&navigator.onLine===false;
+/** Only the expected account ID and intent are stored, never OAuth tokens or passphrases. */
+function stageRedirectIntent(id:string,intent:PayrollRedirectIntent):void {
+ try{sessionStorage.setItem(REDIRECT_INTENT_PREFIX+id,JSON.stringify({...intent,at:Date.now()}));}
+ catch{throw new MicrosoftTemporaryError('Microsoft再接続のアカウント確認情報を保存できません。ブラウザのセッション保存設定を確認してください。');}
+}
+function clearRedirectIntent(id:string):void{
+ try{sessionStorage.removeItem(REDIRECT_INTENT_PREFIX+id);}catch{}
+}
+function consumeRedirectIntent(id:string):PayrollRedirectIntent|null {
+ let raw:string|null=null;
+ try{raw=sessionStorage.getItem(REDIRECT_INTENT_PREFIX+id);sessionStorage.removeItem(REDIRECT_INTENT_PREFIX+id);}
+ catch{return null;}
+ if(!raw)return null;
+ try{
+  const value=JSON.parse(raw) as PayrollRedirectIntent&{at:number};
+  if(!['reconnect','signin','switch'].includes(value.mode)||!Number.isFinite(value.at)||
+     value.at>Date.now()||Date.now()-value.at>15*60_000)return null;
+  if(value.mode==='reconnect'&&(!value.expectedAccountId||typeof value.expectedAccountId!=='string'))return null;
+  return {mode:value.mode,...(value.mode==='reconnect'?{expectedAccountId:value.expectedAccountId}:{})};
+ }catch{return null;}
+}
 function account(app:Msal):Account|undefined {
  const accounts=app.getAllAccounts();
  return pickPayrollAccount(accounts,previousAccountId(clientId()),app.getActiveAccount(),null);
@@ -97,7 +120,8 @@ async function getMsal():Promise<Msal> {
   });
   await app.initialize();
   const result=await app.handleRedirectPromise();
-  const selected=pickPayrollAccount(app.getAllAccounts(),previousAccountId(id),app.getActiveAccount(),result?.account??null);
+  const intent=consumeRedirectIntent(id);
+  const selected=selectPayrollAccountAfterRedirect(app.getAllAccounts(),previousAccountId(id),app.getActiveAccount(),result?.account??null,intent);
   if(clientId()!==id)throw new MicrosoftSignInRequiredError('Microsoftの接続設定が変更されました。再接続してください。');
   if(selected){app.setActiveAccount(selected);pinAccount(id,selected);}
   msalClientId=id;
@@ -127,7 +151,7 @@ async function token(forceRefresh=false):Promise<string> {
   catch(error){
    invalidateTokenCache();
    if(needsMicrosoftInteraction(error))throw new MicrosoftSignInRequiredError();
-   throw new MicrosoftTemporaryError();
+   throw microsoftSilentTemporaryError(error,offline());
   }
   if(authEpoch()!==startAuthEpoch||clientId()!==id||account(app)?.homeAccountId!==user.homeAccountId)
    throw new MicrosoftSignInRequiredError('接続アカウントが変更されました。もう一度接続を確認してください。');
@@ -150,15 +174,29 @@ function payrollGraph():PayrollGraph {
 }
 /** Called only from an explicit user click. Background operations never redirect. */
 export async function reconnectMicrosoftAccount():Promise<void>{
- const app=await getMsal(),user=account(app);
+ const id=clientId(),epoch=authEpoch(),app=await getMsal(),user=account(app);
+ if(offline())throw new MicrosoftTemporaryError('ネットワークに接続されていません。通信を確認して再試行してください。','network');
  if(!user){
-  // Explicit account selection is required if multiple cached identities are ambiguous.
-  await app.loginRedirect({scopes:SCOPES,...(app.getAllAccounts().length>1?{prompt:'select_account'}:{})});
+  const pinned=previousAccountId(id);
+  // A stale pinned account can be reauthenticated, but another account must not replace it.
+  stageRedirectIntent(id,pinned?{mode:'reconnect',expectedAccountId:pinned}:{mode:'signin'});
+  try{
+   await app.loginRedirect({scopes:SCOPES,...(pinned||app.getAllAccounts().length>1?{prompt:'select_account'}:{})});
+  }catch(error){clearRedirectIntent(id);throw error;}
   return;
  }
  try{await token(true);return;}
- catch(error){if(!(error instanceof MicrosoftSignInRequiredError))throw error;}
- await app.acquireTokenRedirect({scopes:SCOPES,account:user});
+ catch(error){
+  if(error instanceof MicrosoftTemporaryError){if(error.reason==='network'||error.reason==='service')throw error;}
+  else if(!(error instanceof MicrosoftSignInRequiredError))throw error;
+ }
+ // Silent iframe timeouts can require a top-level login, but only after a user click.
+ if(offline())throw new MicrosoftTemporaryError('ネットワークに接続されていません。通信を確認して再試行してください。','network');
+ if(clientId()!==id||authEpoch()!==epoch||account(app)?.homeAccountId!==user.homeAccountId)
+  throw new MicrosoftSignInRequiredError('再接続中にMicrosoftアカウントまたは接続状態が変更されました。もう一度確認してください。');
+ stageRedirectIntent(id,{mode:'reconnect',expectedAccountId:user.homeAccountId});
+ try{await app.acquireTokenRedirect({scopes:SCOPES,account:user});}
+ catch(error){clearRedirectIntent(id);throw error;}
 }
 type GateUI = {panel:HTMLElement;checking:HTMLElement;checkMessage:HTMLElement;retry:HTMLButtonElement;reload:HTMLButtonElement;id:HTMLInputElement;settings:HTMLElement;editSettings:HTMLButtonElement;password:HTMLInputElement;browser:HTMLInputElement;remembered:HTMLButtonElement;loginError:HTMLElement;unlockError:HTMLElement;button:HTMLButtonElement;login:HTMLButtonElement;loginForm:HTMLFormElement;unlockForm:HTMLFormElement};
 function mount():GateUI {
@@ -274,7 +312,7 @@ async function beginUnlock():Promise<PayrollVault> {
     if(user){showAccount(ui,'connected');void showRememberedOption(ui);ui.password.focus();return;}
    }catch(e){
     showAccount(ui,e instanceof MicrosoftTemporaryError?'temporary':e instanceof MicrosoftSignInRequiredError?'reauth':'error');
-    showGateError(ui.loginError,e instanceof Error?e.message:'Microsoftへ接続できませんでした。');
+    showGateError(ui.loginError,microsoftDiagnostic(e,offline()).message);
    }
    finally{if(!ui.loginForm.hidden)ui.login.disabled=false;}
   })();});
@@ -410,11 +448,11 @@ async function beginUnlock():Promise<PayrollVault> {
    }catch(error){
     if(!active())return;
     showAccount(ui,error instanceof MicrosoftSignInRequiredError?'reauth':'temporary');
-    showGateError(ui.loginError,error instanceof Error?error.message:'Microsoftの接続を確認できません。');
+    showGateError(ui.loginError,microsoftDiagnostic(error,offline()).message);
    }
   }).catch(e=>{
    if(!active())return;
-   showAccount(ui,'error');showGateError(ui.loginError,e instanceof Error?e.message:'Microsoftへ接続できませんでした。');
+   showAccount(ui,'error');showGateError(ui.loginError,microsoftDiagnostic(e,offline()).message);
   }).finally(()=>{
    if(active()&&checkSlowTimer!==undefined){clearTimeout(checkSlowTimer);checkSlowTimer=undefined;}
   });
@@ -596,7 +634,7 @@ export async function refreshSessionAfterKeyRotation():Promise<'updated'|'not-re
 }
 
 /** Settings page can inspect MSAL account selection without unlocking salary data. */
-export async function cloudConnectionState():Promise<{clientId:string;user:string|null;status:MicrosoftConnectionStatus;error?:string}> {
+export async function cloudConnectionState():Promise<{clientId:string;user:string|null;status:MicrosoftConnectionStatus;error?:string;diagnosticCode?:string}> {
  const id=clientId();
  if(!validId(id))return {clientId:id,user:null,status:'disconnected'};
  try{
@@ -604,10 +642,14 @@ export async function cloudConnectionState():Promise<{clientId:string;user:strin
   if(!user)return {clientId:id,user:null,status:'disconnected'};
   try {await token();return {clientId:id,user:label,status:'connected'};}
   catch(error){
+   const diagnostic=microsoftDiagnostic(error,offline());
    const status=error instanceof MicrosoftSignInRequiredError?'reauth':'temporary';
-   return {clientId:id,user:label,status,error:error instanceof Error?error.message:'Microsoft接続を確認できません。'};
+   return {clientId:id,user:label,status,error:diagnostic.message,diagnosticCode:diagnostic.code};
   }
- }catch{return {clientId:id,user:null,status:'temporary',error:'Microsoftの接続状態を確認できません。'};}
+ }catch(error){
+  const diagnostic=microsoftDiagnostic(error,offline());
+  return {clientId:id,user:null,status:error instanceof MicrosoftSignInRequiredError?'reauth':'temporary',error:diagnostic.message,diagnosticCode:diagnostic.code};
+ }
 }
 /** Client ID is public configuration, not a credential. Other settings are never overwritten. */
 export async function saveCloudClientId(input:string):Promise<'unchanged'|'changed'> {
@@ -629,8 +671,10 @@ export async function chooseMicrosoftAccount():Promise<void> {
  tokenCache=undefined;tokenPending=undefined;
  try{
   await clearAllKeys();
+  stageRedirectIntent(clientId(),{mode:'switch'});
   await app.loginRedirect({scopes:SCOPES,prompt:'select_account'});
  }catch(error){
+  clearRedirectIntent(clientId());
   if(typeof window!=='undefined')window.location.reload();
   throw error;
  }

@@ -1,0 +1,45 @@
+/** Round 4-C: isolated ID and Finance compatibility checks, no network/OneDrive. */
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {webcrypto} from 'node:crypto';
+import {validEmployerId,createEmployerId} from '../src/storage/employerIdentity.ts';
+import {toPublicIncomeRecord} from '../src/cloud/income.ts';
+import {activeEmployerSalaries} from '../src/forecast/activeEmployer.ts';
+import {monthStringFromIndex,monthIndex} from '../src/forecast/payrollCalendar.ts';
+const src=f=>readFileSync(new URL('../'+f,import.meta.url),'utf8');
+assert.equal(validEmployerId(undefined),true);
+for(const bad of ['main','side','同じ会社','emp_abc','emp_'+'0'.repeat(31),'emp_'+'F'.repeat(32),'emp_'+'0'.repeat(32)+'x',null,0])
+ assert.equal(validEmployerId(bad),false,`invalid ID rejected: ${bad}`);
+const employerA='emp_'+'a'.repeat(32),employerB='emp_'+'b'.repeat(32);
+assert.equal(validEmployerId(employerA),true);
+globalThis.crypto??=webcrypto;
+const issued=createEmployerId();assert.match(issued,/^emp_[a-f0-9]{32}$/);
+assert.notEqual(issued,createEmployerId());
+const form={job:'main',kind:'salary',targetMonth:'2026-10',paymentDate:'2026-11-27',gross:'250000',net:'210000',taxable:''};
+const v1=toPublicIncomeRecord({id:12,form});
+assert.equal(v1.job,'main');assert.equal(Object.hasOwn(v1,'employerId'),false,'legacy public schema must stay byte-field compatible');
+const later=toPublicIncomeRecord({id:12,revision:2,employerId:employerA,form});
+assert.equal(later.employerId,employerA);assert.equal(later.job,'main');
+assert.equal(later.taxablePaymentYen,undefined);
+assert.throws(()=>toPublicIncomeRecord({id:12,employerId:'main',form}),/勤務先ID/);
+const make=(month,amount,employerId)=>({employerId,form:{...form,paymentDate:`${month}-27`,targetMonth:month,net:String(amount)}});
+const records=[make('2026-08','140000',undefined),make('2026-09','170000',employerA),make('2026-10','220000',employerB)];
+assert.deepEqual(activeEmployerSalaries(records,'2026-11-23').map(x=>x.form.net),['220000']);
+assert.deepEqual(activeEmployerSalaries(records,'2026-09-30').map(x=>x.form.net),['170000']);
+assert.deepEqual(activeEmployerSalaries(records,'2026-07-31'),[]);
+assert.deepEqual(activeEmployerSalaries(records.map(x=>({...x,employerId:undefined})),'2026-11-23').length,3);
+for(const ym of ['2026-01','2026-12','2027-03'])assert.equal(monthStringFromIndex(monthIndex(ym)),ym);
+const head='a'.repeat(40),old='b'.repeat(40),zero='0'.repeat(40);
+const testRef=(lines)=>spawnSync('bash',['scripts/verify-push-ref-policy.sh',head],{input:lines.join('\n')+'\n',encoding:'utf8'});
+assert.equal(testRef([`(delete) ${zero} refs/heads/feature/payroll-r4c ${old}`]).status,10);
+assert.equal(testRef([`refs/heads/feature/payroll-r4c ${head} refs/heads/feature/payroll-r4c ${old}`]).status,0);
+assert.equal(testRef([`(delete) ${zero} refs/heads/main ${old}`]).status,1);
+assert.equal(testRef([`refs/heads/feature/payroll-r4c ${old} refs/heads/feature/payroll-r4c ${old}`]).status,1);
+assert.equal(testRef([`(delete) ${zero} refs/heads/feature/payroll-r4c ${old}`,`refs/heads/feature/payroll-r4c ${head} refs/heads/feature/payroll-r4c ${old}`]).status,0,'mixed push must run full security gate');
+for(const file of ['src/cloud/vault.ts','src/storage/payrollStore.ts','src/storage/payrollBackup.ts'])
+ assert.match(src(file),/validEmployerId\(/,`${file} checks metadata`);
+assert.match(src('src/upload.ts'),/employerId:entry.employerId/);
+assert.match(src('src/edit.ts'),/employerId,/);
+assert.ok(!src('src/storage/payrollSemantics.ts').includes("'employerId'"),'historical semantics v1 is frozen');
+console.log('PASS: employer ID issuance, legacy export compatibility, forecast cohort, month arithmetic and safe ref deletions');

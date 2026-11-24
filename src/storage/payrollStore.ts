@@ -2,6 +2,7 @@
 import {payrollPeriodKey,validatePayrollForm} from './payrollValidation';
 import {isValidPayrollSemantics,type PayrollStatementSemantics} from './payrollSemantics';
 import {isValidPayrollZeroResolution,type PayrollZeroResolutionV1} from './payrollZeroResolution';
+import {validEmployerId} from './employerIdentity';
 import {cloudVault} from '../cloud/auth';
 import type {CloudRecord} from '../cloud/vault';
 import {PayrollPartialSuccessError} from './operationError';
@@ -14,6 +15,8 @@ export interface SavedPayrollRecordInput {
  semantics?:PayrollStatementSemantics;
  /** Optional import-time distinction: PDF zero, missing value, explicit zero approval. */
  zeroResolution?:PayrollZeroResolutionV1;
+ /** Optional opaque permanent employer ID, independent of form.job main/side. */
+ employerId?:string;
  reviewedIssues?:string[];reviewedAt?:string;
 }
 export interface SavedPayrollRecord extends SavedPayrollRecordInput {
@@ -32,7 +35,7 @@ export interface ReplacementConflict {
 export function recordSignature(record:SavedPayrollRecord|SavedPayrollSummary):string {
  const pdfSize='pdf' in record?record.pdf.size:record.pdfSize;
  const pdfType='pdf' in record?record.pdf.type:record.pdfType;
- return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form,record.semantics??null,record.zeroResolution??null]);
+ return JSON.stringify([record.id,record.savedAt,record.fileName,record.originalFileName??'',record.fileHash??'',pdfSize,pdfType,record.pages,record.revision??0,record.warningsAcknowledged,record.reviewedAt??'',record.reviewedIssues??[],record.form,record.semantics??null,record.zeroResolution??null,record.employerId??null]);
 }
 const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'fileHash'|'form'>):('same-pdf'|'same-period')[]=>{
  const result:('same-pdf'|'same-period')[]=[];
@@ -42,6 +45,7 @@ const conflicts=(old:SavedPayrollSummary,incoming:Pick<SavedPayrollSummary,'file
 };
 function assertValid(input:SavedPayrollRecordInput,legacy=false):void {
  if('personId' in input||'employeeId' in input||'yearEndAssist' in input)throw new Error('第三者の年末調整データは本人用Payrollに保存できません。');
+ if(!validEmployerId(input.employerId))throw new Error('勤務先IDが不正です。');
  if(input.semantics!==undefined&&!isValidPayrollSemantics(input.semantics))throw new Error('保存した明細の解析バージョン情報が不正です。');
  if(input.zeroResolution!==undefined&&!isValidPayrollZeroResolution(input.zeroResolution,input.form))
   throw new Error('保存した明細の0円確認情報が不正です。');
@@ -52,6 +56,7 @@ function assertValid(input:SavedPayrollRecordInput,legacy=false):void {
 }
 /** A metadata-only edit does not fabricate a Blob or weaken field validation. */
 function assertValidMetadata(input:SavedPayrollSummary):void {
+ if(!validEmployerId(input.employerId))throw new Error('勤務先IDが不正です。');
  if('personId' in input||'employeeId' in input||'yearEndAssist' in input)
   throw new Error('第三者の年末調整データは本人用Payrollに保存できません。');
  const {errors,warnings}=validatePayrollForm(input.form);

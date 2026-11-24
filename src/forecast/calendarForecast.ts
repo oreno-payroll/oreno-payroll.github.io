@@ -4,7 +4,8 @@
  * 現在月より前の未登録支給月には見込みを遡及加算しない。
  * 保存レコードの追加・更新は一切行わない。
  */
-import { monthIndex } from './payrollCalendar';
+import { monthIndex,monthStringFromIndex } from './payrollCalendar';
+import {activeEmployerSalaries} from './activeEmployer.ts';
 import {
   estimateFromSamples, estimateMainBonus,
   type AnnualForecast, type ForecastJob, type ForecastSource, type JobForecast,
@@ -22,9 +23,6 @@ export interface CalendarForecast extends Omit<AnnualForecast, 'fiscalYear'> {
   calendarYear: number;
 }
 
-function monthString(index: number): string {
-  return `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`;
-}
 
 export function calculateCalendarForecast(
   records: readonly ForecastSource[], selectedYear: number, today: Date, includeBonus = true,
@@ -37,8 +35,9 @@ export function calculateCalendarForecast(
   const jobs = {} as Record<ForecastJob, JobForecast>;
 
   for (const job of ['main', 'side'] as const) {
-    const salaries = records.filter(({ form }) => form.job === job && form.kind === 'salary');
-    const actualPaidMonths = new Set(salaries.flatMap(({ form }) => {
+    const allSalaries = records.filter(({ form }) => form.job === job && form.kind === 'salary');
+    const salaries=activeEmployerSalaries(allSalaries,todayIso);
+    const actualPaidMonths = new Set(allSalaries.flatMap(({ form }) => {
       const index = monthIndex(form.paymentDate?.slice(0, 7));
       return calendarYearOfPaymentDate(form.paymentDate) === selectedYear && index !== null ? [index] : [];
     }));
@@ -48,7 +47,7 @@ export function calculateCalendarForecast(
     if (applicable) {
       // 登録漏れの過去月を推計収入で埋めず、当月以降だけを対象にする。
       for (let index = Math.max(start, latest + 1, todayMonth); index <= end; index++) {
-        if (!actualPaidMonths.has(index)) pendingMonths.push(monthString(index));
+        if (!actualPaidMonths.has(index)) pendingMonths.push(monthStringFromIndex(index));
       }
     }
 

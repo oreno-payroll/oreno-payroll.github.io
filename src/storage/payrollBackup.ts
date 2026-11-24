@@ -5,6 +5,7 @@ import { verifyPdfBytes, verifyPdfWithPdfJs } from './pdfIntegrity';
 import { assertStorageLimits, MAX_RECORDS, MAX_MANIFEST_BYTES, MAX_ARCHIVE_BYTES } from './storageLimits';
 import { payrollPeriodKey, validatePayrollForm } from './payrollValidation';
 import { isValidPayrollZeroResolution } from './payrollZeroResolution';
+import {validEmployerId} from './employerIdentity';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -46,6 +47,7 @@ function validateMetadata(raw: unknown, used: Set<number>): Omit<SavedPayrollRec
   assert(raw.reviewedIssues === undefined || (Array.isArray(raw.reviewedIssues) && raw.reviewedIssues.length <= 100 && raw.reviewedIssues.every(v => typeof v === 'string' && v.length <= 1000)), '確認済み警告の記録が不正です。');
   assert(raw.reviewedAt === undefined || (typeof raw.reviewedAt === 'string' && Number.isFinite(Date.parse(raw.reviewedAt))), '警告確認日時が不正です。');
   assert(isObject(raw.form) && Object.keys(raw.form).length <= 128, '明細フォームが不正です。');
+  assert(validEmployerId(raw.employerId), '勤務先IDが不正です。');
   assert(raw.zeroResolution === undefined || isValidPayrollZeroResolution(raw.zeroResolution,raw.form as Record<string,string>),
     '明細の0円確認情報が不正です。');
   for (const [key, value] of Object.entries(raw.form)) {

@@ -30,7 +30,7 @@ const common={crypto:webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Arra
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_,t)=>JSON.parse(t),encryptJson:async(_,v)=>JSON.stringify(v),decryptBytes:async()=>pdf,
  isCollision:()=>false,clearNavigationSnapshot:()=>{cache=null},rememberNavigationSnapshot:async(_scope,_salt,_key,data)=>{cache=data},
  restoredNavigationSnapshot:async(_scope,_salt,_key)=>cache?{data:cache,expires:Date.now()+120000}:null,
- fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,payrollPeriodKey:rec=>rec.form.paymentDate,
+ fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),payrollPeriodKey:rec=>rec.form.paymentDate,
  beginPerfOperation:()=>({measure:async(_,fun)=>fun(),finish(){}}),
  MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:1e9,PayrollPartialSuccessError:class extends Error{},
  toPublicIncomeRecord:()=>{throw Error('not called')},

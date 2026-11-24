@@ -26,7 +26,7 @@ const graph={
 };
 const common={crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Promise,Map,Set,WeakMap,structuredClone,performance,
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_kind,value)=>JSON.parse(value),encryptJson:async(_kind,value)=>JSON.stringify(value),decryptBytes:async()=>new Uint8Array(),
- fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,payrollPeriodKey:r=>r.paymentDate,
+ fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),payrollPeriodKey:r=>r.paymentDate,
  isCollision:()=>false,beginPerfOperation:()=>({measure:async(_,fn)=>fn(),finish(){}}),
  clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
  MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:500e6,toPublicIncomeRecord:()=>{},PayrollPartialSuccessError:class extends Error{},setTimeout};

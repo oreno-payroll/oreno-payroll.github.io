@@ -95,6 +95,7 @@ const tests = [
   ['scripts/test-payroll-yearend-freshness-and-commit.mjs', true],
   ['scripts/test-payroll-semantics-v1-compat.mjs', true],
   ['scripts/test-payroll-zero-resolution.mjs', true],
+  ['scripts/test-payroll-employer-identity.mjs', true],
   ['scripts/test-payroll-performance-phase04.mjs', true],
   ['scripts/test-payroll-performance-phase05.mjs', true],
   ['scripts/test-cloud-startup.mjs', true],

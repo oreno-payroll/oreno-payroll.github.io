@@ -4,7 +4,8 @@
  */
 import { amountOrMissing } from '../storage/payrollValidation.ts';
 import { isZeroIfMissingSummaryKey } from './missingPolicy.ts';
-import { monthIndex, targetMonthOf, salaryPaymentLag } from './payrollCalendar.ts';
+import { monthIndex, targetMonthOf, salaryPaymentLag, monthStringFromIndex } from './payrollCalendar.ts';
+import {activeEmployerSalaries} from './activeEmployer.ts';
 
 export type ForecastJob = 'main' | 'side';
 export type ForecastKind = 'salary' | 'bonus';
@@ -16,7 +17,7 @@ const SOCIAL_KEYS = [
   'healthInsurance', 'careInsurance', 'childcareSupport', 'pension', 'employmentInsurance',
 ] as const;
 
-export interface ForecastSource { form: Record<string, string> }
+export interface ForecastSource { form: Record<string, string>; employerId?: string }
 export interface MonthEstimate {
   /** 推計対象年月 (YYYY-MM)。年度見込みは給与対象月、暦年見込みは支給月。 */
   month: string;
@@ -46,9 +47,6 @@ export interface AnnualForecast {
   jobs: Record<ForecastJob, JobForecast>;
   /** ホームで加算するすべての推計。保存データには含まない。 */
   estimates: MonthEstimate[];
-}
-function monthString(index: number): string {
-  return `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`;
 }
 function median(values: number[]): number | null {
   if (!values.length) return null;
@@ -179,9 +177,10 @@ export function calculateAnnualForecast(
   const fiscalEnd = (selectedYear + 1) * 12 + 2; // 翌3月
   const jobs = {} as Record<ForecastJob, JobForecast>;
   for (const job of ['main', 'side'] as const) {
-    const salaries = records.filter(({ form }) => form.job === job && form.kind === 'salary');
-    const paidMonths = new Set(salaries.map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
+    const allSalaries = records.filter(({ form }) => form.job === job && form.kind === 'salary');
+    const paidMonths = new Set(allSalaries.map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
     const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const salaries=activeEmployerSalaries(allSalaries,todayIso);
     // 本業は「10月対象→11月支給」、副業は「10月対象→10月支給」など、
     // 保存済み給与から各勤務先の通常の支給タイミングを推定する。
     // 未支給の対象月を見込みから落とさないようにするための補正。
@@ -197,7 +196,7 @@ export function calculateAnnualForecast(
     const pendingMonths: string[] = [];
     if (applicable) {
       for (let i = Math.max(fiscalStart, currentMonth - paymentLag); i <= fiscalEnd; i++) {
-        const month = monthString(i);
+        const month = monthStringFromIndex(i);
         if (!paidMonths.has(month)) pendingMonths.push(month);
       }
     }

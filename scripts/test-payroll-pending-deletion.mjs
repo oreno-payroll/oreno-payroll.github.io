@@ -17,5 +17,7 @@ assert.match(main,/window\.addEventListener\('beforeunload'/);
 assert.match(edit,/if\(deletionPending\)\{await commitPendingDeletion\(\);return;\}/);
 assert.match(edit,/deletionNeedsReload=true/);
 assert.match(html,/id="pending-deletion-save" disabled/);
+assert.match(html,/<details id="pending-deletion"/);
+assert.match(main,/records=records.filter\(record=>!pendingDeletion.has\(record.id\)\)/);
 assert.doesNotMatch(source('src/ui/pendingDeletion.ts'),/localStorage|sessionStorage|indexedDB|fetch\(/);
 console.log('PASS: page-local deletion intent, immutable target snapshots, cancellation, stale guard and explicit commit');

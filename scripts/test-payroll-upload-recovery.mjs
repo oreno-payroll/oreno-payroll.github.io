@@ -91,6 +91,12 @@ const mock=(data=records,originals=[],options={})=>({
  const result=await inspectUploadRecovery(vault,attempt,signature,undefined,records,undefined,false);
  assert.equal(scans,2);assert.equal(result.detached,1,'cross-month recovery still scans twice');
 }
+{
+ let evidence;const scopes=[];const vault=mock();
+ vault.inspectDetachedOriginals=async(_reuse,scope)=>{scopes.push(scope);return {generation:'',indexEtag:'synthetic-index',years:[],originals:[]};};
+ await inspectUploadRecovery(vault,attempt,signature,undefined,records,value=>{evidence=value;},false,['2026-12']);
+ assert.deepEqual(scopes,[['2026-12']]);assert.deepEqual(evidence.scope,['2026-12']);
+}
 await assert.rejects(()=>inspectUploadRecovery(mock(),[{...attempt[0],fileHash:'INVALID'}],signature),/保存対象を確認できません/);
 assert.equal(writes,0);
 assert.match(incompleteDeleteIncomeNotice(),/明細の削除は完了しました/);
@@ -109,7 +115,7 @@ assert.doesNotMatch(upload,/uploadRecoveryReload|window\.location\.reload\(\)/,'
 assert.match(html,/id="upload-save-recovery"/);
 assert.match(html,/id="upload-save-recheck"/);
 assert.doesNotMatch(html,/id="upload-save-reload"/);
-assert.match(html,/id="clear-files" hidden>すべて削除/);
+assert.match(html,/id="clear-files" hidden>すべて外す/);
 assert.match(read('public/year-end-assist/index.html'),/id="yea-download-pdfs"[^>]*>PDFをZIP保存/);
 assert.match(main,/await showOperationMessage\(\{title:'明細削除・一部完了',details:\[incompleteDeleteIncomeNotice\(\)\]/);
 assert.match(edit,/await showOperationMessage\(\{title:'明細削除・一部完了',details:\[incompleteDeleteIncomeNotice\(\)\]/);

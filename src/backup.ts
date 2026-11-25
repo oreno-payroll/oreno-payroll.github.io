@@ -315,12 +315,12 @@ function updateButtons(): void {
   addInspect.disabled=busy||!preview;
   addButton.disabled=busy||!preview||!addPlan||!addPlanAuthorized?.()||!(addPlan.add||addPlan.employersAdded);
 }
-function info(message: string, isError = false): void {
-  status.textContent = message;
+function info(message: string, isError = false, detail = false): void {
+  status.textContent = isError||detail ? message : "";
   status.style.color = isError ? 'var(--color-danger)' : 'var(--color-success)';
   if(isError){if(busy)finishOperation('error');appStatus.error(message);}
-  else if(busy)appStatus.loading(message);
-  else if(message)appStatus.success(message);
+  else if(busy&&!detail)appStatus.loading(message);
+  else if(!busy&&message&&!detail)appStatus.success(message);
 }
 function resetPreview(): void {
   preview = undefined;
@@ -372,7 +372,7 @@ exportButton.addEventListener('click', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
     exportPassword.value = '';
     exportConfirm.value = '';
-    info(`暗号化バックアップを作成しました（${sizes(blob.size)}）。保存先でファイルがあることを確認してください。`);finishOperation('success');
+    info(`暗号化バックアップを作成しました（${sizes(blob.size)}）。保存先でファイルがあることを確認してください。`,false,true);finishOperation('success');
   } catch (error) { info(`バックアップに失敗しました: ${error instanceof Error ? error.message : String(error)}`, true); }
   finally { if(timer)clearInterval(timer);busy = false;updateButtons(); }
 });
@@ -386,7 +386,7 @@ async function verifyRestore(file: File, password?: string): Promise<void> {
     preview = loaded;
     restorePassword.value = '';
     restorePreview.textContent = `検証完了：${loaded.records.length}件 ・ PDF ${sizes(loaded.bytes)}\n作成日時：${new Date(loaded.exportedAt).toLocaleString('ja-JP')}${loaded.unreviewedWarnings ? `\n旧データの検算未承認：${loaded.unreviewedWarnings}件` : ''}${loaded.legacyDuplicates ? `\n旧データの重複候補：${loaded.legacyDuplicates}件` : ''}${loaded.employers!==undefined?`\n勤務先一覧：${loaded.employers.length}件（既存の勤務先情報は維持）`:''}`;
-    info('バックアップを検証しました。復元内容を確認してください。');finishOperation('success');
+    status.textContent='';finishOperation('success');
   } catch (error) {
     preview = undefined;
     restorePreview.textContent = '検証失敗。既存データは変更されていません。';
@@ -405,7 +405,7 @@ filePicker.addEventListener('change', async () => {
     restorePasswordRow.dataset.backupFormat = encryptedFile ? 'encrypted' : 'legacy-zip';
     if (encryptedFile) {
       restorePreview.textContent = '暗号化バックアップ。パスワードを入力して検証してください。';
-      info('暗号化バックアップを検出しました。');
+      status.textContent='';
     } else {
       restorePreview.textContent = '旧ZIPバックアップ。パスワードは不要です。「ファイルを検証」を押してください。';
     }
@@ -457,7 +457,7 @@ addInspect.addEventListener('click',async()=>{
   await cloudVault();const authorized=captureOperationAuthorization();
   const plan=await inspectAdditiveRestore(data.records,data.employers);
   if(!authorized()||preview!==data)throw new Error('バックアップが変更されました。');
-  addPlan=plan;addPlanAuthorized=authorized;addPreview.textContent=describeAddPlan(plan);info('追加復元の対象を確認しました。');finishOperation('success');
+  addPlan=plan;addPlanAuthorized=authorized;addPreview.textContent=describeAddPlan(plan);status.textContent='';finishOperation('success');
  }catch(error){addPreview.textContent='追加復元の検査を中断しました。';info(error instanceof Error?error.message:String(error),true);}
  finally{busy=false;updateButtons();}
 });
@@ -470,7 +470,7 @@ addButton.addEventListener('click',async()=>{
   const result=await restoreAdditiveRecords(data.records,plan.signature,data.employers,authorized,stage=>info(stage));
   await refreshCount();addPlan=undefined;addPlanAuthorized=undefined;ack.checked=false;
   addPreview.textContent=`追加復元完了：明細 ${result.add}件・勤務先 ${result.employersAdded}件。再確認する場合は対象を検査してください。`;
-  info(addPreview.textContent);finishOperation('success');
+  status.textContent='';finishOperation('success');
  }catch(error){
   addPlan=undefined;addPlanAuthorized=undefined;ack.checked=false;
   addPreview.textContent='追加復元を中断しました。既に追加された明細がある可能性があります。最新の対象を確認してください。未参照PDFやFinance未同期がある場合は設定から復旧してください。';

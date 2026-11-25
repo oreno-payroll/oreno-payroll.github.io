@@ -439,13 +439,12 @@ export class PayrollVault {
   await this.registerYear(year,'years');
   return false;
  }
- /** Scan every encrypted original, including PDFs detached from deleted statements.
-  * The inventory is read-only and bounded; unexpected paths stop key rotation/cleanup. */
- private async listOriginalFiles(index:Index):Promise<OriginalInventoryEntry[]> {
+ /** Read-only bounded inventory. A scope is used only for ordinary uploads;
+  * cleanup and key rotation always scan the complete original tree. */
+ private async listOriginalFiles(index:Index,scope?:readonly string[]):Promise<OriginalInventoryEntry[]> {
   const root=this.pathFor(index,'originals');
-  const years=await this.graph.listFolder(root,true)??[];
   const result:OriginalInventoryEntry[]=[];
-  // Keep every month in scope (a corrected target month can still be a duplicate).
+  // Full recovery/cleanup scans every month; routine saves inspect only target months.
   // Three reads at a time; wait for all in-flight reads on failure before returning.
   const readGroups=async<T,R>(items:readonly T[],read:(item:T)=>Promise<R>):Promise<R[]>=>{
    const values:R[]=[];
@@ -455,15 +454,22 @@ export class PayrollVault {
    }
    return values;
   };
-  for(const year of years)if(!year.folder||!/^(19|20|21)\d{2}$/.test(year.name))throw new Error('PDF原本領域に未知の項目があります。暗号鍵の変更・整理を中断しました。');
-  const monthGroups=await readGroups(years,async year=>{
-   const months=await this.graph.listFolder([...root,year.name],true)??[];
-   return months.map(month=>{
-    if(!month.folder||!/^(0[1-9]|1[0-2])$/.test(month.name))throw new Error('PDF原本の月フォルダーが想定外です。');
-    return {year:year.name,month:month.name};
+  const allMonths=async()=>{
+   const years=await this.graph.listFolder(root,true)??[];
+   for(const year of years)if(!year.folder||!/^(19|20|21)\d{2}$/.test(year.name))throw new Error('PDF原本領域に未知の項目があります。暗号鍵の変更・整理を中断しました。');
+   const monthGroups=await readGroups(years,async year=>{
+    const months=await this.graph.listFolder([...root,year.name],true)??[];
+    return months.map(month=>{
+     if(!month.folder||!/^(0[1-9]|1[0-2])$/.test(month.name))throw new Error('PDF原本の月フォルダーが想定外です。');
+     return {year:year.name,month:month.name};
+    });
    });
+   return monthGroups.flat();
+  };
+  const monthPaths=scope===undefined?await allMonths():[...new Set(scope)].sort().map(value=>{
+   if(!/^(19|20|21)\d{2}-(0[1-9]|1[0-2])$/.test(value))throw new Error('原本の対象年月が不正です。');
+   const [year,month]=value.split('-');return {year,month};
   });
-  const monthPaths=monthGroups.flat();
   for(let i=0;i<monthPaths.length;i+=3){
    const groups=await readGroups(monthPaths.slice(i,i+3),async ({year,month})=>{
     const path=[...root,year,month];
@@ -486,7 +492,7 @@ export class PayrollVault {
    * 構造上区別できないため、どちらも「未参照」と表記する。
    * 保管庫の年別明細が索引にない場合、安全な判定ができないため中断する。
    */
-  async inspectDetachedOriginals(reuseVerifiedYears=false):Promise<DetachedOriginalReport> {
+  async inspectDetachedOriginals(reuseVerifiedYears=false,scope?:readonly string[]):Promise<DetachedOriginalReport> {
     this.unlocked();
     const {index,file:indexFile}=await this.readIndex();
     const entries=await this.graph.listFolder(this.pathFor(index,'statements'))??[];
@@ -517,9 +523,11 @@ export class PayrollVault {
         used.add(`${record.originalMonth}/${record.originalId.toLowerCase()}`);
       }
     }
-    const inventory=await this.listOriginalFiles(index);
+    const inventory=await this.listOriginalFiles(index,scope);
     const available=new Set(inventory.map(x=>`${x.month}/${x.uuid.toLowerCase()}`));
-    for(const ref of used)if(!available.has(ref))
+    // Routine uploads authenticate relevant duplicate candidates separately.
+    // Missing unrelated originals must not block new payroll data.
+    for(const ref of used)if(scope===undefined&&!available.has(ref))
       throw new Error('有効な給与明細が参照する原本が見つかりません。整理を中断しました。');
     const latest=await this.readIndex();
     if(latest.file.etag!==indexFile.etag)
@@ -865,7 +873,7 @@ export class PayrollVault {
   }
   throw new Error(`${year}年の同時更新が続いています。再試行してください。`);
  }
- private async storeOriginal(record:SavedPayrollRecord,uuid:string,month:string,progress?:(stage:string,percent?:number)=>void):Promise<void> {
+ private async storeOriginal(record:SavedPayrollRecord,uuid:string,month:string,progress?:(stage:string,percent?:number)=>void,allowReceipt=false):Promise<void> {
   const key=this.unlocked();
   progress?.('原本PDFを暗号化しています…');
   const bytes=new Uint8Array(await record.pdf.arrayBuffer());
@@ -875,15 +883,18 @@ export class PayrollVault {
   const encrypted=await encryptBytes('original',bytes,key);
   const [year,mm]=month.split('-');
   progress?.('暗号化PDFをOneDriveへ送信しています…');
-  try{await this.graph.write(this.storagePath('originals',year,mm),`${uuid}.enc`,encrypted,null,MAX_ORIGINAL,(sent,total)=>{
+  try{const receipt=await this.graph.write(this.storagePath('originals',year,mm),`${uuid}.enc`,encrypted,null,MAX_ORIGINAL,(sent,total)=>{
    if(sent>0){const percent=Math.round(sent/total*100);progress?.(`暗号化PDFの送信 ${percent}%`,percent);}
-  });}
+  });
+   if(allowReceipt&&receipt){progress?.('PDF原本の保存応答を確認しました');return;}
+  }
   catch(e){
    if(!isCollision(e))throw e;
    const existing=await this.graph.read(this.storagePath('originals',year,mm),`${uuid}.enc`,MAX_ORIGINAL);
    if(!existing)throw new Error('既存原本を照合できません。');
    const restored=await decryptBytes('original',existing.text,key);
-   if(!same([...restored],[...bytes]))throw new Error('同じ原本IDに異なるPDFが保存されています。');
+   if(restored.length!==bytes.length||restored.some((b,i)=>b!==bytes[i]))throw new Error('同じ原本IDに異なるPDFが保存されています。');
+   return; // Existing authenticated bytes were already compared.
   }
   progress?.('暗号化PDFを読み戻して照合しています…');
   const check=await this.graph.read(this.storagePath('originals',year,mm),`${uuid}.enc`,MAX_ORIGINAL);
@@ -894,14 +905,14 @@ export class PayrollVault {
  /**
   * 複数の新規明細を1回のバッチとして保存する。暗号化PDFは最大2件並列、
   * 解析JSONは対象年度ごと、収入データは支給年ごとにそれぞれ1回だけ確定する。
-  * オリジナルの検証・ETag・3方向マージは既存の個別保存と同じ。
+  * 通常登録の原本は確定応答を利用し、復元・不完全な応答では読み戻す。年度ETag・3方向マージは維持。
   * 一部失敗時にOneDrive全体の原子性は保証できないので成功扱いにしない。
   */
  private assertRecordLimits(records:readonly CloudRecord[]):void {
   if(records.length>MAX_RECORDS)throw new Error('給与明細の保存上限2000件を超えます。');
   if(records.reduce((sum,r)=>sum+r.pdfSize,0)>MAX_TOTAL_PDF_BYTES)throw new Error('PDF原本の合計が480MiBを超えます。');
  }
- async saveBatch(records:SavedPayrollRecord[],progress?:PayrollSaveProgress,expectedExisting?:readonly CloudRecord[],authorized:()=>boolean=()=>true,state?:PayrollWriteState,uploadPreflight?:(baseline?:readonly CloudRecord[])=>Promise<{inventory:DetachedOriginalReport;matches:readonly DetachedUploadMatch[];candidateIncomeYears:readonly string[]}>):Promise<void> {
+ async saveBatch(records:SavedPayrollRecord[],progress?:PayrollSaveProgress,expectedExisting?:readonly CloudRecord[],authorized:()=>boolean=()=>true,state?:PayrollWriteState,uploadPreflight?:(baseline?:readonly CloudRecord[])=>Promise<{inventory:DetachedOriginalReport;matches:readonly DetachedUploadMatch[];candidateIncomeYears:readonly string[];scope?:readonly string[]}>):Promise<void> {
   const emit=(phase:PayrollSavePhase,title:string,count='',percent:number|null=null)=>progress?.({phase,title,count,percent});
   emit(0,'保存ロックを取得中');
   await this.graph.withWriteLock(async()=>{
@@ -930,7 +941,7 @@ export class PayrollVault {
   const reusable=new Map<string,DetachedOriginal>();
   const evidence=await uploadPreflight?.(preflightBaseline);
   if(evidence?.matches.length){
-   const inventory=await this.inspectDetachedOriginals(true);
+   const inventory=await this.inspectDetachedOriginals(true,evidence.scope);
    if(!same(inventory,evidence.inventory))throw new Error('原本一覧か年別明細が更新されました。再検査してください。');
    const matches=evidence.matches.filter(match=>hashes.has(match.fileHash));
    for(const match of matches){
@@ -957,7 +968,7 @@ export class PayrollVault {
     try {
      if(!authorized())throw new Error('認証状態が変更されました。');
      emit(1,'PDF原本を暗号化中',`${i+1} / ${records.length}件 · `);
-     if(!reuse)await this.storeOriginal(record,originalId,month,(stage,percent)=>emit(1,percent===undefined?stage:'OneDriveへ保存中',`${i+1} / ${records.length}件 · `,percent??null));
+     if(!reuse)await this.storeOriginal(record,originalId,month,(stage,percent)=>emit(1,percent===undefined?stage:'OneDriveへ保存中',`${i+1} / ${records.length}件 · `,percent??null),Boolean(uploadPreflight));
      const {pdf,...summary}=record;
      completed[i]={...summary,pdfSize:pdf.size,pdfType:pdf.type,originalId,originalMonth:month};
      originalsDone++;
@@ -1075,7 +1086,7 @@ export class PayrollVault {
    if(lockedOrphans.length)throw new Error('変更ロック中に索引未登録の年度を検出しました。旧索引を復旧して中断します。');
    if(!same(await this.listOriginalFiles(originalIndex),originalInventory))throw new Error('PDF原本の一覧が変更されました。旧鍵を保持して中断します。');
    // 復旧用の元索引。旧原本も保持するので、失敗後も旧パスフレーズで復旧可能。
-   await this.graph.write(['payroll','versions',gen,'recovery'],'previous-index.enc',root.text,null,MAX_INDEX);
+   await this.graph.write(['payroll','versions',gen,'recovery'],'previous-index.enc',root.text,null,MAX_INDEX,undefined,false);
    const sources:Array<{path:string[];name:string;etag:string;size?:number}>=[];
    const activeOriginals=new Map<string,CloudRecord[]>();
    let total=originalIndex.years.length+originalIndex.incomeYears.length;

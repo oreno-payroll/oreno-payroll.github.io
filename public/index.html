@@ -174,12 +174,12 @@
             <label><input type="radio" name="statement-kind" value="bonus" disabled><span>賞与</span></label>
           </fieldset>
         </div>
-        <section id="pending-deletion" class="pending-deletion" aria-label="削除待ちの明細" hidden>
-          <p id="pending-deletion-status" role="status" aria-live="polite"></p>
+        <details id="pending-deletion" class="pending-deletion" aria-label="削除待ちの明細" hidden>
+          <summary class="accordion-summary" id="pending-deletion-status" aria-live="polite"></summary>
           <p>確定するまでは、明細・収入集計・PDF原本を変更しません。</p>
           <ul id="pending-deletion-list"></ul>
-          <div class="pending-deletion-actions"><button type="button" class="btn btn--secondary" id="pending-deletion-undo">すべて元に戻す</button><button type="button" class="btn btn--danger-outline" id="pending-deletion-save" disabled>削除を確定</button></div>
-        </section>
+          <div class="pending-deletion-actions"><button type="button" class="btn btn--secondary" id="pending-deletion-undo">全取消</button><button type="button" class="btn btn--danger-outline" id="pending-deletion-save" disabled>削除を確定</button></div>
+        </details>
         <div class="statements-grid">
           <section class="statement-column" aria-labelledby="main-list-heading">
             <div class="statement-column__heading"><h3 id="main-list-heading">本業</h3><span class="count-badge" id="main-count">0件</span></div>

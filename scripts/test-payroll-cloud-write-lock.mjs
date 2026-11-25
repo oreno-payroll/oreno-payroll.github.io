@@ -4,24 +4,33 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
+const receipts=new Map();
+const localStorage={getItem:k=>receipts.get(k)??null,setItem:(k,v)=>receipts.set(k,v),removeItem:k=>receipts.delete(k)};
 const src=readFileSync(new URL('../src/cloud/graph.ts',import.meta.url),'utf8');
 const {PayrollGraph,PAYROLL_WRITE_LOCK_NAME:name}=runInNewContext(stripTypeScriptTypes(src.replace(/^import[^\n]*\n/gm,'').replace(/\bexport\s+/g,''),{mode:'transform'})+'\n({PayrollGraph,PAYROLL_WRITE_LOCK_NAME})',{
- URL,Response,Request,Headers,TextEncoder,TextDecoder,Uint8Array,performance,crypto:webcrypto,setTimeout,clearTimeout,
+ URL,Response,Request,Headers,TextEncoder,TextDecoder,Uint8Array,performance,crypto:webcrypto,setTimeout,clearTimeout,localStorage,
  observeGraphTransfer:()=>{},observeGraphRetry:()=>{},MicrosoftSignInRequiredError:class extends Error{},MicrosoftTemporaryError:class extends Error{},
 });
 function fixture(){
- const state={lock:null,serial:0,writes:0,lostCreate:false,delayedCreate:false,createStatus:201,lostWrite:false,lostRelease:false,blockedRelease:false,events:[]};
+ const state={lock:null,serial:0,writes:0,lostCreate:false,delayedCreate:false,createStatus:201,lostWrite:false,lostRelease:false,blockedRelease:false,events:[],content:null,contentMode:"ok",rejectStatus:0,lockReject:0,sessionReject:0,chunkReject:0,contentReadBlocked:false};
  const meta=()=>({name,id:state.lock.id,eTag:state.lock.etag,size:state.lock.text.length,'@microsoft.graph.downloadUrl':'https://storage.example.test/'+state.lock.id});
  const http=async(raw,init={})=>{
   const u=new URL(raw),method=init.method??'GET';
   if(u.hostname==='storage.example.test'){
-   assert.equal(method,'GET');assert.equal(new Headers(init.headers).has('Authorization'),false);
+   assert.equal(new Headers(init.headers).has('Authorization'),false);
+   if(u.pathname==='/upload'&&method==='PUT'){
+    if(state.chunkReject)return new Response(null,{status:state.chunkReject});
+    return saveContent(init.body);
+   }
+   assert.equal(method,'GET');
+   if(u.pathname==='/data')return state.content?new Response(state.content.text):new Response(null,{status:404});
    return state.lock&&u.pathname==='/'+state.lock.id?new Response(state.lock.text):new Response(null,{status:404});
   }
   assert.equal(u.origin,'https://graph.microsoft.com');assert.equal(new Headers(init.headers).get('Authorization'),'Bearer fixture');
   if(u.pathname.endsWith('/special/approot'))return Response.json({id:'root'});
   if(u.pathname.endsWith('/root:/'+name+':/content')&&method==='PUT'){
    assert.equal(u.searchParams.get('@microsoft.graph.conflictBehavior'),'fail');
+   if(state.lockReject)return new Response(null,{status:state.lockReject});
    if(state.lock)return new Response(null,{status:409});
    const created={id:'lock-'+(++state.serial),etag:'etag-'+state.serial,text:new TextDecoder().decode(init.body)};
    if(state.delayedCreate){state.delayed=created;throw Error('creation pending');}
@@ -39,10 +48,28 @@ function fixture(){
    if(state.blockedRelease)throw Error('release unavailable');
    state.lock=null;state.events.push('release');if(state.lostRelease)throw Error('lost release response');return new Response(null,{status:204});
   }
+  if(u.pathname.endsWith('/root:/data.enc:/content')&&method==='PUT')return saveContent(init.body);
+  if(u.pathname.endsWith('/createUploadSession')&&method==='POST'){
+   if(state.sessionReject)return new Response(null,{status:state.sessionReject});
+   return Response.json({uploadUrl:'https://storage.example.test/upload'});
+  }
+  if(u.pathname.endsWith('/root:/data.enc')&&method==='GET'){
+   if(state.contentReadBlocked)throw Error('synthetic read unavailable');
+   return state.content?Response.json({id:'data',name:'data.enc',eTag:state.content.etag,size:state.content.text.length,'@microsoft.graph.downloadUrl':'https://storage.example.test/data'}):new Response(null,{status:404});
+  }
   if(u.pathname.endsWith('/synthetic-write')&&method==='POST'){
-   assert.ok(state.lock);state.writes++;state.events.push('write');if(state.lostWrite)throw Error('lost write response');return Response.json({});
+   assert.ok(state.lock);if(state.rejectStatus)return new Response(null,{status:state.rejectStatus});state.writes++;state.events.push('write');if(state.lostWrite)throw Error('lost write response');return Response.json({});
   }
   throw Error('unexpected synthetic request '+method+' '+u.pathname);
+ };
+ const saveContent=body=>{
+  assert.ok(state.lock);state.writes++;
+  if(state.contentMode==='reject')return new Response(null,{status:429});
+  if(state.contentMode==='lost-missing')throw Error('lost without content');
+  const text=new TextDecoder().decode(body);
+  state.content={text:state.contentMode==='lost-different'?'different':text,etag:'content-'+state.writes};
+  if(state.contentMode.startsWith('lost'))throw Error('lost final content reply');
+  return Response.json({id:'data',size:text.length},{status:201});
  };
  const graph=()=>new PayrollGraph('fixture',http);
  return {state,graph,write:g=>g.request('/synthetic-write',{method:'POST'})};
@@ -165,6 +192,111 @@ for(const lostWrite of [false,true]){
  await assert.rejects(a.reconcileUploadLock(state),/安全に解除できない/);assert.ok(f.state.lock);
 }
 console.log('PASS: upload write evidence and conditional recovery of settled own locks');
+// P01: explicit rejection is not an unknown mutation. No blind resend.
+for(const status of [401,403,409,412,429]){
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.rejectStatus=status;
+ await assert.rejects(a.withWriteLock(()=>f.write(a),state));
+ assert.equal(state.attempted,false);assert.equal(state.uncertain,false);assert.equal(f.state.lock,null);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.lockReject=429;await assert.rejects(a.withWriteLock(()=>f.write(a),state),/429/);
+ assert.equal(state.lock,'none');assert.equal(f.state.lock,null);
+}
+for(const kind of ['direct','session','chunk']){
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ if(kind==='direct')f.state.contentMode='reject';else if(kind==='session')f.state.sessionReject=429;else f.state.chunkReject=429;
+ const prior=kind==='direct'?null:{id:'data',etag:'before'};
+ await assert.rejects(a.withWriteLock(()=>a.write([],'data.enc','fresh ciphertext',prior,1000),state),/429/);
+ assert.equal(state.attempted,false);assert.equal(state.uncertain,false);assert.equal(f.state.lock,null);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ await assert.rejects(a.withWriteLock(async()=>{await f.write(a);a.markUploadCheckpoint();f.state.rejectStatus=429;await f.write(a);},state),/429/);
+ assert.equal(state.uncertain,false);assert.equal(f.state.lock,null);assert.equal(f.state.writes,1);
+}
+console.log('PASS P01: explicit Graph/fragment 429 rejection and verified checkpoint release');
+// A receipt is persisted only at the safe release boundary. A new Graph
+// instance (as after browser reload) may reconcile that exact owner, never an active owner.
+{
+ receipts.clear();const f=fixture(),a=f.graph(),b=f.graph();
+ f.state.blockedRelease=true;
+ await assert.rejects(a.withWriteLock(()=>f.write(a)),/解除/);
+ assert.equal(receipts.size,1);assert.match([...receipts.keys()][0],/^payroll-settled-lock-v1:[a-f0-9]{64}$/);
+ assert.deepEqual([...receipts.values()],['1']);
+ f.state.blockedRelease=false;await b.withWriteLock(()=>f.write(b));
+ assert.equal(f.state.lock,null);assert.equal(f.state.writes,2);assert.equal(receipts.size,0);
+}
+{
+ receipts.clear();const f=fixture(),a=f.graph(),b=f.graph();f.state.blockedRelease=true;
+ await assert.rejects(a.withWriteLock(()=>f.write(a)));
+ f.state.lock={...f.state.lock,etag:'changed'};f.state.blockedRelease=false;
+ await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);assert.equal(f.state.writes,1);assert.equal(f.state.lock.etag,'changed');
+}
+{
+ receipts.clear();const f=fixture(),a=f.graph(),b=f.graph();f.state.lostWrite=true;
+ await assert.rejects(a.withWriteLock(()=>f.write(a)));assert.equal(receipts.size,0);
+ await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);assert.ok(f.state.lock);
+}
+console.log('PASS P01: reload recovers only a fingerprint of a settled exact owner');
+for(const prior of [null,{id:'data',etag:'before'}]){
+ receipts.clear();const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.contentMode='lost';
+ await a.withWriteLock(()=>a.write([],'data.enc','fresh ciphertext',prior,1000),state);
+ assert.equal(state.completed,true);assert.equal(state.uncertain,false);assert.equal(f.state.writes,1);assert.equal(f.state.lock,null);
+}
+for(const mode of ['lost-missing','lost-different']){
+ receipts.clear();const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};f.state.contentMode=mode;
+ await assert.rejects(a.withWriteLock(()=>a.write([],'data.enc','fresh ciphertext',null,1000),state));
+ assert.equal(state.uncertain,true);assert.ok(f.state.lock);assert.equal(receipts.size,0);
+}
+{
+ // The saved payroll checkpoint permits delayed confirmation of derived data.
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.contentMode='lost';f.state.contentReadBlocked=true;
+ await assert.rejects(a.withWriteLock(async()=>{await f.write(a);state.payrollSaved=true;await a.write([],'data.enc','fresh ciphertext',null,1000);},state));
+ assert.equal(state.uncertain,true);assert.ok(f.state.lock);
+ f.state.contentReadBlocked=false;await a.reconcileUploadLock(state);assert.equal(state.uncertain,false);assert.equal(f.state.lock,null);
+}
+{
+ // Exact body alone must not authorize release of an unverified multi-file transaction.
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.contentMode='lost';f.state.contentReadBlocked=true;
+ await assert.rejects(a.withWriteLock(()=>a.write([],'data.enc','fresh ciphertext',null,1000),state));
+ f.state.contentReadBlocked=false;await assert.rejects(a.reconcileUploadLock(state),/安全に解除できない/);assert.ok(f.state.lock);
+}
+{
+ // A copied ciphertext is not a fresh per-operation proof.
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};f.state.contentMode='lost';
+ await assert.rejects(a.withWriteLock(()=>a.write([],'data.enc','copied ciphertext',null,1000,undefined,false),state));assert.equal(state.uncertain,true);assert.ok(f.state.lock);
+}
+{
+ // Positive proof for one concurrent write must never erase a different lost reply.
+ receipts.clear();const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.contentMode='lost';f.state.lostWrite=true;
+ await assert.rejects(a.withWriteLock(async()=>{
+  const results=await Promise.allSettled([a.write([],'data.enc','fresh ciphertext',null,1000),f.write(a)]);
+  const failure=results.find(r=>r.status==='rejected');throw failure.reason;
+ },state));
+ assert.equal(state.uncertain,true);assert.ok(f.state.lock);assert.equal(receipts.size,0);
+}
+{
+ // The stored bytes cannot settle an update if the old version is still live.
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};f.state.contentMode='lost';
+ await assert.rejects(a.withWriteLock(()=>a.write([],'data.enc','fresh ciphertext',{id:'data',etag:'content-1'},1000),state));
+ assert.equal(state.uncertain,true);assert.ok(f.state.lock);
+}
+{
+ // No browser storage permission must not prevent normal saves or same-tab recovery.
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ const original=localStorage.setItem;localStorage.setItem=()=>{throw Error('storage denied');};
+ try{f.state.blockedRelease=true;await assert.rejects(a.withWriteLock(()=>f.write(a),state));
+  f.state.blockedRelease=false;await a.reconcileUploadLock(state);assert.equal(f.state.lock,null);
+ }finally{localStorage.setItem=original;}
+}
+console.log('PASS P01: positive content proof, delayed derived recovery, no release on absence/mismatch/copied ciphertext');
+
 // Actual read path distinguishes pre-dispatch authentication and transport errors.
 {
  let calls=0;const a=new PayrollGraph(async()=>{throw Error('synthetic secret');},async()=>{calls++;throw Error('must not send');});
@@ -204,3 +336,23 @@ console.log('PASS: authentication stage and token refresh, verified folder IDs a
  await assert.rejects(v.original({...record,fileHash:'0'.repeat(64)}),/SHA-256/);
  console.log('PASS: real encrypted original hash required, legacy digest restricted to duplicate detection');
 }
+
+// P03: receipt is available only for a complete 201 creation response, for both
+// a single PUT and a completed upload session. Other callers keep old fallback.
+for(const large of [false,true])for(const variant of ['valid','no-etag','bad-id','folder','wrong-parent','wrong-name','replacement']){
+ const text='x'.repeat(large?4*1024*1024+1:12),size=text.length;let puts=0,seen=0;
+ const graph=new PayrollGraph('fixture',async(raw,init)=>{
+  const u=new URL(raw);
+  if(init.method==='POST')return Response.json({uploadUrl:'https://storage.example.test/receipt'});
+  assert.equal(init.method,'PUT');puts++;seen+=init.body.length;
+  if(large&&seen<size)return new Response(null,{status:202});
+  const item={id:variant==='bad-id'?123:'new-file',folder:variant==='folder'?{}:undefined,name:variant==='wrong-name'?'other.enc':'sample.enc',eTag:variant==='no-etag'?undefined:'new-etag',size,parentReference:{id:variant==='wrong-parent'?'other':'parent'}};
+  return Response.json(item,{status:variant==='replacement'?200:201});
+ },()=>{},undefined,undefined,false);
+ graph.folder=async()=> 'parent';
+ const receipt=await graph.write(['payroll','originals','2026','11'],'sample.enc',text,null,size);
+ assert.equal(puts,large?2:1);
+ if(variant==='valid')assert.deepEqual(JSON.parse(JSON.stringify(receipt)),{id:'new-file',etag:'new-etag',size,name:'sample.enc'});
+ else assert.equal(receipt,undefined,variant);
+}
+console.log('PASS P03: verified creation receipt for single PUT and upload session; incomplete/mismatched/non-creation responses retain readback');

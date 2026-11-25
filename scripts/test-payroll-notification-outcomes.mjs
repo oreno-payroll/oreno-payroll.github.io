@@ -54,13 +54,14 @@ const [message,dismiss]=el.children;
 const timers=[];const oldSet=globalThis.setTimeout,oldClear=globalThis.clearTimeout;
 globalThis.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length;};globalThis.clearTimeout=()=>{};
 try{
- status.loading('保存中');assert.equal(el.dataset.state,'loading');assert.equal(timers.length,0);assert.equal(dismiss.hidden,true);
- status.success('警告という文字があっても成功');assert.equal(el.dataset.state,'success');assert.equal(timers.at(-1).ms,3500);
+ status.loading('保存中');assert.equal(el.dataset.state,'loading');assert.equal(timers.length,0);assert.equal(dismiss.hidden,false);
+ dismiss.click();assert.equal(el.hidden,true);status.loading('進捗更新');assert.equal(el.hidden,true);
+ status.success('警告という文字があっても成功');assert.equal(el.hidden,false);assert.equal(el.dataset.state,'success');assert.equal(timers.at(-1).ms,3500);
  const oldTimer=timers.at(-1);status.partial('保存は完了しました。連携未完了');assert.equal(el.dataset.state,'partial');assert.equal(timers.length,1);assert.equal(dismiss.hidden,false);
  oldTimer.fn();assert.equal(el.hidden,false,'stale timer must not hide newer result');
  dismiss.click();assert.equal(el.hidden,true);assert.equal(message.textContent,'');
  status.info('重複しているため新規保存なし');assert.equal(el.dataset.state,'info');
- status.warning('入力を確認してください');assert.equal(el.dataset.state,'warning');assert.equal(timers.at(-1).ms,9000);assert.equal(dismiss.hidden,true);
+ status.warning('入力を確認してください');assert.equal(el.dataset.state,'warning');assert.equal(timers.at(-1).ms,9000);assert.equal(dismiss.hidden,false);
  const n=timers.length;status.error('処理失敗');assert.equal(el.dataset.state,'error');assert.equal(timers.length,n);assert.equal(dismiss.hidden,false);timers.at(-1).fn();assert.equal(el.hidden,false);dismiss.click();assert.equal(el.hidden,true);
  status.warning('復旧を確認してください',true);assert.equal(timers.length,n);assert.equal(dismiss.hidden,false);dismiss.click();assert.equal(el.hidden,true);
 }finally{globalThis.setTimeout=oldSet;globalThis.clearTimeout=oldClear;}

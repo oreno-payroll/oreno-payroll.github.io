@@ -23,8 +23,9 @@
 .payroll-cloud-checking__message{display:flex;align-items:center;gap:11px;font-size:13px;font-weight:750;line-height:1.6;overflow-wrap:anywhere}
 .payroll-cloud-checking__message p{min-width:0}
 .payroll-cloud-spinner{display:inline-block;flex:none;width:20px;height:20px;border:2px solid var(--color-border-strong,#cfd8e5);border-top-color:var(--color-primary,#315bd4);border-radius:50%;animation:payroll-cloud-check-spin .9s linear infinite}
-.payroll-cloud-checking__help{font-size:11px;line-height:1.6;color:var(--color-muted,#69778b)}
 .payroll-cloud-checking__actions{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:stretch}
+.payroll-cloud-checking__actions:has(> button[hidden]:first-child + button[hidden]){display:none}
+.payroll-cloud-checking__actions button[hidden]{display:none!important}
 .payroll-cloud-checking__actions button{min-width:0;padding:9px 11px;font-size:12px}
 .payroll-cloud-reload{background:transparent;border-color:var(--color-border-strong,#cfd8e5)!important;color:var(--color-text,#17253b)}
 .payroll-cloud-checking__actions button:focus-visible{outline:2px solid var(--color-primary,#315bd4);outline-offset:2px}

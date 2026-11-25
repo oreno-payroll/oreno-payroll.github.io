@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-echo '[Payroll] pre-push: full security gate'
+echo '[Payroll] pre-push: source and history privacy gate'
 # Feature-branch deletions send no code. Reject unsafe refs, but permit a safe
 # deletion without pretending the zero commit SHA equals the current HEAD.
 set +e
@@ -21,10 +21,7 @@ fi
 node scripts/audit-publish.mjs
 node scripts/audit-private-data.mjs --strict-gitleaks --require-private-terms --skip-current-author
 node scripts/audit-ci-workflow.mjs
-npm ci
-npm run build
-node scripts/audit-dist.mjs --require-private-terms
-npm test
-npm audit --audit-level=high
-gitleaks git --log-opts=--all --redact --no-banner .
+# Only committed source is pushed; dist is excluded by the publish audit.
+# Run local quality checks before committing. PR/main CI independently builds,
+# tests and audits the distribution; the isolated main job checks private terms.
 echo '[Payroll] pre-push: PASS'

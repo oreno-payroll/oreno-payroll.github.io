@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 const root=fileURLToPath(new URL('../',import.meta.url));
-export const REVIEWED_WORKFLOW_SHA256='c3d753eea3e5a4fc6f06f111a3a6c2639d51852eb0b07f47a43f8bd384cec6ff';
+export const REVIEWED_WORKFLOW_SHA256='a5922254de5f45466e920ca0d0f6a4f180806200e924161491d6c0b5c9a63879';
 export const REQUIRED_STATUS_CHECK='security';
 const sha256=source=>createHash('sha256').update(source,'utf8').digest('hex');
 
@@ -25,6 +25,7 @@ export function auditWorkflow(source){
     ['required security job',/^  security:\n    name: security\n    runs-on: ubuntu-latest$/m],
     ['no PR event filter',/^  pull_request:\n    branches: \[main\]$/m],
     ['PR merge tree verifier',/run: node scripts\/audit-pr-target\.mjs/],
+    ['supplemental privacy scanner',/run: node scripts\/audit-private-data\.mjs --no-gitleaks --skip-current-author$/m],
     ['complete secret history scanner',/run: gitleaks git --log-opts=--all --redact --no-banner \./],
     ['npm vulnerability scanner',/run: npm audit --audit-level=high/],
     ['complete regression tests',/run: npm test/],

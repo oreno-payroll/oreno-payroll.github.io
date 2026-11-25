@@ -84,7 +84,7 @@ const employee=html.match(/<section class="card vault-section" aria-labelledby="
 assert.ok(personal && employee,'both restore panels must be present');
 const steps=[['file','restore-file','ye-restore-file'],['password','restore-password','ye-restore-password'],
  ['verify','verify-button','ye-restore-verify'],['preview','restore-preview','ye-restore-preview'],
- ['ack','restore-ack','ye-restore-ack'],['commit','restore-button','ye-restore-commit']];
+ ['commit','restore-button','ye-restore-commit']];
 for(const [step,pid,eid] of steps){
  assert.ok(personal.includes(`id="${pid}"`),`missing personal ${step}`);
  assert.ok(employee.includes(`id="${eid}"`),`missing employee ${step}`);
@@ -100,7 +100,8 @@ for(const [label,section,ids] of [['personal',personal,steps.map(x=>x[1])],['emp
  assert.ok(section.includes(label==='personal'?'>置き換えて復元</button>':'>従業員を追加復元</button>'),'restore buttons distinguish destructive replacement from additive restore');
 }
 assert.match(personal,/現在の本人明細をすべて置き換えることを確認しました/);
-assert.match(employee,/登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加することを確認しました/);
+assert.doesNotMatch(employee,/id="ye-restore-ack"/);
+assert.match(script,/登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加します。/);
 assert.match(script,/verifyButton\.disabled = busy \|\| !filePicker\.files\?\.length \|\| \(encryptedFile && !restorePassword\.value\)/);
 assert.match(script,/await verifyRestore\(file, encryptedFile \? restorePassword\.value : undefined\)/);
 assert.doesNotMatch(script,/if \(!encryptedFile\) await verifyRestore\(file\)/,'legacy ZIP must await explicit verification');
@@ -122,6 +123,9 @@ assert.match(script,/settingsNavigation=mountSettingsNavigation\(/);
 assert.ok(script.indexOf('settingsNavigation=mountSettingsNavigation(')>script.indexOf("yearEndRecheck.addEventListener('click'"));
 console.log('PASS: settings overview, initial hidden detail panels, busy-state linkage');
 
-for(const id of ['restore-add-inspect','restore-add-preview','restore-add-ack','restore-add-button']){assert.ok(personal.includes(`id="${id}"`));assert.ok(script.includes(id));}
+for(const id of ['restore-add-inspect','restore-add-preview','restore-add-button']){assert.ok(personal.includes(`id="${id}"`));assert.ok(script.includes(id));}
 assert.match(personal,/id="restore-add-button"[^>]*disabled>明細を追加復元/);
 assert.match(script,/await restoreAdditiveRecords\(data.records,plan.signature,data.employers,authorized/);
+
+assert.doesNotMatch(personal,/id="restore-add-ack"/);
+assert.doesNotMatch(script,/\b(?:addAck|yearEndAck)\b/);

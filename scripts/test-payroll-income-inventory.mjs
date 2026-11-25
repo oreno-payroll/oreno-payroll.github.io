@@ -198,3 +198,82 @@ await vault.refresh({forceFresh:true,reuseVerifiedYears:true});
 assert.equal(calls.meta.filter(s=>s.includes('/statements/')).length,4);
 assert.equal(calls.listed.length,0,'ordinary reads are unaffected by the income-only optimization');
 console.log('PASS: non-income refresh retains existing per-file ETag confirmation');
+
+// Multi-year publication shares the three source boundaries. Each income
+// file is independently conditional-written and read back, with one index update.
+initial();unlock();await vault.refresh({forceFresh:true});reset();
+await vault.syncIncome(new Set(['2023','2024','2025','2026']));
+assert.equal(calls.listed.length,3,'four income years share three fresh source inventories');
+assert.equal(calls.write.filter(k=>k.includes('/income/')).length,4);
+assert.equal(calls.write.filter(k=>k==='payroll/index.enc').length,1);
+assert.deepEqual(JSON.parse(files.get('payroll/index.enc').text).incomeYears,yearList);
+for(const y of yearList)assert.deepEqual(JSON.parse(files.get(`payroll/income/${y}.enc`).text).records.map(r=>r.id),[Number(y)]);
+reset();await vault.syncIncome(new Set(yearList));
+assert.equal(calls.write.length,0,'equal registered projections must not be rewritten');
+console.log('PASS: 4 income years share 3 source inventories and 1 registration; unchanged rebuild performs zero writes');
+
+// A bypassing old client changes an earlier source AFTER its income was written,
+// while the later year is being published. Correct all affected projections,
+// not only the year that happened to be last.
+initial();unlock();await vault.refresh({forceFresh:true});reset();
+let earlierSourceChanged=false;
+graph.hookAfterWrite=async key=>{
+ if(key==='payroll/income/2026.enc'&&!earlierSourceChanged){
+  earlierSourceChanged=true;replaceYear('2023',[salary(2023,'2023-05'),salary(9001,'2023-06')]);
+ }
+};
+await vault.syncIncome(new Set(['2023','2026']));graph.hookAfterWrite=null;
+assert.equal(earlierSourceChanged,true);
+assert.deepEqual(JSON.parse(files.get('payroll/income/2023.enc').text).records.map(r=>r.id),[2023,9001]);
+assert.equal(calls.write.filter(k=>k==='payroll/income/2026.enc').length,1,'unchanged later projection is not rewritten');
+console.log('PASS: later-year write detects and repairs earlier source race');
+
+// A different writer replaces an already verified income file during a later
+// write. The final identity sweep must catch it before reporting success.
+initial();unlock();await vault.refresh({forceFresh:true});reset();
+let earlierIncomeChanged=false;
+graph.hookAfterWrite=async key=>{
+ if(key==='payroll/income/2026.enc'&&!earlierIncomeChanged){
+  earlierIncomeChanged=true;put(['payroll','income'],'2023.enc',{format:'payroll-income-v1',year:'2023',records:[]});
+ }
+};
+await vault.syncIncome(new Set(['2023','2026']));graph.hookAfterWrite=null;
+assert.equal(earlierIncomeChanged,true);
+assert.deepEqual(JSON.parse(files.get('payroll/income/2023.enc').text).records.map(r=>r.id),[2023]);
+console.log('PASS: later-year write detects replacement of an earlier income file');
+
+// Full rebuild discovers newly added payment years at shared revalidation.
+initial();unlock();await vault.refresh({forceFresh:true});reset();
+let discovered=false;
+graph.hookRead=async key=>{
+ if(key==='payroll/income/2023.enc'&&!discovered){
+  discovered=true;const added=salary(9100,'2026-06');added.form.paymentDate='2027-01-27';
+  replaceYear('2026',[...base2026,added]);
+ }
+};
+await vault.syncIncome();graph.hookRead=null;
+assert.equal(discovered,true);
+assert.deepEqual(JSON.parse(files.get('payroll/income/2027.enc').text).records.map(r=>r.id),[9100]);
+console.log('PASS: full rebuild includes newly discovered payment years');
+
+// Acknowledged but discarded index update must not be reported successful.
+initial();unlock();await vault.refresh({forceFresh:true});reset();
+const writeIndex=graph.write;
+graph.write=async function(parts,name,...rest){if(name==='index.enc')return;return writeIndex.call(this,parts,name,...rest);};
+try{await assert.rejects(vault.syncIncome(new Set(['2023','2026'])),/索引保存結果が一致しません/);}
+finally{graph.write=writeIndex;}
+assert.deepEqual(JSON.parse(files.get('payroll/index.enc').text).incomeYears,[]);
+console.log('PASS: missing confirmed index registration is a failure');
+
+// A source edit during index registration must also be detected.
+initial();unlock();await vault.refresh({forceFresh:true});reset();
+let indexRace=false;
+graph.hookAfterWrite=async key=>{
+ if(key==='payroll/index.enc'&&!indexRace){
+  indexRace=true;replaceYear('2023',[salary(2023,'2023-05'),salary(9200,'2023-06')]);
+ }
+};
+await vault.syncIncome(new Set(['2023','2026']));graph.hookAfterWrite=null;
+assert.equal(indexRace,true);
+assert.deepEqual(JSON.parse(files.get('payroll/income/2023.enc').text).records.map(r=>r.id),[2023,9200]);
+console.log('PASS: source edit during index registration is detected and repaired');

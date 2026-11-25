@@ -132,6 +132,8 @@ try{
   await op.measure('income-read',async()=>wait(1));op.finish(true);
   assert.equal(logs.length,1);
   assert.equal(logs[0][1].graphRequests,1);assert.equal(logs[0][1].encryptedDownloads,1);
+  const upload=beginPerfOperation('payroll-upload');upload.mark('save-lock');await wait(1);upload.mark('save-inventory');upload.mark('save-inventory');await wait(1);upload.finish(true);upload.finish(false);
+  assert.equal(logs.length,2);assert.equal(logs[1][1].operation,'payroll-upload');assert.equal(logs[1][1].phases['save-inventory'].calls,1);assert.ok(logs[1][1].phases['save-lock'].ms>=0);
   assert.doesNotMatch(JSON.stringify(logs),/accessToken|fileName|targetMonth|paymentDate|Authorization|https?:\/\//);
 }finally{
   console.info=originalInfo;

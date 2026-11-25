@@ -10,7 +10,7 @@ const {PayrollGraph,PAYROLL_WRITE_LOCK_NAME:name}=runInNewContext(stripTypeScrip
  observeGraphTransfer:()=>{},observeGraphRetry:()=>{},MicrosoftSignInRequiredError:class extends Error{},MicrosoftTemporaryError:class extends Error{},
 });
 function fixture(){
- const state={lock:null,serial:0,writes:0,lostCreate:false,lostWrite:false,lostRelease:false,events:[]};
+ const state={lock:null,serial:0,writes:0,lostCreate:false,delayedCreate:false,createStatus:201,lostWrite:false,lostRelease:false,blockedRelease:false,events:[]};
  const meta=()=>({name,id:state.lock.id,eTag:state.lock.etag,size:state.lock.text.length,'@microsoft.graph.downloadUrl':'https://storage.example.test/'+state.lock.id});
  const http=async(raw,init={})=>{
   const u=new URL(raw),method=init.method??'GET';
@@ -23,9 +23,11 @@ function fixture(){
   if(u.pathname.endsWith('/root:/'+name+':/content')&&method==='PUT'){
    assert.equal(u.searchParams.get('@microsoft.graph.conflictBehavior'),'fail');
    if(state.lock)return new Response(null,{status:409});
-   state.lock={id:'lock-'+(++state.serial),etag:'etag-'+state.serial,text:new TextDecoder().decode(init.body)};
+   const created={id:'lock-'+(++state.serial),etag:'etag-'+state.serial,text:new TextDecoder().decode(init.body)};
+   if(state.delayedCreate){state.delayed=created;throw Error('creation pending');}
+   state.lock=created;
    assert.match(state.lock.text,/^[a-f0-9]{64}$/);state.events.push('acquire');
-   if(state.lostCreate)throw Error('lost acquire response');return Response.json(meta(),{status:201});
+   if(state.lostCreate)throw Error('lost acquire response');return Response.json(meta(),{status:state.createStatus});
   }
   if(u.pathname.endsWith('/root:/'+name)&&method==='GET'){
    if(!state.lock)return new Response(null,{status:404});
@@ -34,6 +36,7 @@ function fixture(){
   if(method==='DELETE'&&u.pathname.includes('/items/lock-')){
    if(!state.lock||!u.pathname.endsWith('/'+state.lock.id))return new Response(null,{status:404});
    if(new Headers(init.headers).get('If-Match')!==state.lock.etag)return new Response(null,{status:412});
+   if(state.blockedRelease)throw Error('release unavailable');
    state.lock=null;state.events.push('release');if(state.lostRelease)throw Error('lost release response');return new Response(null,{status:204});
   }
   if(u.pathname.endsWith('/synthetic-write')&&method==='POST'){
@@ -59,9 +62,9 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
 }
 {
  const f=fixture(),a=f.graph();f.state.lostCreate=true;
- await assert.rejects(a.withWriteLock(()=>f.write(a)),/取得を確認できません/);assert.equal(f.state.writes,0);assert.ok(f.state.lock);
- await assert.rejects(f.graph().withWriteLock(async()=>{}),/他の端末/);
- console.log('PASS: ambiguous acquisition never writes or steals');
+ await assert.rejects(a.withWriteLock(()=>f.write(a)),/ロックは解除しました/);assert.equal(f.state.writes,0);assert.equal(f.state.lock,null);
+ f.state.lostCreate=false;await a.withWriteLock(()=>f.write(a));assert.equal(f.state.writes,1);
+ console.log('PASS: lost acquisition response reconciles exact own lock without writing, then allows retry');
 }
 {
  const f=fixture(),a=f.graph();f.state.lostWrite=true;
@@ -79,9 +82,107 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
 }
 {
  const f=fixture(),a=f.graph();f.state.lostRelease=true;
- await assert.rejects(a.withWriteLock(()=>f.write(a)),/解除を確認できません/);assert.equal(f.state.writes,1);assert.equal(f.state.lock,null);
- console.log('PASS: ambiguous release never reports success or retries mutation');
+ const state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ assert.equal(await a.withWriteLock(async()=>{await f.write(a);return 42;},state),42);
+ assert.equal(f.state.writes,1);assert.equal(f.state.lock,null);assert.equal(state.completed,true);assert.equal(state.lock,'released');
+ console.log('PASS: lost release reply with verified absence preserves the successful result');
 }
+// Upload recovery may release only a verified, safely settled own lock.
+for(const completed of [false,true]){
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.blockedRelease=true;
+ await assert.rejects(a.withWriteLock(async()=>{if(completed)await f.write(a);else throw Error('preflight failed');},state),/解除/);
+ assert.equal(state.attempted,completed);assert.equal(state.completed,completed);assert.equal(state.uncertain,false);assert.equal(state.lock,'unknown');assert.ok(f.state.lock);
+ f.state.blockedRelease=false;await a.reconcileUploadLock(state);assert.equal(state.lock,'released');assert.equal(f.state.lock,null);assert.equal(f.state.writes,Number(completed));
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};f.state.lostWrite=true;
+ await assert.rejects(a.withWriteLock(()=>f.write(a),state));assert.equal(state.uncertain,true);assert.equal(state.attempted,true);
+ await assert.rejects(a.reconcileUploadLock(state),/安全に解除できない/);assert.ok(f.state.lock);assert.equal(f.state.writes,1);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};f.state.lostCreate=true;f.state.blockedRelease=true;
+ await assert.rejects(a.withWriteLock(()=>f.write(a),state));assert.equal(state.attempted,false);assert.equal(state.lock,'unknown');
+ f.state.blockedRelease=false;await a.reconcileUploadLock(state);assert.equal(state.lock,'released');assert.equal(f.state.lock,null);assert.equal(f.state.writes,0);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.delayedCreate=true;
+ await assert.rejects(a.withWriteLock(()=>f.write(a),state),/取得を確認できません/);
+ assert.equal(state.lock,'unknown');assert.equal(f.state.lock,null);
+ await assert.rejects(a.reconcileUploadLock(state),/作成結果がまだ不明/);
+ // A different owner appearing must not be touched.
+ f.state.lock={id:'other',etag:'other-e',text:'f'.repeat(64)};
+ await assert.rejects(a.reconcileUploadLock(state),/安全に解除できない/);assert.equal(f.state.lock.id,'other');
+ f.state.lock=f.state.delayed;await a.reconcileUploadLock(state);assert.equal(f.state.lock,null);assert.equal(f.state.writes,0);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.lostWrite=true;await assert.rejects(a.withWriteLock(()=>f.write(a),state));
+ // Absence does not establish that a dispatched business write has settled.
+ f.state.lock=null;await assert.rejects(a.reconcileUploadLock(state),/安全に解除できない/);
+ assert.equal(state.uncertain,true);assert.equal(f.state.writes,1);
+}
+// A verified partial checkpoint releases only while no subsequent mutation was sent.
+for(const laterWrite of ['none','settled','unknown']){
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ await assert.rejects(a.withWriteLock(async()=>{
+  await f.write(a);a.markUploadCheckpoint();
+  if(laterWrite!=='none'){f.state.lostWrite=laterWrite==='unknown';await f.write(a);}
+  throw Error('next stage failed');
+ },state));
+ assert.equal(Boolean(f.state.lock),laterWrite!=='none');
+ assert.equal(state.uncertain,laterWrite==='unknown');
+ assert.equal(state.lock,laterWrite==='none'?'released':'held');
+}
+// The authoritative payroll checkpoint allows release only if all writes settled.
+for(const lostWrite of [false,true]){
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ await assert.rejects(a.withWriteLock(async()=>{
+  await f.write(a);state.payrollSaved=true;
+  if(lostWrite){f.state.lostWrite=true;await f.write(a);}
+  throw Error('Finance unavailable');
+ },state));
+ assert.equal(state.payrollSaved,true);assert.equal(state.completed,false);assert.equal(state.uncertain,lostWrite);
+ assert.equal(Boolean(f.state.lock),lostWrite);assert.equal(state.lock,lostWrite?'held':'released');
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.blockedRelease=true;
+ await assert.rejects(a.withWriteLock(async()=>{await f.write(a);state.payrollSaved=true;throw Error('Finance unavailable');},state));
+ assert.equal(state.lock,'unknown');f.state.blockedRelease=false;await a.reconcileUploadLock(state);assert.equal(f.state.lock,null);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ await assert.rejects(a.withWriteLock(async()=>{await f.write(a);throw Error('derived readback unavailable');},state,true));
+ assert.equal(state.lock,'released');assert.equal(f.state.lock,null);
+}
+{
+ const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ f.state.createStatus=200;
+ await assert.rejects(a.withWriteLock(()=>f.write(a),state),/新規作成を確認できません/);
+ assert.equal(f.state.writes,0);assert.ok(f.state.lock);
+ await assert.rejects(a.reconcileUploadLock(state),/安全に解除できない/);assert.ok(f.state.lock);
+}
+console.log('PASS: upload write evidence and conditional recovery of settled own locks');
+// Actual read path distinguishes pre-dispatch authentication and transport errors.
+{
+ let calls=0;const a=new PayrollGraph(async()=>{throw Error('synthetic secret');},async()=>{calls++;throw Error('must not send');});
+ await assert.rejects(a.root(),e=>/認証処理.*送信前/.test(e.message)&&!e.message.includes('synthetic secret'));assert.equal(calls,0);
+ let refreshes=0;const b=new PayrollGraph('old',async(_,init)=>{calls++;return new Headers(init.headers).get('Authorization')==='Bearer new'?Response.json({id:'root'}):new Response(null,{status:401});},undefined,{invalidate(){},refresh:async()=>{refreshes++;return 'new';}});
+ assert.equal(await b.root(),'root');assert.equal(calls,2);assert.equal(refreshes,1);
+}
+{
+ const calls=[];const a=new PayrollGraph('fixture',async(raw,init)=>{assert.equal(init.method??'GET','GET');const path=new URL(raw).pathname;calls.push(path);
+  if(path.endsWith('/special/approot'))return Response.json({id:'root'});
+  if(path.endsWith('/root/children'))return Response.json({value:[{id:'year',name:'2026',eTag:'e',folder:{},size:0}]});
+  if(path.endsWith('/year/children'))return Response.json({value:[{id:'month',name:'11',eTag:'e',folder:{},size:0}]});
+  if(path.endsWith('/month/children'))return Response.json({value:[]});
+  throw Error('redundant child lookup');
+ });
+ await a.listFolder([],true);await a.listFolder(['2026'],true);await a.listFolder(['2026','11']);assert.equal(calls.length,4);
+}
+console.log('PASS: authentication stage and token refresh, verified folder IDs avoid redundant child lookup');
 // S08: real AES-GCM originals; absent hash is not verified, even with correct bytes.
 {
  const {encryptBytes,decryptBytes}=await import('../src/cloud/crypto.ts');

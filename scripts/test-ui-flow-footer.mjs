@@ -16,7 +16,7 @@ assert.match(upload,/saveStage\.textContent='新しく保存する明細はあ�
 assert.match(upload,/重複として除外したファイルを下で確認してください/);
 assert.match(upload,/if\(!skipped\) \{[\s\S]*?rememberNavigationNotice\(\{operation:'upload-saved',count:result\.saved\},operationEpoch\);[\s\S]*?window\.location\.assign\('\.\.\/index\.html'\)/);
 assert.match(upload,/catch \(error\) \{[\s\S]*?showInlineError\(saveStatus, `保存に失敗しました/);
-const noOpBranch=upload.match(/\} else \{\s*stopSaveClock\(\);([\s\S]*?)\n    \}\n    \/\/ 重複がなければ従来どおり自動帰還/);
+const noOpBranch=upload.match(/\} else \{\s*updateSaveClock\(\);stopSaveClock\(true\);([\s\S]*?)\n    \}\n    \/\/ 重複がなければ従来どおり自動帰還/);
 assert.ok(noOpBranch,'duplicate-only success branch not found');
 assert.doesNotMatch(noOpBranch[1],/saving\s*=\s*false|updateSaveState\(\)/,'no button flicker before navigation');
 console.log('PASS: ordinary saves return home; duplicate results remain visible; save failures remain on screen');

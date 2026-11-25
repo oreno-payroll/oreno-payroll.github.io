@@ -584,7 +584,8 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
   const hadView=dashboardHasView;
   dashboardLoading=true;
   if(!hadView){registrationPanel.hidden = true;renderList('main',[],'読み込み中…');renderList('side',[],'読み込み中…');}
-  appStatus.loading(hadView?'OneDriveで最新データを再確認しています…':'明細データを読み込んでいます…');
+  // Routine reads must not erase an unresolved partial operation notice.
+  if(appStatus.element.dataset.state!=='partial')appStatus.clear();
   const indicator=document.getElementById('payroll-data-freshness');
   const freshness=hadView?'rechecking':'checking';
   if(indicator){indicator.textContent=dashboardFreshnessLabel(freshness);indicator.dataset.freshness=freshness;}
@@ -603,7 +604,7 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
       onEmployerDirectory:directory=>{nextDirectory=directory;},
       forceFresh,
       priorityYears:[String(preferred),String(preferred-1)],
-      onProgress:message=>{if(!hadView)periodLabel.textContent=message;appStatus.loading(message);},
+      onProgress:message=>{if(!hadView)periodLabel.textContent=message;},
     });
     saved=nextSaved;employerDirectory=nextDirectory;legacyDirectory=legacyEmployers(saved,employerDirectory);
     yearSelect.disabled = false;
@@ -623,7 +624,6 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
     const notice=takeNavigationNotice(authEpoch());
     const outcome=completion??(notice?navigationFeedback(notice):null);
     if(outcome)appStatus.show(outcome.kind,outcome.message);
-    else appStatus.success(cache.cached?'暗号化スナップショットを表示しています（変更操作時はOneDriveを再検証します）':'明細データを読み込みました');
   } catch (error) {
     console.error('保存済み明細を読み込めませんでした。');
     appStatus.error(`${completion?completion.message+'\n':''}明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);

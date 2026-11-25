@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# stdout = normal, deletion-only (exit 10), or reject. No tests are skipped for a real push.
+# Exit 0 = source update, 10 = deletion only, otherwise reject.
 set -euo pipefail
 head="${1:?expected checked-out commit}"
 [[ "$head" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -17,6 +17,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
  if [[ ! "$local_ref" =~ ^refs/heads/[a-zA-Z0-9_./-]+$ ||
        "$local_ref" == *..* || "$local_ref" == */.*/\* ||
        "$local_sha" != "$head" || "$remote_ref" != refs/heads/* ||
+       "$remote_ref" == refs/heads/main ||
        ! "$remote_sha" =~ ^[0-9a-f]{40}$ ]]; then
    echo "NG: push対象が検証中のHEADと違うか、安全なrefではありません: $local_ref" >&2
    exit 1
@@ -25,6 +26,6 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 done
 [[ "$saw_any" -eq 1 ]] || { echo 'NG: empty pre-push ref list' >&2;exit 1; }
 # Git sends zero SHA for a deletion: no source is sent, so running a source
-# audit would be meaningless. Every real update still requires full audit.
+# audit would be meaningless. Every real update still requires source and history audit.
 if [[ "$saw_update" -eq 0 && "$saw_delete" -eq 1 ]]; then exit 10; fi
 exit 0

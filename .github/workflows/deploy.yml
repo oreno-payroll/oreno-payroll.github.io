@@ -60,7 +60,7 @@ jobs:
           "$RUNNER_TEMP/gitleaks-bin/gitleaks" version
 
       - name: Supplemental private-data audit (no private dictionary on PR runners)
-        run: node scripts/audit-private-data.mjs --strict-gitleaks --skip-current-author
+        run: node scripts/audit-private-data.mjs --no-gitleaks --skip-current-author
 
       - name: Full Git history Gitleaks audit (deployment gate)
         run: gitleaks git --log-opts=--all --redact --no-banner .

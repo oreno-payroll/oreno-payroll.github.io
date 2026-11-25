@@ -112,7 +112,7 @@ reset();await assert.rejects(api.loadRecords(),/解除|保管庫/);assert.equal(
 console.log('PASS F: wrong account and locked vault cannot reuse old decrypted state');
 // Mutating paths keep independent live checks, never use the read-only shortcut.
 const source=read('src/storage/payrollStore.ts');
-assert.match(source,/async function cloudSummaries\(\):Promise<CloudRecord\[]> \{\s*const vault=await cloudVault\(\);return vault\.refresh\(\);/);
+assert.match(source,/const old=await vault\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,onEmployerDirectory\}\)/);
 assert.match(source,/await vault\.refresh\(\{forceFresh:true\}\)/);
 // Two additional live checks are required for the direct PDF viewer.
 const direct=source.slice(source.indexOf('export async function getRecord('),source.indexOf('export async function getOriginalForBatchExport('));

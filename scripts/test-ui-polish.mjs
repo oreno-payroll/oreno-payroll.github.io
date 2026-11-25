@@ -35,5 +35,5 @@ assert.match(uploadTs, /mobileFilePicker\.disabled = saving \|\| uploadSaveRecov
 assert.match(uploadTs, /fileInput\.disabled = saving \|\| uploadSaveRecoveryChecking;/);
 assert.match(uploadTs, /clearButton\.disabled = saving \|\| uploadSaveRecoveryChecking;/);
 assert.match(uploadTs, /saveButton\.disabled = saving \|\| uploadSaveRecoveryRequired \|\| uploadSaveRecoveryChecking \|\|/);
-assert.match(uploadTs, /uploadRecoveryReload\.disabled = saving \|\| uploadSaveRecoveryChecking \|\| !uploadSaveRecoveryRequired \|\| !uploadSaveRecoveryChecked;/);
+assert.match(uploadTs, /uploadRecoveryRecheck\.disabled = saving \|\| uploadSaveRecoveryChecking \|\| !uploadSaveRecoveryRequired;/);
 console.log('PASS: icon-only settings, matched period controls, back navigation, mobile picker, desktop drop zone');

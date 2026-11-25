@@ -12,7 +12,7 @@ import {createEmployerId} from './storage/employerIdentity';
 import {legacyEmployers,employerDisplayName,type LegacyEmployer} from './ui/employerSelection';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
-import {captureOperationAuthorization,cloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,signOutMicrosoftAccount,reconnectMicrosoftAccount,cloudRedirectUri,currentBrowserRememberState,rememberCurrentBrowser,forgetCurrentBrowser} from './cloud/auth';
+import {captureOperationAuthorization,cloudVault,tryResumeCloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,signOutMicrosoftAccount,reconnectMicrosoftAccount,cloudRedirectUri,currentBrowserRememberState,rememberCurrentBrowser,forgetCurrentBrowser} from './cloud/auth';
 import {clearNavigationSnapshot} from './cloud/snapshot';
 import type {CloudFolderItem} from './cloud/graph';
 import {YearEndRepository,type YearEndRestorePreview} from './yearEnd/repository';
@@ -37,7 +37,6 @@ const ack = $<HTMLInputElement>('restore-ack');
 const restoreButton = $<HTMLButtonElement>('restore-button');
 const addInspect=$<HTMLButtonElement>('restore-add-inspect');
 const addPreview=$<HTMLElement>('restore-add-preview');
-const addAck=$<HTMLInputElement>('restore-add-ack');
 const addButton=$<HTMLButtonElement>('restore-add-button');
 let addPlan:AdditiveRestorePreview|undefined;
 let addPlanAuthorized:(()=>boolean)|undefined;
@@ -117,9 +116,13 @@ function renderBulkList():void{
  for(const r of bulkCandidates()){
   const label=document.createElement('label'),box=document.createElement('input'),text=document.createElement('span');
   box.type='checkbox';box.checked=bulkSelected.has(r.id);
-  text.textContent=`${r.form.targetMonth} ${r.form.kind==='bonus'?'賞与':'給与'} / 支給日 ${r.form.paymentDate} / ${r.fileName} / 総支給額 ${Number(r.form.gross).toLocaleString('ja-JP')}円`;
+  const title=document.createElement('strong'),detail=document.createElement('small'),amount=document.createElement('span');
+  title.textContent=`${r.form.targetMonth} ${r.form.kind==='bonus'?'賞与':'給与'}`;
+  detail.textContent=`支給日 ${r.form.paymentDate} / ${r.fileName}`;
+  amount.className='employer-bulk__amount';amount.textContent=String(r.form.gross??'').trim()?`${Number(r.form.gross).toLocaleString('ja-JP')}円`:'金額未取得';
+  text.className='employer-bulk__record';text.append(title,detail);
   box.addEventListener('change',()=>{if(busy||!bulkAuthorized?.())return;if(box.checked)bulkSelected.add(r.id);else bulkSelected.delete(r.id);updateBulkControls();});
-  label.append(box,text);bulkList.append(label);
+  label.append(box,text,amount);bulkList.append(label);
  }
  updateBulkControls();
 }
@@ -160,7 +163,9 @@ function renderEmployerDirectory():void{
   const label=`${entry.name}（${roleLabel(entry.role)}・${entry.current?'現在':'過去'}${sameName.length>1?`・${sameName.findIndex(x=>x.id===entry.id)+1}`:''}）`;
   employerDirectoryTarget.append(option(entry.id,label));
   const li=document.createElement('li'),text=document.createElement('span'),edit=document.createElement('button');
-  text.textContent=label;edit.type='button';edit.className='btn btn--secondary btn--small';edit.textContent='編集';
+  const name=document.createElement('strong'),meta=document.createElement('small');
+  name.textContent=entry.name;meta.textContent=`${roleLabel(entry.role)} · ${entry.current?'現在':'過去'}${sameName.length>1?` · ${sameName.findIndex(x=>x.id===entry.id)+1}`:''}`;
+  text.className='employer-settings__identity';text.append(name,meta);edit.type='button';edit.className='btn btn--secondary btn--small';edit.textContent='編集';
   edit.addEventListener('click',()=>{if(busy)return;employerDirectoryTarget.value=entry.id;fillEmployerDraft();employerDirectoryForm.hidden=false;employerDirectoryName.focus();});li.append(text,edit);employerDirectoryList.append(li);
  }
  legacyDirectory.forEach((entry,i)=>{
@@ -189,7 +194,7 @@ let wasBusy=false;
 const operations: Record<string,Operation>={
  'employer-directory-load':{label:'勤務先一覧を確認',result:'employer-directory-status'},
  'employer-directory-save':{label:'勤務先を保存',result:'employer-directory-status'},
- 'employer-bulk-save':{label:'明細の勤務先を一括設定',result:'employer-bulk-status'},
+ 'employer-bulk-save':{label:'勤務先の一括設定',result:'employer-bulk-status'},
  'export-button':{label:'バックアップを作成',result:'backup-status'},
  'verify-button':{label:'バックアップを検証',result:'backup-status'},
  'restore-button':{label:'バックアップを復元',result:'backup-status'},
@@ -241,7 +246,6 @@ const yearEndFile=$<HTMLInputElement>('ye-restore-file');
 const yearEndRestorePassword=$<HTMLInputElement>('ye-restore-password');
 const yearEndVerify=$<HTMLButtonElement>('ye-restore-verify');
 const yearEndCommit=$<HTMLButtonElement>('ye-restore-commit');
-const yearEndAck=$<HTMLInputElement>('ye-restore-ack');
 const yearEndPreviewLabel=$<HTMLElement>('ye-restore-preview');
 const yearEndStatus=$<HTMLElement>('ye-backup-status');
 const yearEndDiagnosis=$<HTMLElement>('ye-restore-diagnosis');
@@ -285,7 +289,7 @@ function updateButtons(): void {
   detachedList.querySelectorAll<HTMLButtonElement>('button').forEach(button=>button.disabled=busy);
   exportButton.disabled = busy || !loadedDb;
   yearEndExport.disabled=busy;yearEndVerify.disabled=busy||!yearEndFile.files?.length||!yearEndRestorePassword.value;
-  yearEndCommit.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable||!yearEndAck.checked;yearEndAck.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable;
+  yearEndCommit.disabled=busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable;
   yearEndResume.disabled=busy||Boolean(yearEndResume.hidden)||!yearEndPreview;
   yearEndRecheck.disabled=busy||Boolean(yearEndRecheck.hidden)||!yearEndPreview;
   for(const item of [yearEndPassword,yearEndConfirm,yearEndFile,yearEndRestorePassword])item.disabled=busy;
@@ -309,8 +313,7 @@ function updateButtons(): void {
   ack.disabled = busy || !preview;
   restoreButton.disabled = busy || !preview || !ack.checked || !initialSnapshot;
   addInspect.disabled=busy||!preview;
-  addAck.disabled=busy||!preview||!addPlan||!addPlanAuthorized?.()||!(addPlan.add||addPlan.employersAdded);
-  addButton.disabled=addAck.disabled||!addAck.checked;
+  addButton.disabled=busy||!preview||!addPlan||!addPlanAuthorized?.()||!(addPlan.add||addPlan.employersAdded);
 }
 function info(message: string, isError = false): void {
   status.textContent = message;
@@ -321,7 +324,7 @@ function info(message: string, isError = false): void {
 }
 function resetPreview(): void {
   preview = undefined;
-  addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;addPreview.textContent='ファイルを検証してから対象を確認してください。';
+  addPlan=undefined;addPlanAuthorized=undefined;addPreview.textContent='ファイルを検証してから対象を確認してください。';
   ack.checked = false;
   updateButtons();
 }
@@ -447,10 +450,9 @@ async function refreshBrowserKeyState():Promise<void>{
 function describeAddPlan(plan:AdditiveRestorePreview):string{
  return `追加 ${plan.add}件 / 除外 ${plan.samePdf+plan.sameId+plan.samePeriod+plan.ambiguous+plan.backupConflict}件\n同じPDF ${plan.samePdf}件・同じID ${plan.sameId}件・同じ期間 ${plan.samePeriod}件・勤務先未確定 ${plan.ambiguous}件・バックアップ内競合 ${plan.backupConflict}件\n勤務先情報の追加 ${plan.employersAdded}件（既存名称・設定は維持）`;
 }
-addAck.addEventListener('change',updateButtons);
 addInspect.addEventListener('click',async()=>{
  if(busy||!preview)return;
- const data=preview;addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;busy=true;updateButtons();info('追加復元の対象を照合しています…');
+ const data=preview;addPlan=undefined;addPlanAuthorized=undefined;busy=true;updateButtons();info('追加復元の対象を照合しています…');
  try{
   await cloudVault();const authorized=captureOperationAuthorization();
   const plan=await inspectAdditiveRestore(data.records,data.employers);
@@ -460,17 +462,17 @@ addInspect.addEventListener('click',async()=>{
  finally{busy=false;updateButtons();}
 });
 addButton.addEventListener('click',async()=>{
- if(busy||!preview||!addPlan||!addPlanAuthorized?.()||!addAck.checked||!(addPlan.add||addPlan.employersAdded))return;
+ if(busy||!preview||!addPlan||!addPlanAuthorized?.()||!(addPlan.add||addPlan.employersAdded))return;
  const data=preview,plan=addPlan,authorized=addPlanAuthorized;
- if(!await approveSettings({title:'本人用バックアップを追加復元',subject:`明細 ${plan.add}件・勤務先 ${plan.employersAdded}件を追加`,details:[describeAddPlan(plan),'既存の明細は上書き・削除しません。',...(data.unreviewedWarnings?['旧データの検算未承認情報はそのまま保持します。']:[])],acceptLabel:'明細を追加復元'},()=>!busy&&preview===data&&addPlan===plan&&addAck.checked,authorized))return;
+ if(!await approveSettings({title:'本人用バックアップを追加復元',subject:`明細 ${plan.add}件・勤務先 ${plan.employersAdded}件を追加`,details:[describeAddPlan(plan),'既存の明細は上書き・削除しません。',...(data.unreviewedWarnings?['旧データの検算未承認情報はそのまま保持します。']:[])],acceptLabel:'明細を追加復元'},()=>!busy&&preview===data&&addPlan===plan,authorized))return;
  busy=true;updateButtons();info('追加復元の対象を再検査しています…');
  try{
   const result=await restoreAdditiveRecords(data.records,plan.signature,data.employers,authorized,stage=>info(stage));
-  await refreshCount();addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;ack.checked=false;
+  await refreshCount();addPlan=undefined;addPlanAuthorized=undefined;ack.checked=false;
   addPreview.textContent=`追加復元完了：明細 ${result.add}件・勤務先 ${result.employersAdded}件。再確認する場合は対象を検査してください。`;
   info(addPreview.textContent);finishOperation('success');
  }catch(error){
-  addPlan=undefined;addPlanAuthorized=undefined;addAck.checked=false;ack.checked=false;
+  addPlan=undefined;addPlanAuthorized=undefined;ack.checked=false;
   addPreview.textContent='追加復元を中断しました。既に追加された明細がある可能性があります。最新の対象を確認してください。未参照PDFやFinance未同期がある場合は設定から復旧してください。';
   try{await refreshCount();}catch{ /* retain the original failure */ }
   info(`${addPreview.textContent} ${error instanceof Error?error.message:String(error)}`,true);finishOperation('partial');
@@ -601,7 +603,7 @@ void(async()=>{
  void refreshBrowserKeyState();
  if(legacyExists){appStatus.clear();return;}
  if(!connected){exportSummary.textContent='Microsoftに接続すると明細件数を確認できます。';appStatus.clear();return;}
- await refreshCount();updateButtons();appStatus.success('設定を読み込みました');
+ await refreshCount();updateButtons();if(!busy&&appStatus.element.dataset.state==='loading')appStatus.clear();
 })().catch(error=>{
  exportSummary.textContent='保存済みデータを確認できませんでした。';
  info(error instanceof Error?error.message:'OneDriveのデータを取得できませんでした。',true);
@@ -831,13 +833,12 @@ localDelete.addEventListener('click',()=>{void(async()=>{
 // their restore action with personal payroll's destructive replaceAllRecords().
 function invalidateYearEndPreview(message='暗号化バックアップを選択してください。'){
  yearEndResume.hidden=true;yearEndRecheck.hidden=true;yearEndDiagnosis.hidden=true;yearEndDiagnosis.textContent='';
- yearEndPreview=undefined;yearEndPlan=undefined;yearEndAck.checked=false;yearEndPreviewLabel.textContent=message;
+ yearEndPreview=undefined;yearEndPlan=undefined;yearEndPreviewLabel.textContent=message;
  yearEndPeople.hidden=true;yearEndPeopleList.replaceChildren();
  updateButtons();
 }
 yearEndFile.addEventListener('change',()=>invalidateYearEndPreview());
 yearEndRestorePassword.addEventListener('input',()=>invalidateYearEndPreview('パスワードを入力し、ファイルを検証してください。'));
-yearEndAck.addEventListener('change',updateButtons);
 function reportYearEnd(message:string){yearEndStatus.textContent=message;}
 async function diagnoseIncompleteYearEndRestore(backup:YearEndBackupData,context:'failure'|'manual'='failure'):Promise<boolean>{
  yearEndResume.hidden=true;yearEndDiagnosis.hidden=false;
@@ -909,17 +910,17 @@ yearEndVerify.addEventListener('click',()=>{void(async()=>{
  finally{busy=false;updateButtons();}
 })()});
 yearEndCommit.addEventListener('click',()=>{void(async()=>{
- if(busy||!yearEndPreview||!yearEndAck.checked||!yearEndPlan?.canRestore||!yearEndPlan.restorable)return;
+ if(busy||!yearEndPreview||!yearEndPlan?.canRestore||!yearEndPlan.restorable)return;
  const data=yearEndPreview;
  const plan=yearEndPlan;
- if(!await approveSettings({title:'年末調整の従業員を追加復元',subject:`復元 ${plan.restorable}名・登録済み ${plan.skipped}名は維持`,details:[...(plan.sameNameCollisions?[`注意：同名の別データが${plan.sameNameCollisions}名追加されます。`]:[]),'索引不整合・孤立ファイルがあれば中止します。'],tone:'warning',acceptLabel:'従業員を追加復元'},()=>!busy&&yearEndPreview===data&&yearEndPlan===plan&&yearEndAck.checked))return;
+ if(!await approveSettings({title:'年末調整の従業員を追加復元',subject:`復元 ${plan.restorable}名・登録済み ${plan.skipped}名は維持`,details:[...(plan.sameNameCollisions?[`注意：同名の別データが${plan.sameNameCollisions}名追加されます。`]:[]),'登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加します。','索引不整合・孤立ファイルがあれば中止します。'],tone:'warning',acceptLabel:'従業員を追加復元'},()=>!busy&&yearEndPreview===data&&yearEndPlan===plan))return;
  busy=true;updateButtons();reportYearEnd('従業員データの復元を開始しています…');
  try{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd);
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
   yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名を復元しました（既存の ${result.skipped}名は変更なし）。`);finishOperation('success');
  }catch(error){finishOperation('partial');
-  yearEndAck.checked=false;yearEndRecheck.hidden=false;yearEndPlan=undefined;
+  yearEndRecheck.hidden=false;yearEndPlan=undefined;
   yearEndPreviewLabel.textContent='復元は完了していません。下の保存状況を確認してください。';
   yearEndError(error);
   await diagnoseIncompleteYearEndRestore(data);
@@ -942,7 +943,7 @@ yearEndResume.addEventListener('click',()=>{void(async()=>{
 // Available after backup verification, including after browser restart. Read-only: never retries the restore.
 yearEndRecheck.addEventListener('click',()=>{void(async()=>{
  if(busy||!yearEndPreview||yearEndRecheck.hidden)return;
- busy=true;yearEndAck.checked=false;yearEndResume.hidden=true;yearEndPlan=undefined;
+ busy=true;yearEndResume.hidden=true;yearEndPlan=undefined;
  updateButtons();reportYearEnd('OneDriveの復元状態を確認しています…');
  try{
   const data=yearEndPreview;
@@ -966,19 +967,52 @@ employerDirectoryAdd.addEventListener('click',()=>{if(busy||!employers)return;em
 employerDirectoryCancel.addEventListener('click',()=>{if(busy)return;employerDirectoryForm.hidden=true;employerDirectoryTarget.value='';fillEmployerDraft();employerDirectoryAdd.focus();});
 employerDirectoryName.addEventListener('input',updateEmployerButtons);
 employerDirectoryRole.addEventListener('change',updateEmployerButtons);
-employerDirectoryLoad.addEventListener('click',async()=>{
+// Use the directory from the same authenticated index as the annual records.
+async function readEmployerSnapshot(vault:Awaited<ReturnType<typeof cloudVault>>,authorized:()=>boolean){
+ let list:EmployerEntry[]|undefined;
+ const records=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,onEmployerDirectory:value=>{list=value;}});
+ if(!list||!authorized()||employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(list)||!authorized())throw new Error('勤務先一覧の確認中に状態が変更されました。');
+ return {list,records};
+}
+// Never replay the failed write or its consent. Restore controls only from a
+// fresh authenticated snapshot; unknown write locks are not released here.
+async function recoverEmployerDirectory(authorized:()=>boolean,detail:string,target=''):Promise<void>{
+ employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();
+ employerDirectoryStatus.textContent=authorized()?detail+' 最新状態を確認しています…':'認証状態が変更されました。';
+ try{
+  if(!authorized())throw new Error('認証状態が変更されました。');
+  const vault=await tryResumeCloudVault();
+  if(!vault||!authorized())throw new Error('認証状態が変更されました。');
+  const {list,records}=await readEmployerSnapshot(vault,authorized);
+  if(!authorized())throw new Error('認証状態が変更されました。');
+  employers=list;legacyDirectory=legacyEmployers(records,list);bulkRecords=records;bulkAuthorized=authorized;renderEmployerDirectory();
+  if(list.some(e=>e.id===target)){bulkTarget.value=target;renderBulkList();}
+  employerDirectoryLoad.textContent='更新';
+  employerDirectoryStatus.textContent=detail+' 最新の一覧を反映しました。';
+ }catch{
+  employerDirectoryLoad.textContent='再読み込み';
+  employerDirectoryStatus.textContent=authorized()?detail+' 勤務先一覧を更新し、保存結果を確認してください。':'認証状態が変更されました。勤務先一覧を読み直してください。';
+ }
+}
+async function loadEmployerDirectory(allowPrompt:boolean):Promise<void>{
  if(busy)return;
+ if(!allowPrompt){currentOperation=null;operationResult=null;operationCancelled=false;}
  const authorized=captureOperationAuthorization();
  busy=true;employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();updateButtons();
  try{
-  const vault=await cloudVault();const list=await vault.readEmployerDirectory();
-  const records=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
-  if(!authorized()||employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(list)||!authorized())throw new Error('勤務先一覧の確認中に状態が変更されました。');
+  employerDirectoryStatus.textContent='勤務先一覧を読み込んでいます…';
+  const vault=allowPrompt?await cloudVault():await tryResumeCloudVault();
+  if(!authorized())throw new Error('認証状態が変更されました。');
+  if(!vault){employerDirectoryLoad.textContent='保管庫を開く';employerDirectoryStatus.textContent='勤務先を管理するには保管庫を開いてください。';return;}
+  const {list,records}=await readEmployerSnapshot(vault,authorized);
+  if(!authorized())throw new Error('認証状態が変更されました。');
   employers=list;legacyDirectory=legacyEmployers(records,list);bulkRecords=records;bulkAuthorized=authorized;renderEmployerDirectory();
+  employerDirectoryLoad.textContent='更新';
   employerDirectoryStatus.textContent=`登録済み ${list.length}件・名称未設定 ${legacyDirectory.length}件`;finishOperation('success');
- }catch{employerDirectoryStatus.textContent='勤務先一覧を確認できませんでした。最新データを確認してください。';finishOperation('error');}
+ }catch{employerDirectoryLoad.textContent='再読み込み';employerDirectoryStatus.textContent='勤務先一覧を読み込めませんでした。もう一度お試しください。';finishOperation('error');}
  finally{busy=false;updateButtons();}
-});
+}
+employerDirectoryLoad.addEventListener('click',()=>{void loadEmployerDirectory(true);});
 employerDirectoryForm.addEventListener('submit',async event=>{
  event.preventDefault();if(busy||!employers||employerDirectorySave.disabled)return;
  // Enter submission also sets an explicit operation, rather than inheriting a previous click.
@@ -1001,7 +1035,7 @@ employerDirectoryForm.addEventListener('submit',async event=>{
   if(!authorized())throw new Error('認証状態が変わりました。');
   employers=saved;legacyDirectory=legacyDirectory.filter(x=>!saved.some(y=>y.id===x.id));renderEmployerDirectory();
   employerDirectoryStatus.textContent='勤務先を保存しました。';finishOperation('success');
- }catch{employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();employerDirectoryStatus.textContent='勤務先の保存結果を確認できませんでした。最新データを確認してください。';finishOperation('error');}
+ }catch{await recoverEmployerDirectory(authorized,'勤務先の保存結果を確認できませんでした。');finishOperation('error');}
  finally{busy=false;updateButtons();}
 });
 
@@ -1014,21 +1048,27 @@ bulkSave.addEventListener('click',async()=>{
  if(!entry)return;
  const directory=employerDirectorySignature(employers),targets=bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)}));
  const selectedSignature=JSON.stringify(targets),guard=()=>authorized()&&busy&&bulkTarget.value===entry.id&&!!employers&&employerDirectorySignature(employers)===directory&&JSON.stringify(bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)})))===selectedSignature;
- busy=true;updateButtons();let writing=false;
+ busy=true;bulkStatus.textContent='選択した明細を確認しています…';updateButtons();let writing=false;
  try{
   const plan=await inspectEmployerAssignment(targets,entry.id,directory,guard);
-  if(!await approveSettings({title:'明細の勤務先を一括設定',subject:`未設定の明細 ${plan.count}件 → ${employerDisplayName(employers,entry.id)}`,details:['選択した明細の勤務先だけを変更します。金額・PDF原本・確認履歴は維持します。','同じ期間の重複や他端末での変更を検査してから保存します。'],acceptLabel:'勤務先を設定'},guard,authorized)){cancelOperation();return;}
-  writing=true;await assignEmployers(targets,entry.id,directory,plan.signature,guard);
-  // A new read is required before another assignment; never reuse old approvals.
-  employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();
-  employerDirectoryStatus.textContent=`${plan.count}件の勤務先を設定しました。最新データを確認してください。`;finishOperation('success');
+  if(!await approveSettings({title:'明細の勤務先を一括設定',subject:`未設定の明細 ${plan.count}件 → ${employerDisplayName(employers,entry.id)}`,details:['選択した明細の勤務先だけを変更します。金額・PDF原本・確認履歴は維持します。','同じ期間の重複や他端末での変更を検査してから保存します。'],acceptLabel:'勤務先を設定'},guard,authorized)){bulkStatus.textContent='';cancelOperation();return;}
+  bulkStatus.textContent='勤務先を設定しています…';writing=true;
+  const records=await assignEmployers(targets,entry.id,directory,plan.signature,guard);
+  if(!guard())throw new Error('認証状態または対象が変更されました。保存結果を確認してください。');
+  // Fresh, verified post-write snapshot. Reset consent/selection, not the directory.
+  bulkRecords=records;legacyDirectory=legacyEmployers(records,employers);renderEmployerDirectory();
+  bulkTarget.value=entry.id;renderBulkList();
+  employerDirectoryStatus.textContent=`${plan.count}件の勤務先を設定しました。`;finishOperation('success');
  }catch(error){
-  if(writing){employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();employerDirectoryStatus.textContent='勤務先設定の結果を確認してください。最新データを確認し、必要に応じてFinance連携を再生成してください。';}
-  else bulkStatus.textContent='対象明細・勤務先・同じ期間の重複を確認してください。最新データの再確認が必要な場合があります。';
+  const detail=authorized()&&error instanceof Error?`${error.message}${error instanceof PayrollPartialSuccessError&&error.cause instanceof Error?` 原因: ${error.cause.message}`:''}`:'認証状態または通信状態を確認してください。';
+  if(writing||!authorized())await recoverEmployerDirectory(authorized,detail,entry.id);
+  else bulkStatus.textContent=detail;
   finishOperation(error instanceof PayrollPartialSuccessError?'partial':'error');
  }finally{busy=false;updateButtons();}
 });
 
 // Activate navigation only after the original settings handlers are registered.
-settingsNavigation=mountSettingsNavigation($<HTMLElement>('settings-menu').closest<HTMLElement>('.settings-page')!,()=>!busy&&!document.querySelector('dialog[open]'));
+settingsNavigation=mountSettingsNavigation($<HTMLElement>('settings-menu').closest<HTMLElement>('.settings-page')!,()=>!busy&&!document.querySelector('dialog[open]'),view=>{
+ if(view==='employers'&&!employers)void loadEmployerDirectory(false);
+});
 settingsNavigation.setBusy(busy);

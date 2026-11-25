@@ -270,22 +270,35 @@
 .upload-left .file-panel { min-width: 0; }
 
 /* ホームボタンと見間違えないよう、保存を画面最下部に固定する */
-.save-bar {
-  flex: none; margin-top: 12px;
+.upload-page .save-bar {
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,auto); align-items:center;
+  flex:none; margin-top:12px; min-width:0; max-width:100%; gap:10px 20px;
 }
+.upload-page .save-bar.is-empty{display:none}
+.upload-page .save-bar__status{min-width:0;width:100%;overflow-wrap:anywhere}
+.upload-page .save-bar__status > *{min-width:0;max-width:100%}
+.upload-page .save-feedback.is-failed .save-feedback__track,
+.upload-page .save-feedback.is-failed #save-stage{display:none}
+.upload-page .save-feedback.is-failed{grid-template-columns:minmax(0,1fr) auto;align-items:baseline}
+.upload-page .save-feedback.is-failed .save-feedback__top{grid-column:2;grid-row:1;justify-content:flex-end}
+.upload-page .save-feedback.is-failed .save-feedback__guidance{grid-column:1;grid-row:1}
+.upload-page #save-status[role="alert"]{color:var(--color-danger)}
+.upload-page .save-bar.is-recovering .save-bar__actions{display:none}
+.upload-page .save-bar.is-recovering{grid-template-columns:minmax(0,1fr)}
+
 .save-bar__status { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.save-bar__status > #save-status { font-size: 11px; color: var(--color-muted); font-weight: 700; line-height: 1.6; }
+.save-bar__status > #save-status { font-size: 12px; color: var(--color-muted); font-weight: 600; line-height: 1.6; }
 .save-bar__button { min-width: 145px; flex: none; font-weight: 700; }
 .save-bar__button .icon { width: 17px; height: 17px; }
 
 @media (max-width: 860px) {
-  .upload-page { display: flex; flex-direction: column; height: calc(100dvh - 74px); overflow: hidden; padding-top: 15px; padding-bottom: 9px; }
+  .upload-page { display: flex; flex-direction: column; height:auto; overflow:visible; padding-top: 15px; padding-bottom: 9px; }
   .upload-page > .upload-heading { flex: none; margin-bottom: 9px; }
 
   .upload-page .upload-heading__description { display: none; }
   .upload-page > .notice--privacy { flex: none; margin-bottom: 10px; padding: 7px 10px; font-size: 10px; }
   .upload-page > .notice--privacy .icon { width: 14px; height: 14px; }
-  .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(175px, .37fr) minmax(215px, .63fr); gap: 9px; }
+  .workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr); grid-template-rows:auto auto; gap: 9px; }
   .workspace.is-empty { flex: none; grid-template-rows: auto; width: 100%; }
   .upload-left { display: flex; flex-direction: column; min-height: 0; gap: 8px; }
   .upload-left .upload-zone-card { flex: none; padding: 5px; }
@@ -293,40 +306,26 @@
   .upload-left .zone-icon, .upload-left .zone-privacy { display: none; }
   .upload-left .zone-copy h2 { font-size: 12px; margin-bottom: 0; }
   .upload-left .zone-copy p { font-size: 10px; }
-  .upload-left .file-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; padding-top: 9px; }
+  .upload-left .file-panel { display:flex; flex-direction:column; min-height:0; flex:none; padding-top:9px; }
   .upload-left .file-panel > .panel-title-row { margin: 0 12px 6px; }
   .upload-left .file-panel .panel-title-row h2 { font-size: 13px; }
   .upload-left .file-panel .panel-title-row .section-kicker { display: none; }
-  .upload-left .file-list { max-height: none; min-height: 0; flex: 1; overflow-y: auto; padding-bottom: 5px; }
+  .upload-left .file-list { max-height:min(45vh,290px); min-height:0; flex:none; overflow-y:auto; padding-bottom:5px; }
   .upload-left .file-list__select { min-height: 45px; padding-top: 4px; padding-bottom: 4px; }
   .upload-left .file-list__icon { width: 29px; height: 33px; }
   .upload-left .file-list__icon .icon { width: 15px; height: 15px; }
   .upload-left .file-panel__foot { flex: none; padding: 5px 12px; font-size: 9px; }
   .upload-left .file-list-empty { flex: 1; min-height: 0; padding: 6px; }
   .upload-left .file-list-empty__icon { display: none; }
-  .workspace .review-panel { min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 15px 13px; }
+  .workspace .review-panel { min-height:0; height:auto; overflow:visible; padding:15px 13px; }
   .save-bar { flex: none; margin-top: 8px; }
   .save-bar__button { min-width: 110px; padding: 7px 10px; }
-  .save-bar__status > #save-status { font-size: 10px; }
 }
 @media (max-width: 450px) {
   .upload-page > .notice--privacy span { display: none; }
   .save-bar__button { min-width: 94px; }
   .review-panel .form-grid--two { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
-@media (min-width: 641px) and (max-width: 860px) {
-  .upload-page { height: calc(100dvh - 86px); }
-}
-@media (max-width: 860px) {
-  /* gridアイテムの最小サイズに押され、一覧と右フォームが重ならないようにする */
-  .workspace { grid-template-rows: minmax(0, .46fr) minmax(0, .54fr); }
-  .workspace > .upload-left { min-height: 0; overflow: hidden; }
-  .workspace .upload-left .file-panel { min-height: 0; }
-}
-@media (max-width: 860px) {
-  .workspace > .upload-left { height: 100%; max-height: 100%; }
-}
-
 /* PDF自動入力と手動入力を区別。通常のフォーム配置・余白を変更しない。 */
 .review-panel .field--auto .input { border-color: #8ea9dc; background: #f6f9ff; }
 .review-panel .field--manual .input { border-color: #c6d2df; background: #fff; }
@@ -352,7 +351,6 @@
 }
 @media (max-width: 390px) {
   .upload-page .review-panel .form-grid--two { grid-template-columns: minmax(0,1fr); }
-  .upload-page .save-bar { align-items: stretch; flex-direction: column; gap: 8px; }
   .upload-page .save-bar__button { width: 100%; min-width: 0; }
   .upload-page .selected-file { min-width: 0; }
   .upload-page .file-list__text { flex: 1; overflow: hidden; }
@@ -363,14 +361,14 @@
 }
 
 /* OneDrive save activity: show honest per-file byte progress and elapsed cloud wait. */
-.save-feedback{display:grid;gap:6px;width:100%;max-width:560px;padding-top:3px}
+.save-feedback{display:grid;gap:6px;width:100%;max-width:none}
 .save-feedback__top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--color-text);font-size:12px;font-weight:800;min-width:0}
 #save-stage{min-width:0;overflow-wrap:anywhere}
 #save-elapsed{color:var(--color-muted);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .save-feedback__track{height:6px;background:#e7edf6;border-radius:8px;overflow:hidden;position:relative}
 .save-feedback__fill{height:100%;width:0;background:var(--color-primary);border-radius:8px;transition:width .22s ease}
 .save-feedback__track.is-indeterminate .save-feedback__fill{position:absolute;left:0;top:0;width:28%!important;animation:payroll-cloud-upload-wait 1.4s ease-in-out infinite}
-.save-feedback__guidance{margin:0;color:var(--color-muted);font-size:11px;line-height:1.5}
+.save-feedback__guidance{margin:0;color:var(--color-muted);font-size:12px;line-height:1.5}
 .save-feedback.is-complete .save-feedback__fill{background:var(--color-success)}
 .save-feedback.is-complete #save-stage{color:var(--color-success)}
 .save-feedback.is-failed #save-stage{color:var(--color-danger)}
@@ -378,7 +376,7 @@
 #drop-zone[aria-disabled="true"]{pointer-events:none;opacity:.5}
 @keyframes payroll-cloud-upload-wait{0%{transform:translateX(-110%)}100%{transform:translateX(390%)}}
 @media(prefers-reduced-motion:reduce){.save-feedback__track.is-indeterminate .save-feedback__fill{animation:none}}
-@media(max-width:640px){.save-feedback__top{font-size:11px}.save-feedback__guidance{font-size:10px}}
+@media(max-width:640px){.save-feedback__top{font-size:12px}}
 
 /* Mobile: a native-file-picker button, not a desktop drop zone. */
 .mobile-file-picker-wrap{display:none}
@@ -456,7 +454,7 @@
  * Flex distributes the viewport between header and content.
  * Intentionally allow natural scrolling on narrow or short viewports.
  */
-@media (min-width: 641px) and (min-height: 621px) {
+@media (min-width: 861px) and (min-height: 621px) {
   body.payroll-upload-viewport {
     display: flex;
     flex-direction: column;
@@ -480,31 +478,64 @@
 }
 
 
-/* Round 4: explicit opt-in for unresolved amounts, adjacent to the save action. */
-.save-bar__actions { display:flex; flex:none; align-items:center; justify-content:flex-end; gap:14px; min-width:0; }
-.zero-approval { max-width: min(430px,46vw); min-width:0; font-size:12px; line-height:1.4; color:var(--color-text); }
+/* 保存オプションは独立した行。進捗・保存ボタンの幅を奪わない。 */
+.save-bar__actions { display:flex; align-items:center; justify-content:flex-end; min-width:0; }
+.zero-approval { grid-column:1/-1; display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; min-width:0; padding-bottom:10px; border-bottom:1px solid var(--color-border); font-size:13px; line-height:1.5; color:var(--color-text); }
 .zero-approval[hidden] { display:none !important; }
-.zero-approval__choice { display:flex; align-items:center; gap:7px; cursor:pointer; font-weight:750; }
-.zero-approval__choice input { width:17px; height:17px; flex:none; accent-color:var(--color-primary,#255ad4); }
+.zero-approval__choice { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:650; min-width:0; }
+.zero-approval__choice input { width:17px; height:17px; flex:none; accent-color:var(--color-primary); }
 .zero-approval__choice input:disabled { cursor:not-allowed; }
-.zero-approval__count { padding-left:24px; font-size:10px; color:var(--color-muted); }
-.zero-approval__details { padding-left:24px; margin-top:3px; font-size:10px; color:var(--color-muted); }
-.zero-approval__details summary { cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
-.zero-approval__details ul { max-height:108px; max-width:100%; overflow:auto; padding:6px 0 0 14px; overflow-wrap:anywhere; }
+.zero-approval__count { font-size:12px; color:var(--color-muted); min-width:0; overflow-wrap:anywhere; }
+.zero-approval__details { margin-left:auto; font-size:12px; color:var(--color-muted); min-width:0; }
+.zero-approval__details summary { cursor:pointer; color:var(--color-primary); font-weight:600; }
+.zero-approval__details[open] { flex-basis:100%; margin-left:0; }
+.zero-approval__details ul { list-style:disc; max-height:112px; overflow:auto; margin:6px 0 0; padding:6px 12px 6px 28px; border-radius:7px; background:var(--color-bg); overflow-wrap:anywhere; }
 .zero-approval__details li { padding:3px 0; }
 @media (max-width:860px) {
-  .save-bar__actions { max-width:65%; gap:9px; }
-  .zero-approval { max-width:100%; font-size:11px; }
-  .zero-approval__count,.zero-approval__details { font-size:9px; }
+  .upload-page .workspace{flex:none;min-width:0;align-items:start}
+  .upload-page .upload-left{height:auto;max-height:none;overflow:visible}
+  .upload-page .save-bar{grid-template-columns:minmax(0,1fr);align-items:stretch;gap:10px}
+  .upload-page .save-bar__status{width:100%;flex:none}
+  .upload-page .save-bar__actions{display:grid;grid-template-columns:minmax(0,1fr);width:100%;max-width:100%;gap:10px;min-width:0}
+  .upload-page .zero-approval{width:100%;gap:6px 12px}
+  .upload-page .save-bar__button{width:100%;min-width:0;min-height:44px}
+  .upload-page .save-feedback__top{flex-wrap:wrap;gap:4px 12px}
+  .upload-page #save-stage{overflow-wrap:break-word}
+  .upload-page .upload-save-recovery__actions{display:grid;grid-template-columns:minmax(0,1fr)}
+  .upload-page .upload-save-recovery__actions .btn{width:100%;min-height:44px}
 }
-@media (max-width:560px) {
-  .save-bar { align-items:stretch; }
-  .save-bar__actions { flex:1; max-width:100%; flex-wrap:wrap; justify-content:space-between; }
-  .zero-approval { flex:1 1 190px; max-width:100%; }
+/* Tablet: keep the normal workspace inside the viewport, with independent
+ * scrolling for the review and PDF list. Phones, short windows and recovery
+ * states retain natural page scrolling. The save bar stays stacked. */
+@media (min-width:641px) and (max-width:860px) and (min-height:761px) {
+  body.payroll-upload-viewport:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) {
+    display:flex;flex-direction:column;height:100dvh;min-height:0;overflow:hidden;
+  }
+  body.payroll-upload-viewport:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) > .app-shell {
+    display:flex;flex:1 1 auto;flex-direction:column;width:100%;min-height:0;
+  }
+  body.payroll-upload-viewport:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) .site-header { flex:none; }
+  .upload-page:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) {
+    flex:1 1 auto;height:auto;min-height:0;overflow:hidden;
+  }
+  .upload-page:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) .workspace:not(.is-empty) {
+    flex:1;min-height:0;grid-template-rows:minmax(0,.46fr) minmax(0,.54fr);align-items:stretch;
+  }
+  .upload-page:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) .workspace:not(.is-empty) .upload-left {
+    height:100%;min-height:0;overflow:auto;overscroll-behavior:contain;
+  }
+  .upload-page:not(:has(.save-feedback.is-failed:not([hidden]), .save-bar.is-recovering)) .workspace:not(.is-empty) .review-panel {
+    height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  }
 }
-@media (max-width:390px) {
-  .save-bar__actions { width:100%; align-items:stretch; flex-direction:column; }
-  .zero-approval { flex:none; }
+@media (min-width:861px){
+  /* Large errors/results should scroll instead of crushing the PDF workspace. */
+  body.payroll-upload-viewport:has(.save-feedback.is-failed:not([hidden])),
+  body.payroll-upload-viewport:has(.save-bar.is-recovering){height:auto;min-height:100dvh;overflow:visible}
+  body.payroll-upload-viewport:has(.save-feedback.is-failed:not([hidden])) .upload-page,
+  body.payroll-upload-viewport:has(.save-bar.is-recovering) .upload-page{height:auto;overflow:visible}
+  body.payroll-upload-viewport:has(.save-feedback.is-failed:not([hidden])) .workspace,
+  body.payroll-upload-viewport:has(.save-bar.is-recovering) .workspace{height:clamp(400px,calc(100dvh - 190px),720px);min-height:400px;flex:none}
 }
 
 /* Independent employer identity, deliberately outside the historical form fields. */

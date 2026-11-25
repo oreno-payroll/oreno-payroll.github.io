@@ -30,18 +30,17 @@
   <section class="settings-group" id="settings-employers-panel" aria-labelledby="settings-employers-title" hidden>
     <div class="sr-only"><h2 id="settings-employers-title">勤務先管理</h2></div>
     <section class="card vault-section employer-settings" aria-labelledby="employer-list-heading">
-      <div class="vault-section__head"><h3 id="employer-list-heading">登録済みの勤務先</h3><p class="vault-info">名称はPayrollの暗号化保管庫だけに保存します。勤務区分ごとに現在の勤務先を1件設定できます。過去の勤務先は履歴として保持します。</p></div>
-      <div class="settings-action-row"><button type="button" class="btn btn--secondary" id="employer-directory-load">最新データを確認</button><button type="button" class="btn btn--primary" id="employer-directory-add" disabled>勤務先を追加</button></div>
-      <p id="employer-directory-status" class="vault-info" role="status" aria-live="polite">勤務先一覧を読み込んでください。</p>
+      <div class="employer-settings__header"><div class="vault-section__head"><h3 id="employer-list-heading">登録済みの勤務先</h3><p class="vault-info">本業・副業ごとに現在の勤務先を1件設定できます。</p></div><div class="employer-settings__actions"><button type="button" class="btn btn--secondary btn--small" id="employer-directory-load">保管庫を開く</button><button type="button" class="btn btn--primary btn--small" id="employer-directory-add" disabled>勤務先を追加</button></div></div>
+      <p id="employer-directory-status" class="vault-info" role="status" aria-live="polite">勤務先一覧を読み込みます。</p>
       <ul id="employer-directory-list" class="employer-settings__list" hidden></ul>
       <form id="employer-directory-form" class="employer-settings__form" hidden autocomplete="off">
         <h3>勤務先の追加・編集</h3>
         <label for="employer-directory-target" hidden>登録対象</label>
         <select id="employer-directory-target" class="input" hidden><option value="">新しい勤務先</option></select>
-        <label for="employer-directory-name">表示名</label>
-        <input id="employer-directory-name" class="input" type="text" maxlength="100" required autocomplete="off" spellcheck="false">
-        <label for="employer-directory-role">勤務区分</label>
-        <select id="employer-directory-role" class="input"><option value="" disabled>勤務区分を選択</option><option value="main">本業</option><option value="side">副業</option></select>
+        <div class="employer-settings__fields"><label class="employer-settings__field" for="employer-directory-name">表示名
+        <input id="employer-directory-name" class="input" type="text" maxlength="100" required autocomplete="off" spellcheck="false"></label>
+        <label class="employer-settings__field" for="employer-directory-role">勤務区分
+        <select id="employer-directory-role" class="input"><option value="" disabled>勤務区分を選択</option><option value="main">本業</option><option value="side">副業</option></select></label></div>
         <label class="vault-check"><input type="checkbox" id="employer-directory-current">現在の勤務先に設定する</label>
         <p class="vault-info">既存の明細にある未登録の勤務先も名称を設定できます。ID未設定の明細には自動で割り当てません。</p>
         <div class="settings-action-row"><button type="button" id="employer-directory-cancel" class="btn btn--secondary">キャンセル</button><button type="submit" id="employer-directory-save" class="btn btn--primary" disabled>勤務先を保存</button></div>
@@ -49,13 +48,13 @@
     </section>
     <section class="card vault-section" id="employer-bulk-panel" aria-labelledby="employer-bulk-heading" hidden>
       <div class="vault-section__head"><h3 id="employer-bulk-heading">明細の勤務先を一括設定</h3><p class="vault-info">勤務先未設定の明細を選び、同じ勤務区分の登録済み勤務先へ紐付けます。金額やPDF原本は変更しません。</p></div>
-      <label for="employer-bulk-target">設定する勤務先</label>
-      <select id="employer-bulk-target" class="input" disabled><option value="">勤務先を選択</option></select>
-      <p id="employer-bulk-count" class="vault-info" aria-live="polite"></p>
-      <div class="employer-bulk__actions"><button type="button" id="employer-bulk-all" class="btn btn--text btn--small" disabled>すべて選択</button><button type="button" id="employer-bulk-none" class="btn btn--text btn--small" disabled>選択解除</button></div>
+      <label class="employer-settings__field" for="employer-bulk-target">設定する勤務先
+      <select id="employer-bulk-target" class="input" disabled><option value="">勤務先を選択</option></select></label>
+      <div class="employer-bulk__toolbar"><p id="employer-bulk-count" class="vault-info" aria-live="polite"></p>
+      <div class="employer-bulk__actions"><button type="button" id="employer-bulk-all" class="btn btn--text btn--small" disabled>すべて選択</button><button type="button" id="employer-bulk-none" class="btn btn--text btn--small" disabled>選択解除</button></div></div>
       <div id="employer-bulk-list" class="employer-bulk__list" role="group" aria-label="勤務先未設定の明細"></div>
-      <p id="employer-bulk-status" class="vault-info" role="status" aria-live="polite"></p>
-      <button type="button" id="employer-bulk-save" class="btn btn--primary" disabled>選択した明細に勤務先を設定</button>
+      <div class="employer-bulk__footer"><p id="employer-bulk-status" class="vault-info" role="status" aria-live="polite"></p>
+      <button type="button" id="employer-bulk-save" class="btn btn--primary" disabled>勤務先を設定</button></div>
     </section>
   </section>
 
@@ -96,7 +95,6 @@
           <p class="vault-info">現在の明細を上書き・削除せず、重複や判断できない明細を除外します。</p>
           <button type="button" id="restore-add-inspect" class="btn btn--secondary" disabled>追加復元の対象を確認</button>
           <p id="restore-add-preview" class="vault-info" aria-live="polite">ファイルを検証してから対象を確認してください。</p>
-          <label class="vault-check"><input type="checkbox" id="restore-add-ack" disabled>追加対象と除外件数を確認しました</label>
           <button type="button" id="restore-add-button" class="btn btn--secondary" disabled>明細を追加復元</button>
         </div>
         <div class="backup-card__footer backup-restore-actions" data-personal-restore-stage hidden>
@@ -135,7 +133,7 @@
         <button type="button" id="ye-restore-recheck" class="btn btn--secondary" hidden disabled>OneDriveの復元状態を確認</button>
         <div id="ye-restore-diagnosis" class="vault-info ye-restore-diagnosis" role="status" aria-live="polite" hidden></div>
         <button type="button" id="ye-restore-resume" class="btn btn--secondary" hidden disabled>照合して復元を再開</button>
-        <div class="backup-card__footer backup-restore-actions" id="ye-restore-actions" hidden><label class="vault-check"><input id="ye-restore-ack" type="checkbox" disabled>登録済み従業員は上書きせず、未登録・削除済みの従業員だけを追加することを確認しました</label><button type="button" id="ye-restore-commit" class="btn btn--secondary" disabled>従業員を追加復元</button></div>
+        <div class="backup-card__footer backup-restore-actions" id="ye-restore-actions" hidden><button type="button" id="ye-restore-commit" class="btn btn--secondary" disabled>従業員を追加復元</button></div>
       </section>
     </div>
     <p id="ye-backup-status" class="vault-status" role="status" aria-live="polite"></p>

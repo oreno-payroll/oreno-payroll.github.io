@@ -6,7 +6,7 @@ function readView(state:unknown):View|undefined{
  const value=(state as Record<string,unknown>|null)?.[stateKey];
  return typeof value==='string'&&views.includes(value as View)?value as View:undefined;
 }
-export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean):{setBusy:(busy:boolean)=>void} {
+export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean,onOpen?:(view:View)=>void):{setBusy:(busy:boolean)=>void} {
  const required=<T extends HTMLElement>(selector:string):T=>{
   const node=root.querySelector<T>(selector);
   if(!node)throw new Error('設定画面の構成が不正です。');
@@ -39,7 +39,7 @@ export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean
   if(busy||!canNavigate())return;
   const key=readView({[stateKey]:button.dataset.settingsOpen});
   if(!key||key===current)return;
-  render(key);
+  render(key);onOpen?.(key);
  }
  window.addEventListener('pagehide',remask);
  render('auth');

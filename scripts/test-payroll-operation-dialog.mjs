@@ -115,12 +115,12 @@ assert.match(read('src/cloud/auth.ts'),/await confirmOperation\(\{title:'暗号�
 console.log('PASS: real settings restore and year-end consent guards reject changed drafts, auth, plan, or cancellation; typed cleanup and creation checks retained');
 
 // Actual additive restore button: an expired plan, cancellation or replaced approval never writes.
-const addDescription=backup.slice(backup.indexOf('function describeAddPlan('),backup.indexOf('addAck.addEventListener'));
+const addDescription=backup.slice(backup.indexOf('function describeAddPlan('),backup.indexOf("addInspect.addEventListener('click'"));
 const addHandler=backup.slice(backup.indexOf("addButton.addEventListener('click'"),backup.indexOf('browserKeyRegister.addEventListener',backup.indexOf("addButton.addEventListener('click'")));
 async function addScenario(change,approve=true){
  let click,request,release,writes=0,valid=true;
  const plan={signature:'synthetic-plan',add:1,samePdf:2,sameId:0,samePeriod:0,ambiguous:0,backupConflict:0,employersAdded:0};
- const context={busy:false,preview:{records:[{id:1}],unreviewedWarnings:0},addAck:{checked:true},ack:{checked:false},addPlan:plan,addPlanAuthorized:()=>valid,
+ const context={busy:false,preview:{records:[{id:1}],unreviewedWarnings:0},ack:{checked:false},addPlan:plan,addPlanAuthorized:()=>valid,
   addButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
   updateButtons(){},info(){},finishOperation(){},restoreAdditiveRecords:async(_records,signature)=>{assert.equal(signature,plan.signature);writes++;return plan;},
@@ -129,12 +129,38 @@ async function addScenario(change,approve=true){
  const pending=click();assert.equal(writes,0);assert.equal(request.acceptLabel,'明細を追加復元');
  if(change==='plan')context.addPlan={...plan,signature:'changed'};
  if(change==='preview')context.preview={records:[]};
- if(change==='ack')context.addAck.checked=false;
  if(change==='auth')valid=false;
  if(change==='busy')context.busy=true;
  release();await pending;return writes;
 }
 assert.equal(await addScenario(null),1);
 assert.equal(await addScenario(null,false),0);
-for(const change of ['plan','preview','ack','auth','busy'])assert.equal(await addScenario(change),0);
-console.log('PASS: real additive restore button rejects stale plan, backup, consent, auth and cancellation');
+for(const change of ['plan','preview','auth','busy'])assert.equal(await addScenario(change),0);
+console.log('PASS: real additive restore button rejects stale plan, backup, auth and cancellation');
+
+// Employee additive restore uses the same single modal and rejects stale plans.
+const employeeHandler=backup.slice(backup.indexOf("yearEndCommit.addEventListener('click'"),backup.indexOf("yearEndResume.addEventListener('click'"));
+async function employeeScenario(change,approve=true){
+ let click,request,release,writes=0,valid=true;
+ const plan={canRestore:true,restorable:1,skipped:2,sameNameCollisions:1};
+ const context={busy:false,yearEndPreview:{persons:[{id:'fixture'}]},yearEndPlan:plan,
+  yearEndCommit:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
+  confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
+  updateButtons(){},reportYearEnd(){},finishOperation(){},invalidateYearEndPreview(){},yearEndFile:{},
+  yearEndRepo:{restoreBackupSnapshot:async()=>{writes++;return {restored:1,skipped:2};}}};
+ // Await the actual async handler instead of the UI's fire-and-forget wrapper.
+ const handler=employeeHandler.replace('()=>{void(async()=>{','async()=>{').replace('})()});','});');
+ runInNewContext(stripTypeScriptTypes(helper+'\n'+handler,{mode:'strip'}),context);
+ if(change==='blocked'){context.yearEndPlan={...plan,canRestore:false};await click();assert.equal(request,undefined);return writes;}
+ if(change==='empty'){context.yearEndPlan={...plan,restorable:0};await click();assert.equal(request,undefined);return writes;}
+ const pending=click();assert.equal(writes,0);assert.equal(request.acceptLabel,'従業員を追加復元');assert.ok(request.details.some(line=>line.includes('同名')));assert.ok(request.details.some(line=>line.includes('上書きせず')));
+ if(change==='plan')context.yearEndPlan={...plan,restorable:2};
+ if(change==='preview')context.yearEndPreview={persons:[]};
+ if(change==='auth')valid=false;
+ if(change==='busy')context.busy=true;
+ release();await pending;return writes;
+}
+assert.equal(await employeeScenario(null),1);
+assert.equal(await employeeScenario(null,false),0);
+for(const change of ['plan','preview','auth','busy','blocked','empty'])assert.equal(await employeeScenario(change),0);
+console.log('PASS: employee additive restore single confirmation, warnings, stale plan, backup, auth and cancellation');

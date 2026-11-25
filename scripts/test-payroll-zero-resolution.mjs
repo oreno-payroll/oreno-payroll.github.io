@@ -106,7 +106,9 @@ const parsed={
  assert.match(css,/\.zero-approval\[hidden\]/);
  assert.match(upload,/zeroConsentFingerprint!==fingerprint/,'consent must reset after candidate change');
  assert.match(upload,/zeroCheckbox.checked=false; \/\/ Never restore/,'browser reload cannot restore opt-in');
- assert.match(upload,/const approveZero=zeroCheckbox\.checked&&zeroConsentFingerprint===zeroCandidatesFingerprint\(uploadable\)/);
+ assert.match(upload,/const approveZero=zeroCheckbox\.checked&&zeroConsentFingerprint===before/);
+ assert.match(upload,/const before=zeroCandidatesFingerprint\(candidates\(\)\)/);
+ assert.match(upload,/before!==zeroCandidatesFingerprint\(candidates\(\)\)/);
  assert.match(upload,/zeroResolution: prepared\.zeroResolution/);
  for(const p of ['src/cloud/vault.ts','src/storage/payrollBackup.ts','src/storage/payrollStore.ts'])
   assert.match(src(p),/isValidPayrollZeroResolution\(/,`${p} must fail closed`);

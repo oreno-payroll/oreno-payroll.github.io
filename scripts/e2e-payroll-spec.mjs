@@ -420,7 +420,7 @@ test('employer selection uses names and requires an available directory',async({
  await (await readyUploadInput(page)).setInputFiles({name:'synthetic-employer.pdf',mimeType:'application/pdf',buffer:syntheticOnePagePdf()});
  await expect(page.locator('#review-content')).toBeVisible();
  await expect(page.locator('#employer-load')).toBeEnabled();
- await expect(page.locator('#employer-load')).toHaveText('勤務先を選択する');
+ await expect(page.locator('#employer-load')).toHaveText('保管庫を開く');
  await expect(page.locator('.employer-identity__help:not(#employer-status)')).toHaveCount(0);
  await expect(employer).toBeDisabled();
  expect(await employer.evaluate(el=>el.tagName)).toBe('SELECT');
@@ -530,7 +530,8 @@ test('settings overview separates categories and retains only in-page drafts',as
  await expect(page.locator('#restore-add-button')).toHaveText('明細を追加復元');
  await expect(page.locator('#restore-add-button')).toBeDisabled();
  await expect(page.locator('#restore-add-inspect')).toBeDisabled();
- await expect(page.locator('#restore-add-ack')).toBeDisabled();
+ await expect(page.locator('#restore-add-ack')).toHaveCount(0);
+ await expect(page.locator('#restore-ack')).toBeDisabled();
  const secret=page.locator('#export-password');
  await secret.fill('synthetic-only');
  await page.locator('[data-toggle-password="export-password"]').click();
@@ -550,12 +551,15 @@ test('settings overview separates categories and retains only in-page drafts',as
  await expect(page.locator('#settings-yearend-panel')).toBeVisible();
  await expect(page.locator('#ye-restore-commit')).toBeHidden();
  await expect(page.locator('#ye-restore-commit')).toHaveText('従業員を追加復元');
+ await expect(page.locator('#ye-restore-commit')).toBeDisabled();
+ await expect(page.locator('#ye-restore-ack')).toHaveCount(0);
  await expect(page.locator('#settings-personal-panel')).toBeVisible();
  await expect(menu.locator('button')).toHaveCount(4);
  await menu.getByRole('button',{name:/^勤務先管理/}).click();
  await expect(page.locator('#settings-backup-panel')).toBeHidden();
  await expect(page.locator('#settings-employers-panel')).toBeVisible();
  await expect(page.locator('#employer-directory-load')).toBeEnabled();
+ await expect(page.locator('#employer-directory-load')).toHaveText('保管庫を開く');
  await expect(page.locator('#employer-directory-form')).toBeHidden();
  await expect(page.locator('#employer-directory-save')).toBeDisabled();
  await expect(page.locator('#employer-bulk-panel')).toBeHidden();
@@ -713,6 +717,48 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
   for(const id of ['settings-backup-panel','settings-details-panel','settings-auth-panel']){
    await page.evaluate(id=>{for(const s of document.querySelectorAll('main>.settings-group'))s.hidden=s.id!==id;},id);
    expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0);
+  }
+ }
+});
+
+// Actual page markup and CSS, with synthetic states; never access a real vault.
+test('upload save footer remains usable through success and recovery at phone and desktop widths',async({page})=>{
+ await page.route('**/*',route=>route.abort('blockedbyclient'));
+ const url=new URL('../public/upload/index.html',import.meta.url);
+ const csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'";
+ await page.setContent(readFileSync(url,'utf8').replace('<head>',`<head><meta http-equiv="Content-Security-Policy" content="${csp}">`));
+ const styles=new Set(['ress','style','theme','upload','cloud','vault'].map(name=>new URL(`../public/styles/${name}.css`,import.meta.url).href));
+ for(const href of await page.locator('link[rel="stylesheet"]').evaluateAll(links=>links.map(link=>link.getAttribute('href')))){
+  const source=new URL(href,url);source.search='';expect(styles.has(source.href)).toBe(true);await page.addStyleTag({content:readFileSync(source,'utf8')});
+ }
+ for(const [width,height] of [[360,800],[390,844],[412,915],[820,900],[1280,800]]){
+  await page.setViewportSize({width,height});
+  for(const theme of ['light','dark'])for(const state of ['before','expanded','saving','failed','recovery','checking','success']){
+   const out=await page.evaluate(([theme,state])=>{
+     const $=id=>document.getElementById(id),el=s=>document.querySelector(s);
+     document.documentElement.dataset.theme=theme;el('.workspace').classList.remove('is-empty');el('.save-bar').classList.remove('is-empty');
+     $('file-list-empty').hidden=true;$('file-list').hidden=false;$('file-list').replaceChildren();const li=document.createElement('li');li.className='file-list__item';li.textContent='synthetic.pdf';$('file-list').append(li);
+     $('review-empty').hidden=true;$('review-content').hidden=false;
+     const recover=['recovery','checking'].includes(state),active=state==='saving',failed=['failed','recovery','checking'].includes(state),success=state==='success';
+     el('.save-bar').classList.toggle('is-recovering',recover);
+     $('save-status').hidden=active;$('save-status').setAttribute('role',failed?'alert':'status');$('save-status').textContent=failed?'保存に失敗しました: OneDriveフォルダー一覧の取得：OneDriveへの照会通信に失敗しました（再試行上限）。':'1件を保存できます。';
+     $('zero-approval').hidden=!['before','expanded','failed'].includes(state);$('zero-approval-count').textContent='1件・9項目（未選択時は空欄）';$('zero-approval-details').open=state==='expanded';$('zero-approval-list').innerHTML='<li>synthetic.pdf：健康保険・厚生年金・雇用保険・所得税・住民税</li>';
+     $('save-all').disabled=!['before','expanded','failed'].includes(state);$('save-feedback').hidden=['before','expanded'].includes(state);$('save-feedback').classList.toggle('is-failed',failed);$('save-feedback').classList.toggle('is-complete',success);
+     $('save-stage').textContent=failed?'保存を完了できませんでした':success?'OneDriveへの保存完了':'保存済みデータを確認中…';$('save-elapsed').textContent='経過 1:20';$('save-guidance').textContent=failed?'選択したPDFと入力内容は保持しています。':'完了するまでこの画面を開いてください。';
+     $('upload-save-recovery').hidden=!recover;$('upload-save-recovery-status').textContent=state==='checking'?'OneDriveの保存結果を確認中…':'書き込み結果が不明です。OneDriveの状態を確認してください。入力内容は保持しています。';
+     const rect=e=>{const r=e.getBoundingClientRect();return {w:r.width,h:r.height,x:r.x,y:r.y,bottom:r.bottom,right:r.right}};
+     return {option:rect($('zero-approval')),details:rect($('zero-approval-details')),stage:rect($('save-stage')),overflow:document.documentElement.scrollWidth-innerWidth,bar:rect(el('.save-bar')),status:rect(el('.save-bar__status')),actions:rect(el('.save-bar__actions')),button:rect($('save-all')),feedback:rect($('save-feedback')),list:rect($('file-list')),panel:rect(el('.file-panel')),review:rect(el('.review-panel')),recheck:rect($('upload-save-recheck')),rootHeight:document.documentElement.scrollHeight};
+    },[theme,state]);
+   const label=`${width} ${theme} ${state}`;
+   expect(out.overflow,label).toBeLessThanOrEqual(1);expect(out.list.h,label).toBeGreaterThan(15);expect(out.status.w,label).toBeGreaterThan(100);expect(out.bar.h,label).toBeLessThan(500);
+   if(['before','expanded','failed'].includes(state)){expect(out.option.w,label).toBeGreaterThanOrEqual(out.bar.w-45);expect(out.option.bottom,label).toBeLessThanOrEqual(out.status.y+1);}
+   if(state==='failed')expect(out.stage.h,label).toBe(0);
+   if(width>860&&out.button.w){expect(out.button.x,label).toBeGreaterThanOrEqual(out.status.right);expect(out.status.w,label).toBeGreaterThan(out.bar.w*.65);}
+   if(width<=860){
+    expect(out.status.w,label).toBeGreaterThanOrEqual(out.bar.w-45);
+    if(!['recovery','checking'].includes(state)){expect(out.button.w,label).toBeGreaterThanOrEqual(out.bar.w-45);expect(out.actions.y,label).toBeGreaterThanOrEqual(out.status.bottom-1);}
+    else expect(out.recheck.w,label).toBeGreaterThan(out.bar.w*.75);
+   }
   }
  }
 });

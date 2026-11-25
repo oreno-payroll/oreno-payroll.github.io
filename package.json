@@ -7,7 +7,6 @@
     "build": "npm run check && node scripts/build.mjs",
     "dev": "npm run check && node scripts/build.mjs --watch",
     "preview": "python3 -m http.server 5173 --directory dist",
-    "clean:legacy": "node scripts/cleanup-legacy.mjs",
     "test": "node scripts/run-tests.mjs",
     "audit:privacy": "node scripts/audit-private-data.mjs",
     "test:e2e": "playwright test --config scripts/playwright-config.mjs"

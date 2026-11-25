@@ -18,7 +18,7 @@ renderEmployerSelect(select,directory,'main',B);assert.equal(select.value,B);ass
 renderEmployerSelect(select,[{...directory[0],name:'<架空表示名>'}],'main',A);assert.equal(select.options[1].textContent,'<架空表示名>（現在）');
 const src=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 for(const page of ['edit','upload']){const html=src(`public/${page}/index.html`);assert.match(html,/<select class="input" id="employer-id" disabled>/);assert.doesNotMatch(html,/id="employer-create"|pattern="emp_/);}
-assert.match(src('src/upload.ts'),/const unchanged=await refreshEmployerChoices\(\);\s*if\(!unchanged\|\|!authorized\(\)\)return;/);
+assert.match(src('src/upload.ts'),/const unchanged=await refreshEmployerChoices\(\);\s*if\(!unchanged\|\|!authorized\(\)\|\|before!==zeroCandidatesFingerprint\(candidates\(\)\)\)\s*throw new Error/);
 assert.match(src('src/upload.ts'),/entries\.every\(\(entry,i\)=>\(entry\.employerId\?\?null\)===before\[i\]\)/);
 assert.match(src('src/upload.ts'),/employerLoad\.hidden=\(employerDirectory!==undefined&&!employerLoadFailed\)\|\|employerLoading/);
 assert.match(src('src/upload.ts'),/employerLoad\.textContent=employerLoadFailed\?'再読み込み'/);

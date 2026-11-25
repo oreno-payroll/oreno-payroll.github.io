@@ -7,7 +7,7 @@ import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 import {preparePdfHandoff} from './pdf/handoff';
 import {readNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
-import {capturePdfHandoffAuthorization,captureOperationAuthorization,cloudVault} from './cloud/auth';
+import {capturePdfHandoffAuthorization,captureOperationAuthorization} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,type SavedPayrollSummary} from './storage/payrollStore';
 import {reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
@@ -196,12 +196,13 @@ saveButton.addEventListener('click', async () => {
       zeroResolution: reconcilePayrollZeroResolution(record.zeroResolution,formValues),
       ...editedReviewRecord(record,checked.warnings,hasApproval(),new Date().toISOString()),
     };
-    const freshDirectory=await (await cloudVault()).readEmployerDirectory();
+    let freshDirectory:EmployerEntry[]|undefined;
+    const conflicts = await inspectReplacementConflicts([updated], updated.id,directory=>{freshDirectory=directory;});
+    if(!freshDirectory)throw new Error('勤務先一覧を確認できませんでした。');
     if(!authorized()){saving=false;updateUI();return;}
     if(employerDirectorySignature(freshDirectory)!==employerDirectorySignature(employerDirectory)){
       employerDirectory=freshDirectory;refreshEmployerSelect(employerId);reviewApproval=null;saving=false;appStatus.warning('勤務先一覧が更新されました。選択内容を確認してください。',true);updateUI();return;
     }
-    const conflicts = await inspectReplacementConflicts([updated], updated.id);
     if (conflicts.length) {
       const lines = conflicts.map(c => `・${employerDisplayName(employerDirectory,c.employerId,c.period.split('|')[0])} / ${c.fileName}（${c.period.split('|').slice(0,3).join(' / ')}）`).join('\n');
       if(!await confirmOperation({title:'重複する明細を整理',subject:`残す明細：${employerDisplayName(employerDirectory,updated.employerId,updated.form.job)} / ${updated.fileName}`,tone:'danger',acceptLabel:'保存して重複明細を除外',details:[
@@ -313,12 +314,11 @@ void (async () => {
     // Priority-only hint, not a trusted statement location. CloudVault still
     // validates the whole indexed snapshot before returning any editable record.
     const yearHint=originParams.get('hintYear')??undefined;
-    record = await getRecordSummary(id,yearHint);
+    record = await getRecordSummary(id,yearHint,directory=>{employerDirectory=directory;});
     if (!record) { showError('保存済み明細が見つかりません。'); return; }
-    employerDirectory=await (await cloudVault()).readEmployerDirectory();
     employerStatus.textContent='';
     editor.hidden = false;
-    appStatus.success('明細を読み込みました');
+    if(appStatus.element.dataset.state==='loading')appStatus.clear();
     $('record-name').textContent = record.fileName;
     $('record-details').textContent = `PDF ${record.pdfSize < 1024 * 1024 ? `${Math.max(1, Math.round(record.pdfSize / 1024))} KB` : `${(record.pdfSize / 1024 / 1024).toFixed(1)} MB`}`;
     const link = $<HTMLAnchorElement>('original-pdf');
@@ -336,7 +336,7 @@ void (async () => {
     download.addEventListener('click',async event=>{
       event.preventDefault();
       if(!record||saving||pdfDownloading)return;
-      pdfDownloading=true;appStatus.loading('PDF原本を取得・照合しています…');
+      pdfDownloading=true;appStatus.loading('PDF原本を取得しています…');
       try{
         const pdf=await getOriginalForVerifiedEdit(record.id,recordSignature(record));
         const objectUrl=URL.createObjectURL(pdf);

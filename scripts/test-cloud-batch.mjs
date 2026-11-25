@@ -18,6 +18,7 @@ const {PayrollVault,GraphError,encryptJson,decryptJson,decryptBytes}=await impor
 const encoder=new TextEncoder();
 class FakeGraph {
  async withWriteLock(operation){return operation();}
+ markUploadCheckpoint(){}
  files=new Map();reads=new Map();writes=new Map();activeOriginals=0;maxOriginals=0;
  hooks={};
  path(parts,name){return [...parts,name].join('/');}
@@ -74,7 +75,10 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
  assert.equal(graph.count('payroll/income/'),1,'one income JSON update for same payment year');
  assert.equal(graph.writes.get('payroll/index.enc'),3,'index created once plus two distinct year registrations');
  assert.equal(vault.records().length,8,'all 8 records visible after commit');
- assert.match(updates.at(-1),/8件のOneDrive保存・読み戻し検証がすべて完了/);
+ assert.equal(updates.at(-1).phase,4);
+ assert.ok(updates.some(e=>e.phase===1&&e.percent===100));
+ assert.ok(updates.every(e=>e.percent===null||e.phase===1));
+ assert.match(updates.at(-1).title,/8件のOneDrive保存・読み戻し検証がすべて完了/);
  const data=await graph.read(['payroll','statements'],'2026.enc');
  assert.equal((await decryptJson('year',data.text,vault.sessionKey().key)).records.length,8);
  for(const rec of vault.records()) {
@@ -147,8 +151,21 @@ const entries=async months=>Promise.all(months.map((month,i)=>sample(101+i,month
  console.log('PASS: failure after annual commit reports partial state, never claims all saved');
 }
 {
+ const {vault,graph}=await start();
+ const state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ graph.hooks.read=async path=>{if(path==='payroll/income/2026.enc')throw new Error('synthetic Finance read outage');};
+ await assert.rejects(vault.saveBatch(await entries(['2026-04','2026-05']),undefined,[],()=>true,state),error=>error.name==='PayrollPartialSuccessError'&&error.stage==='income-sync');
+ assert.equal(state.payrollSaved,true,'annual commit and original verification precede Finance');
+ assert.equal(vault.records().length,2);assert.equal(graph.count('payroll/income/'),0);
+ const originalWrites=graph.count('payroll/originals/'),annualWrites=graph.count('payroll/statements/');
+ graph.hooks.read=undefined;await vault.syncIncome(new Set(['2026']),{attempted:false,uncertain:false,completed:false,lock:'none'});
+ assert.equal(graph.count('payroll/originals/'),originalWrites);assert.equal(graph.count('payroll/statements/'),annualWrites);
+ assert.equal(graph.count('payroll/income/'),1);
+ console.log('PASS: confirmed payroll survives Finance-only failure; derived retry never rewrites originals or annual statements');
+}
+{
  const code=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
- assert.match(code,/await vault\.saveBatch\(batch,onProgress,latest\)/,'upload entry point uses cloud batch');
+ assert.match(code,/await vault\.saveBatch\(batch,onProgress,existing,authorized,state,uploadPreflight\)/,'upload entry point uses cloud batch');
  assert.doesNotMatch(code,/for\(const item of accepted\)\s*\{/,'no per-record roundtrip loop');
  console.log('PASS: upload entry point routes new records into a single batch');
 }

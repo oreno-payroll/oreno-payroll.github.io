@@ -4,25 +4,8 @@ import {runInNewContext} from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
 import {navigationFeedback} from '../src/ui/navigationNotice.ts';
-import {dashboardFreshnessLabel,describePayrollSaveProgress} from '../src/ui/operationFeedback.ts';
+import {dashboardFreshnessLabel} from '../src/ui/operationFeedback.ts';
 const src=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
-const sequences=[
- ['OneDriveの保存済み明細を確認しています…',0],
- ['PDF 1/3件：原本PDFを暗号化しています',1],
- ['原本PDFの保存・照合 2/3件完了',1],
- ['2026年度の解析データを保存・検証しています（0/3件確定）',2],
- ['収入データを支給年1件分同期しています',3],
- ['3件のOneDrive保存・読み戻し検証がすべて完了しました',4],
-];
-let last=0;
-for(const [message,expected] of sequences){
- const next=describePayrollSaveProgress(message);
- assert.equal(next.phase,expected,message);assert.ok(next.phase>=last);last=next.phase;
-}
-assert.equal(describePayrollSaveProgress('PDF 1/2件：暗号化PDFの送信 75%').percent,75);
-assert.equal(describePayrollSaveProgress('収入データを支給年1件分同期しています').percent,null,'PDF 100% does not imply a completed Finance sync');
-assert.equal(describePayrollSaveProgress('PDF 2/4件：原本照合済み').count,'2 / 4件 · ');
-assert.equal(describePayrollSaveProgress('プログレス 999%').percent,null);
 for(const state of ['checking','rechecking','snapshot','verified','stale','unavailable']){
  assert.ok(dashboardFreshnessLabel(state).length>3);
 }
@@ -38,10 +21,11 @@ assert.match(dashboard,/if\(!hadView\)periodLabel\.textContent=message/,'backgro
 assert.match(dashboard,/dashboardHasView\?'stale':'unavailable'/);
 assert.match(dashboard,/dashboardLoading\|\|dashboardStale/,'mutation gate must reject saving while rechecking or stale');
 assert.match(dashboard,/sideZipButton\.disabled = exportingSideZip \|\| exportCount === 0 \|\| dashboardLoading \|\| dashboardStale/);
-assert.match(upload,/describePayrollSaveProgress\(message\)/);
+assert.match(upload,/function showSaveProgress\(view:PayrollSaveFeedback\)/);
 assert.match(upload,/if\(view\.phase>=savePhase\)/,'parallel upload progress must not regress');
 assert.match(upload,/saveProgress\.removeAttribute\('aria-valuenow'\)/,'unknown progress is indeterminate, never a fake percent');
-assert.match(upload,/saveGuidance\.textContent='OneDriveの保存済み一覧を確認してから再試行してください/);
+assert.match(upload,/明細・PDFの書き込みは開始していません/);
+assert.match(upload,/選択したPDFと入力内容は保持しています/);
 assert.match(store,/onProgress\?\:\(stage:string\)=>void/,'metadata-only edit exposes progress callback without fetching PDF');
 assert.match(store,/await vault\.save\(\{\.\.\.record,revision:\(prior\.revision\?\?0\)\+1\},onProgress,/);
 assert.match(edit,/updateRecordMetadata\(updated, conflicts, recordSignature\(record\),stage=>appStatus\.loading\(stage\),employerDirectorySignature\(employerDirectory\)\)/);
@@ -68,14 +52,14 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  const radios=[{disabled:false},{disabled:false},{disabled:false}];
  const periodControls=[yearSelect,bonusToggle,forecastToggle,fiscalModeButton,calendarModeButton,...radios];
  let tries=0,failInitial=true,renders=0;
- const notifications=[];let nextNotice={operation:'upload-saved',count:3};
+ const notifications=[];const toastElement={dataset:{}};let nextNotice={operation:'upload-saved',count:3};
  const ctx={
   dashboardFreshnessLabel,registrationPanel,periodLabel,yearSelect,bonusToggle,forecastToggle,sideZipButton,fiscalModeButton,calendarModeButton,
   selectedPeriodRecords:()=>[{form:{job:'side'}}],exportingSideZip:false,
   deletionBusy:()=>false,renderPendingDeletion(){},renderList(){},initialYear:2026,currentPeriodYear:()=>2026,
   saved:[],employerDirectory:[],legacyDirectory:[],legacyEmployers:()=>[],employerFilter:{disabled:true},mutatingSnapshot:null,
   document:{getElementById:()=>indicator,querySelector:()=>refresh,querySelectorAll:selector=>selector.includes("statement-kind")?radios:[button]},
-  appStatus:{loading(m){notifications.push(['loading',m]);},success(m){notifications.push(['success',m]);},error(m){notifications.push(['error',m]);},show(k,m){notifications.push([k,m]);}},
+  appStatus:{element:toastElement,clear(){delete toastElement.dataset.state;notifications.push(['clear']);},loading(m){toastElement.dataset.state='loading';notifications.push(['loading',m]);},success(m){toastElement.dataset.state='success';notifications.push(['success',m]);},error(m){toastElement.dataset.state='error';notifications.push(['error',m]);},show(k,m){toastElement.dataset.state=k;notifications.push([k,m]);}},
   authEpoch:()=> 'fixture-epoch',takeNavigationNotice:()=>{const n=nextNotice;nextNotice=null;return n;},navigationFeedback,
   loadRecordSummaries:async opts=>{
    if(failInitial)throw new Error('synthetic initial failure');
@@ -114,8 +98,14 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  assert.equal(ctx.phase5State().dashboardStale,false);assert.equal(ctx.employerDirectory[0].name,'Synthetic new');
  assert.equal(button.disabled,false,'successful Graph confirmation restores mutation controls');
  assert.equal(sideZipButton.disabled,false);
- assert.equal(indicator.textContent,'OneDrive確認済み');
- assert.equal(tries,3,'UX-only updates may not initiate an additional cloud read');
+ assert.equal(indicator.textContent,'最新データ確認済み');
+ await ctx.phase5Refresh(true);
+ assert.deepEqual(notifications.at(-1),['partial','削除完了・連携未同期'],'ordinary read must preserve unresolved partial notice');
+ ctx.appStatus.clear();
+ await ctx.phase5Refresh(true);
+ assert.deepEqual(notifications.at(-1),['clear'],'ordinary read completion must not show a success toast');
+ assert.ok(!notifications.some(([kind])=>kind==='loading'),'dashboard progress must stay inline');
+ assert.equal(tries,5,'each explicit refresh performs exactly one load');
 }
 
 console.log('PASS: phase 5 actual-stage UX, partial-sync truth, recheck preserving view, stale mutation lock, no new storage or network');

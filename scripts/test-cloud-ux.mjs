@@ -75,13 +75,14 @@ assert.match(vault,/async syncIncome\(changedYears\?/);
 const incomeSync=vault.slice(vault.indexOf(' async syncIncome(changedYears?'));
 assert.match(incomeSync,/for\(let attempt=0;attempt<8;attempt\+\+\)/);
 // Phase 1: conditional ciphertext reuse still verifies every source ETag before/after income writes.
-assert.match(incomeSync,/await perf\.measure\('source-refresh',\(\)=>this\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}\)\)/);
-assert.match(incomeSync,/await perf\.measure\('income-prewrite-refresh',\(\)=>this\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}\)\)/);
-assert.match(incomeSync,/await perf\.measure\('income-postwrite-refresh',\(\)=>this\.refresh\(\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}\)\)/);
-assert.match(incomeSync,/if\(!same\(sourceNow,current\.records\)\)continue/);
-assert.match(incomeSync,/same\(sourceAfter,current\.records\)/);
+// The source-inventory behavior is exercised by test-payroll-income-inventory.mjs.
+// Keep the shared live-source contract, rather than requiring per-year locals.
+assert.match(incomeSync,/const options=\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}/);
+for(const phase of ['source-refresh','income-prewrite-refresh','income-postwrite-refresh'])
+ assert.ok(incomeSync.includes(`await perf.measure('${phase}',()=>this.refresh(options))`));
+assert.match(incomeSync,/!same\(documents\(years\),expected\)/);
 assert.match(storeCode,/onProgress\?\./);
-assert.match(upload,/saveRecordsSkippingDuplicates\(records, message =>/);
+assert.match(upload,/saveRecordsSkippingDuplicates\(records,showSaveProgress,writeState,authorized\)/);
 assert.match(upload,/保存・検証しました/);
 assert.match(source('.gitignore'),/!\/public\/payroll-cloud-session\.js/);
 console.log('PASS: 認証画面・同一オリジンの鍵継承・保存進捗・変更年のみの同期');
@@ -97,7 +98,7 @@ assert.match(html,/id="save-progress-track"/);
 assert.match(html,/ブラウザで暗号化|端末内で暗号化/);
 assert.doesNotMatch(html,/IndexedDBへ保存します/);
 assert.match(upload,/saveElapsed\.textContent/);
-assert.match(upload,/通信応答を待っています/);
+assert.doesNotMatch(upload,/通信応答を待っています|OneDriveの応答待ち/);
 assert.match(upload,/document\.addEventListener\('click',event=>/);
 assert.match(upload,/stopSaveClock\(\)/);
 assert.doesNotMatch(upload,/window\.alert\(`\$\{result\.saved\}/);

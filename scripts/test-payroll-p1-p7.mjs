@@ -21,6 +21,7 @@ const {PayrollVault,PayrollGraph,GraphError,decryptJson,encryptJson,getRecordSum
 const enc=new TextEncoder();
 class FakeGraph{
  async withWriteLock(operation){return operation();}
+ markUploadCheckpoint(){} // FakeGraph has no remote lock; real ownership is tested separately.
  files=new Map(); writes=[]; trashed=[]; beforeTrash=undefined; trashFault=undefined; revision=0; fault=undefined; discard=undefined;
  path(parts,name){return [...parts,name].join('/');}
  async read(parts,name){const row=this.files.get(this.path(parts,name));return row?{...row}:null;}
@@ -71,16 +72,65 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
 {
  const ctx=await setup(),a=await sample(6,A);ctx.graph.fault=p=>p.includes('/statements/');await assert.rejects(saveRecordsSkippingDuplicates([a]));ctx.graph.fault=undefined;await ctx.reopen();
  let report=await verify(ctx,a);assert.equal(report.detached,1);assert.equal(report.saved,0);assert.equal(report.originalsVerified,1);assert.throws(()=>requireSafeUploadRecovery(report),/未参照原本/);
- const n=ctx.graph.writes.length;await assert.rejects(saveRecordsSkippingDuplicates([a]),/未参照原本/);assert.equal(ctx.graph.writes.length,n);
- assert.equal((await saveRecordsSkippingDuplicates([await sample(7,A)])).saved,1);
- console.log('PASS P4: fresh page/vault cannot duplicate detached original; unrelated same-month PDF allowed');
+ const originals=ctx.graph.writes.filter(p=>p.includes('/originals/')).length;
+ assert.equal((await saveRecordsSkippingDuplicates([a])).saved,1);await ctx.reopen();
+ assert.equal(ctx.graph.writes.filter(p=>p.includes('/originals/')).length,originals);
+ assert.equal((await verify(ctx,a)).detached,0);assert.equal((await verify(ctx,a)).saved,1);
+ console.log('PASS P4: fresh page/vault reuses authenticated detached original without duplicate PUT');
+}
+{
+ const ctx=await setup(),a=await sample(106,A,'2026-10'),b=await sample(107,A,'2027-04');
+ ctx.graph.fault=p=>p.includes('/statements/2027.enc');
+ await assert.rejects(saveRecordsSkippingDuplicates([a,b]));ctx.graph.fault=undefined;await ctx.reopen();
+ const report=await inspectUploadRecovery(ctx.vault,[a,b].map(uploadRecoveryAttempt),recordSignature);
+ assert.equal(report.saved,1);assert.equal(report.detached,1);assert.deepEqual(report.incomeUnsyncedYears,['2027']);
+ const originalWrites=ctx.graph.writes.filter(p=>p.includes('/originals/')).length;
+ const prior=ctx.vault.records()[0],priorSignature=recordSignature(prior);
+ const result=await saveRecordsSkippingDuplicates([a,b]);assert.equal(result.saved,1);assert.equal(result.skipped[0].reason,'saved-pdf');await ctx.reopen();
+ assert.equal(ctx.graph.writes.filter(p=>p.includes('/originals/')).length,originalWrites);
+ assert.equal(ctx.vault.records().length,2);assert.equal(recordSignature(ctx.vault.records().find(r=>r.id===prior.id)),priorSignature);
+ assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+ console.log('PASS partial ordinary upload: derived repair plus missing annual only, no PDF rewrite or confirmed-record overwrite');
+}
+{
+ const ctx=await setup(),a=await sample(108,A);ctx.graph.fault=p=>p.includes('/statements/');
+ await assert.rejects(saveRecordsSkippingDuplicates([a]));ctx.graph.fault=undefined;await ctx.reopen();
+ const [path,original]=[...ctx.graph.files].find(([p])=>p.includes('/originals/'));
+ const duplicate=path.replace(/[^/]+\.enc$/,crypto.randomUUID()+'.enc');
+ ctx.graph.files.set(duplicate,{...original,id:duplicate,etag:'duplicate-fixture'});
+ const before=ctx.graph.writes.length;
+ await assert.rejects(saveRecordsSkippingDuplicates([a]),/未参照原本が複数/);
+ assert.equal(ctx.graph.writes.length,before);assert.equal(ctx.vault.records().length,0);
+ console.log('PASS ambiguous duplicate detached originals: no arbitrary selection or write');
 }
 {
  const ctx=await setup(),a=await sample(8,A);ctx.graph.fault=p=>p.includes('/income/');await assert.rejects(saveRecordsSkippingDuplicates([a]));ctx.graph.fault=undefined;await ctx.reopen();
- const report=await verify(ctx,a);assert.equal(report.saved,1);assert.equal(report.originalsVerified,1);assert.deepEqual(report.incomeUnsyncedYears,['2027']);const n=ctx.graph.writes.length;await assert.rejects(saveRecordsSkippingDuplicates([a]),/未同期/);assert.equal(ctx.graph.writes.length,n);
- await ctx.vault.syncIncome();await ctx.reopen();assert.deepEqual((await verify(ctx,a)).incomeUnsyncedYears,[]);assert.equal((await saveRecordsSkippingDuplicates([a])).skipped[0].reason,'saved-pdf');
+ const report=await verify(ctx,a);assert.equal(report.saved,1);assert.equal(report.originalsVerified,1);assert.deepEqual(report.incomeUnsyncedYears,['2027']);const originals=ctx.graph.writes.filter(p=>p.includes('/originals/')||p.includes('/statements/')).length;
+ assert.equal((await saveRecordsSkippingDuplicates([a])).skipped[0].reason,'saved-pdf');await ctx.reopen();
+ assert.equal(ctx.graph.writes.filter(p=>p.includes('/originals/')||p.includes('/statements/')).length,originals);assert.deepEqual((await verify(ctx,a)).incomeUnsyncedYears,[]);
  const wrong=await verify(ctx,{...a,form:{...a.form,targetMonth:'2027-01'}});assert.equal(wrong.saved,0);
- console.log('PASS P5: income-only failure detected after reload; explicit sync repairs; mismatched period is not counted as saved');
+ console.log('PASS P5: income-only failure detected after reload; duplicate-only retry repairs; mismatched period is not counted as saved');
+}
+{
+ const ctx=await setup(),a=await sample(208,A,'2026-10'),b=await sample(209,A,'2026-11');
+ await saveRecordsSkippingDuplicates([a]);await ctx.reopen();
+ const prior=ctx.vault.records()[0],signature=recordSignature(prior);
+ ctx.graph.files.delete('payroll/income/2027.enc');
+ assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),['2027']);
+ assert.equal((await saveRecordsSkippingDuplicates([b])).saved,1);await ctx.reopen();
+ assert.equal(ctx.vault.records().length,2);assert.equal(recordSignature(ctx.vault.records().find(r=>r.id===prior.id)),signature);
+ assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+ console.log('PASS ordinary upload with stale Finance: new payroll commits and derived income is repaired without editing old payroll');
+}
+{
+ const ctx=await setup(),a=await sample(210,A,'2026-10');
+ const originalRead=ctx.graph.read.bind(ctx.graph);ctx.graph.read=async(parts,name)=>{if(parts.at(-1)==='income')throw new Error('synthetic income read outage');return originalRead(parts,name);};
+ const state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ await assert.rejects(saveRecordsSkippingDuplicates([a],undefined,state),error=>error.name==='PayrollPartialSuccessError'&&error.stage==='income-sync');
+ assert.equal(state.payrollSaved,true);assert.equal(ctx.vault.records().length,1);
+ ctx.graph.read=originalRead;await ctx.reopen();assert.equal((await verify(ctx,a)).saved,1);
+ assert.equal((await saveRecordsSkippingDuplicates([a])).saved,0);assert.deepEqual((await verify(ctx,a)).incomeUnsyncedYears,[]);
+ console.log('PASS Finance read outage does not prevent payroll commit; retry only syncs income');
 }
 {
  const ctx=await setup(),a=await sample(9,A);await saveRecordsSkippingDuplicates([a]);const old=await getRecordSummary(ctx.vault.records()[0].id);
@@ -117,6 +167,15 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  assert.equal(ctx.graph.trashed.length,0);
  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
  console.log('PASS deletion batch: preflight all targets, two annual shards, one payment year, selected originals retained');
+}
+{
+ const ctx=await setup();await saveRecordsSkippingDuplicates([await sample(29,A)]);await ctx.reopen();
+ const prior=ctx.vault.records()[0],path='payroll/statements/2026.enc',before=ctx.graph.files.get(path),write=ctx.graph.write.bind(ctx.graph);
+ let reappeared=false;
+ ctx.graph.write=async(...args)=>{await write(...args);if(args[0].includes('income')&&!reappeared){reappeared=true;ctx.graph.files.set(path,{...before,etag:'synthetic-reappearance'});}};
+ await assert.rejects(deleteRecords([{id:prior.id,signature:recordSignature(prior)}]),e=>e.stage==='income-sync');
+ assert.equal(reappeared,true);assert.equal(ctx.graph.trashed.length,0);
+ console.log('PASS: shared sync detects reappearing deleted statement without reporting success');
 }
 {
  const ctx=await setup(),a=await sample(24,A),b=await sample(25,A,'2027-04');b.form.paymentDate='2027-04-27';
@@ -298,10 +357,15 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
 {
  const ctx=await setup(),a=await sample(101,A,'2026-10');ctx.graph.fault=p=>p.includes('/statements/');await assert.rejects(saveRecordsSkippingDuplicates([a]));ctx.graph.fault=undefined;await ctx.reopen();
  const corrected={...a,form:{...a.form,targetMonth:'2027-04',paymentDate:'2027-04-27'}};
- const n=ctx.graph.writes.length;await assert.rejects(saveRecordsSkippingDuplicates([corrected]),/未参照原本/);assert.equal(ctx.graph.writes.length,n);
+ const n=ctx.graph.writes.length;
  const report=await verify(ctx,corrected);assert.equal(report.detached,1);assert.equal(report.saved,0);assert.equal(report.originalsVerified,1);
- await assert.rejects(inspectAdditiveRestore([{...corrected,id:124,savedAt:'2026-11-01T00:00:00.000Z',revision:1}]),/未参照原本/);
- console.log('PASS A1: detached PDF detected even across fiscal years in ordinary and additive restore');
+ await assert.rejects(inspectAdditiveRestore([{...corrected,id:124,savedAt:'2026-11-01T00:00:00.000Z',revision:1}]),/未参照原本/);assert.equal(ctx.graph.writes.length,n);
+ const originals=ctx.graph.writes.filter(p=>p.includes('/originals/')).length;
+ assert.equal((await saveRecordsSkippingDuplicates([corrected])).saved,1);await ctx.reopen();
+ assert.equal(ctx.vault.records()[0].originalMonth,'2026-10');assert.equal(ctx.vault.records()[0].form.targetMonth,'2027-04');
+ assert.equal(ctx.graph.writes.filter(p=>p.includes('/originals/')).length,originals);
+ assert.equal((await ctx.vault.original(ctx.vault.records()[0])).size,a.pdf.size);
+ console.log('PASS A1: ordinary upload reuses cross-year detached PDF; additive restore retains its guard');
 }
 async function replacementFixture(){
  const ctx=await setup(),a=await sample(102,A,'2026-10'),b=await sample(103,B,'2027-04');
@@ -394,6 +458,17 @@ async function replacementFixture(){
  console.log('PASS: dashboard directory is a detached view; edit role mismatch and stale directory reject without writes; explicit new role persists with Finance sync');
 }
 
+// A directory change between the shared edit preflight and the write lock must
+// still invalidate the approved directory, without another unlocked index GET.
+{
+ const ctx=await setup(),dir=[{id:A,name:'Synthetic main',role:'main',current:true}];
+ await ctx.vault.writeEmployerDirectory([],dir);await saveRecordsSkippingDuplicates([await sample(695,A)]);await ctx.reopen();
+ const prior=await getRecordSummary(ctx.vault.records()[0].id),before=ctx.graph.writes.length,save=ctx.vault.save.bind(ctx.vault);
+ ctx.vault.save=async(...args)=>{await ctx.vault.writeEmployerDirectory(dir,dir.map(e=>({...e,name:'Synthetic renamed'})));return save(...args);};
+ await assert.rejects(updateRecordMetadata({...prior,form:{...prior.form,net:'9000'}},[],recordSignature(prior),undefined,JSON.stringify(dir)),/勤務先一覧/);
+ assert.deepEqual(ctx.graph.writes.slice(before),['payroll/index.enc']);
+ console.log('PASS: shared edit snapshot still rejects directory drift under the write lock');
+}
 // Phase 5-B2: actual encrypted annual writes, metadata-only, no original mutations.
 async function assignmentFixture(){
  const ctx=await setup(),dir=[{id:A,name:'Synthetic main',role:'main',current:true},{id:B,name:'Synthetic side',role:'side',current:true}];
@@ -435,15 +510,237 @@ async function assignmentFixture(){
  const records=ctx.vault.records(),remaining=records.filter(r=>!r.employerId);assert.ok(remaining.length>0&&remaining.length<3);
  const before=ctx.graph.writes.length;await assert.rejects(assignEmployers(targets,A,signature,plan.signature,()=>true),/変更/);assert.equal(ctx.graph.writes.length,before);
  const nextTargets=remaining.map(r=>({id:r.id,signature:recordSignature(r)}));const next=await inspectEmployerAssignment(nextTargets,A,signature,()=>true);
- await assert.rejects(assignEmployers(nextTargets,A,signature,next.signature,()=>true),/未同期/);assert.equal(ctx.graph.writes.length,before);
- await ctx.vault.syncIncome();
+ // Stale derived income must not block remaining assignments.
  await assignEmployers(nextTargets,A,signature,next.signature,()=>true);await ctx.reopen();assert.ok(ctx.vault.records().every(r=>r.employerId===A));assert.equal(ctx.graph.trashed.length,0);
- console.log('PASS B2: partial annual failure, no blind replay, explicit repair and remaining assignments');
+ console.log('PASS B2: partial annual failure, no blind replay, remaining assignments repair affected income');
 }
+{
+ const ctx=await setup(),dir=[{id:A,name:'Synthetic main',role:'main',current:true}];
+ await ctx.vault.writeEmployerDirectory([],dir);
+ const fixtures=await Promise.all(Array.from({length:22},async(_,i)=>{
+  const month=`${2024+Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`;
+  const rec=await sample(900+i,undefined,month);rec.form.paymentDate=month+'-27';return rec;
+ }));
+ assert.equal((await saveRecordsSkippingDuplicates(fixtures)).saved,22);await ctx.reopen();
+ const original=ctx.vault.records(),targets=original.map(r=>({id:r.id,signature:recordSignature(r)})),signature=JSON.stringify(dir);
+ ctx.graph.files.delete('payroll/income/2024.enc');
+ const counts={refresh:0,read:0,listFolder:0};
+ for(const [obj,key] of [[ctx.vault,'refresh'],[ctx.graph,'read'],[ctx.graph,'listFolder']]){const orig=obj[key].bind(obj);obj[key]=(...args)=>{counts[key]++;return orig(...args);};}
+ const before=ctx.graph.writes.length,plan=await inspectEmployerAssignment(targets,A,signature,()=>true);assert.equal(plan.count,22);
+ const verified=await assignEmployers(targets,A,signature,plan.signature,()=>true);
+ console.log('BULK COUNTS '+JSON.stringify(counts));
+ assert.ok(counts.refresh<=11&&counts.read<=36&&counts.listFolder<=12,JSON.stringify(counts));
+ await ctx.reopen();
+ assert.deepEqual(verified.sort((a,b)=>a.id-b.id),ctx.vault.records().sort((a,b)=>a.id-b.id));
+ assert.equal(ctx.vault.records().length,22);
+ for(const r of ctx.vault.records()){const prior=original.find(x=>x.id===r.id);assert.deepEqual(r,{...prior,employerId:A,revision:(prior.revision??0)+1});}
+ assert.ok(!ctx.graph.writes.slice(before).some(x=>x.includes('/originals/')));
+ assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2024','2025'])),[]);
+ console.log('PASS: 22 employer assignments with stale derived income, unchanged PDFs and amounts');
+}
+{
+ const {ctx,targets,signature}=await assignmentFixture(),plan=await inspectEmployerAssignment(targets,A,signature,()=>true);
+ // A single payment year must also check the identity of its verified income
+ // file. A bypassing client changes it during the final metadata sweep.
+ const metadata=ctx.graph.metadata.bind(ctx.graph);let changed=false;
+ ctx.graph.metadata=async(parts,name)=>{
+  if(parts.includes('income')&&!changed){
+   changed=true;const path=ctx.graph.path(parts,name),old=ctx.graph.files.get(path);
+   const text=await encryptJson('income',{format:'payroll-income-v1',year:name.slice(0,-4),records:[]},ctx.key,ctx.vault.sessionKey().salt);
+   ctx.graph.files.set(path,{...old,text,size:enc.encode(text).length,etag:'synthetic-race'});
+  }
+  return metadata(parts,name);
+ };
+ await assignEmployers(targets,A,signature,plan.signature,()=>true);
+ assert.equal(changed,true);assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+ console.log('PASS: shared final verification detects single-year income replacement and repairs projection');
+}
+{
+ const {ctx,targets,signature}=await assignmentFixture(),plan=await inspectEmployerAssignment(targets,A,signature,()=>true);
+ ctx.graph.fault=p=>p.includes('/income/');
+ await assert.rejects(assignEmployers(targets,A,signature,plan.signature,()=>true),e=>e.stage==='income-sync');
+ ctx.graph.fault=undefined;await ctx.reopen();assert.ok(ctx.vault.records().every(r=>r.employerId===A));
+ console.log('PASS: Finance failure after employer assignment is a partial success');
+}
+
 {
  const {ctx,targets,signature}=await assignmentFixture();const first=ctx.vault.records()[0];
  const year=first.form.targetMonth<'2027-04'?'2026':'2027',path=`payroll/statements/${year}.enc`,file=ctx.graph.files.get(path),doc=await decryptJson('year',file.text,ctx.key);
  doc.records.push({...first,id:987654,employerId:A});const cipher=await encryptJson('year',doc,ctx.key,ctx.vault.sessionKey().salt);ctx.graph.files.set(path,{...file,text:cipher,size:enc.encode(cipher).length,etag:'synthetic-duplicate'});await ctx.reopen();
  const before=ctx.graph.writes.length;await assert.rejects(inspectEmployerAssignment(targets,A,signature,()=>true),/重複/);assert.equal(ctx.graph.writes.length,before);
  console.log('PASS B2: duplicate period blocked without deleting or modifying any statement');
+}
+
+{
+ const ctx=await setup();
+ for(const [i,month] of ['2024-04','2025-04','2026-04'].entries()){
+  const rec=await sample(800+i,A,month);rec.form.paymentDate=month+'-27';
+  await saveRecordsSkippingDuplicates([rec]);
+ }
+ const counts={refresh:0,read:0,listFolder:0,metadata:0,write:0};
+ for(const method of ['read','listFolder','metadata','write']){
+  const original=ctx.graph[method].bind(ctx.graph);ctx.graph[method]=async(...args)=>{counts[method]++;return original(...args);};
+ }
+ const refresh=ctx.vault.refresh.bind(ctx.vault);ctx.vault.refresh=async(...args)=>{counts.refresh++;return refresh(...args);};
+ const rec=await sample(804,A,'2026-05');rec.form.paymentDate='2026-05-27';
+ assert.equal((await saveRecordsSkippingDuplicates([rec])).saved,1);
+ assert.equal(ctx.vault.records().length,4);
+ assert.equal(counts.write,3);
+ assert.ok(counts.refresh<=8,'ordinary upload must not repeat consecutive full-year checks');
+ assert.ok(counts.read<=26,'unchanged annual bodies must not be downloaded again');
+ assert.ok(counts.listFolder<=24,'one redundant inventory request was removed');
+ console.log('PHASE3 COUNTS '+JSON.stringify(counts));
+}
+
+{
+ const ctx=await setup();const first=await sample(810,A,'2026-04');first.form.paymentDate='2026-04-27';
+ await saveRecordsSkippingDuplicates([first]);
+ const file=ctx.graph.files.get('payroll/statements/2026.enc');
+ const doc=await decryptJson('year',file.text,ctx.key);
+ doc.records[0].form.gross='12000';doc.records[0].revision++;
+ const text=await encryptJson('year',doc,ctx.key,ctx.vault.sessionKey().salt);
+ const next=await sample(811,A,'2026-05');next.form.paymentDate='2026-05-27';
+ const writes=ctx.graph.writes.length;
+ ctx.graph.withWriteLock=async operation=>{
+  // A client that bypasses the write lock changes the baseline after the
+  // caller's first read. The live check under the lock must reject it.
+  ctx.graph.files.set('payroll/statements/2026.enc',{...file,etag:'changed-at-lock',text,size:enc.encode(text).length});
+  return operation();
+ };
+ await assert.rejects(saveRecordsSkippingDuplicates([next]),/保存前の照合後に明細/);
+ assert.equal(ctx.graph.writes.length,writes,'changed baseline must be rejected before any original or annual write');
+ console.log('PASS Phase 3: concurrent change before lock is rejected with no writes');
+}
+
+{
+ const ctx=await setup(),a=await sample(820,A,'2026-04');a.form.paymentDate='2026-04-27';
+ await saveRecordsSkippingDuplicates([a]);
+ const before=await ctx.vault.inspectDetachedOriginals();
+ const originalRead=ctx.graph.read.bind(ctx.graph);let yearReads=0;
+ ctx.graph.read=async(parts,name)=>{if(parts.includes('statements'))yearReads++;return originalRead(parts,name);};
+ assert.deepEqual(await ctx.vault.inspectDetachedOriginals(true),before);
+ assert.equal(yearReads,0,'verified annual body reused only after fresh listing');
+ const path='payroll/statements/2026.enc',old=ctx.graph.files.get(path);
+ ctx.graph.files.set(path,{...old,etag:'modified-annual'});
+ assert.notEqual((await ctx.vault.inspectDetachedOriginals(true)).years[0].etag,before.years[0].etag);
+ assert.equal(yearReads,1,'changed ETag forces a real read');
+ ctx.graph.files.delete(path);
+ await assert.rejects(ctx.vault.inspectDetachedOriginals(true),/明細がありません/);
+ console.log('PASS Phase 3-B: live inventory cache identity, changed ETag read, missing year rejection');
+}
+{
+ const ctx=await setup(),a=await sample(821,A,'2026-04'),b=await sample(822,A,'2026-05');
+ ctx.graph.fault=p=>p.includes('/statements/');await assert.rejects(saveRecordsSkippingDuplicates([a,b]));ctx.graph.fault=undefined;await ctx.reopen();
+ let scans=0,hashScans=0;const inventory=ctx.vault.inspectDetachedOriginals.bind(ctx.vault),matches=ctx.vault.inspectDetachedUploadMatches.bind(ctx.vault);
+ ctx.vault.inspectDetachedOriginals=async(...args)=>{scans++;return inventory(...args);};
+ ctx.vault.inspectDetachedUploadMatches=async(...args)=>{hashScans++;return matches(...args);};
+ const originals=ctx.graph.writes.filter(p=>p.includes('/originals/')).length;
+ assert.equal((await saveRecordsSkippingDuplicates([a,b])).saved,2);
+ assert.equal(scans,3,'two preflight inventories plus one final shared revalidation');assert.equal(hashScans,1,'single detached hash scan');
+ assert.equal(ctx.graph.writes.filter(p=>p.includes('/originals/')).length,originals);
+ console.log('PASS Phase 3-B: two recovered PDFs share final inventory, no repeated hash scan or original PUT');
+}
+{
+ const ctx=await setup(),a=await sample(823,A,'2026-04');
+ ctx.graph.fault=p=>p.includes('/statements/');await assert.rejects(saveRecordsSkippingDuplicates([a]));ctx.graph.fault=undefined;await ctx.reopen();
+ const inventory=ctx.vault.inspectDetachedOriginals.bind(ctx.vault);let scans=0;
+ ctx.vault.inspectDetachedOriginals=async(...args)=>{
+  if(++scans===3){const [path,file]=[...ctx.graph.files].find(([p])=>p.includes('/originals/'));ctx.graph.files.set(path,{...file,etag:'changed-before-reuse'});}
+  return inventory(...args);
+ };
+ const writes=ctx.graph.writes.length;
+ await assert.rejects(saveRecordsSkippingDuplicates([a]),/原本一覧か年別明細が更新/);
+ assert.equal(ctx.graph.writes.length,writes,'changed detached original must not be linked or written');
+ console.log('PASS Phase 3-B: detached inventory change between preflight and reuse rejects without writes');
+}
+
+{
+ const ctx=await setup(),a=await sample(824,A,'2026-04'),b=await sample(825,A,'2026-05');
+ await saveRecordsSkippingDuplicates([a]);
+ let scans=0;const inventory=ctx.vault.inspectDetachedOriginals.bind(ctx.vault);
+ ctx.vault.inspectDetachedOriginals=async(...args)=>{scans++;return inventory(...args);};
+ assert.equal((await saveRecordsSkippingDuplicates([b])).saved,1);
+ assert.equal(scans,1,'clean ordinary upload performs one final full inventory');
+ assert.equal(ctx.vault.records().length,2);
+ console.log('PASS C: clean upload performs one full original scan; retained cross-month recovery remains strict');
+}
+{
+ const ctx=await setup(),a=await sample(826,A,'2026-04'),b=await sample(827,A,'2026-05');
+ await saveRecordsSkippingDuplicates([a]);
+ const [path]=[...ctx.graph.files].find(([p])=>p.includes('/originals/'));ctx.graph.files.delete(path);
+ const writes=ctx.graph.writes.length;
+ await assert.rejects(saveRecordsSkippingDuplicates([b]),/参照する原本が見つかりません/);
+ assert.equal(ctx.graph.writes.length,writes,'missing live original blocks writes even on clean fast path');
+ console.log('PASS C: missing referenced original blocks all writes');
+}
+
+// Join the real Graph lock/request state machine to the encrypted in-memory
+// vault fixture. Fail after verified payroll writes, or before verification.
+for(const operation of ['edit','move','remove','batch']){
+ for(const fault of ['finance-read','finance-write-unknown','annual-readback',...(['move','batch'].includes(operation)?['later-annual']:[])]){
+  const ctx=await setup();
+  await saveRecordsSkippingDuplicates([await sample(701,A,'2026-11'),await sample(702,A,'2025-12')]);
+  await ctx.reopen();
+  const rows=ctx.vault.records(),target=rows[0],g=ctx.graph;
+  let lock=null,serial=0,failed=false,annualWritten=false,annualWrites=0,financeWrites=0;
+  const real=new PayrollGraph('synthetic-token',async(url,init)=>{
+   const path=new URL(url).pathname;
+   if(path.endsWith('/content')&&init.method==='PUT'){
+    assert.equal(lock,null);lock={id:'lock-'+(++serial),etag:'lock-etag-'+serial,text:new TextDecoder().decode(init.body),size:64};
+    return Response.json({id:lock.id,eTag:lock.etag,name:'payroll-write-lock-v1.bin',size:64},{status:201});
+   }
+   if(init.method==='DELETE'){
+    assert.ok(lock);assert.ok(path.endsWith('/'+lock.id));assert.equal(new Headers(init.headers).get('If-Match'),lock.etag);
+    lock=null;return new Response(null,{status:204});
+   }
+   assert.equal(init.method,'POST');assert.ok(lock);
+   if(path.endsWith('/synthetic-income')){
+    financeWrites++;
+    if(fault==='finance-write-unknown'&&!failed){failed=true;throw Error('synthetic lost income write response');}
+   }
+   return Response.json({});
+  });
+  real.root=async()=> 'synthetic-root';
+  real.read=async()=>lock?{...lock}:null;
+  real.metadata=async()=>lock?{id:lock.id,etag:lock.etag,size:lock.size}:null;
+  g.withWriteLock=real.withWriteLock.bind(real);
+  const write=g.write.bind(g),read=g.read.bind(g);
+  g.write=async(parts,name,...args)=>{
+   if(parts.includes('statements')){
+    if(fault==='later-annual'&&annualWrites>0&&(operation==='batch'||name===target.form.targetMonth.slice(0,4)+'.enc')){failed=true;throw Error('synthetic later annual write unavailable');}
+    annualWrites++;
+   }
+   await real.request(parts.includes('income')?'/synthetic-income':'/synthetic-annual',{method:'POST'});
+   await write(parts,name,...args);
+   if(parts.includes('statements'))annualWritten=true;
+  };
+  g.read=async(parts,name)=>{
+   if(!failed&&annualWritten&&((fault==='finance-read'&&parts.includes('income'))||(fault==='annual-readback'&&parts.includes('statements')))){
+    failed=true;throw Error('synthetic read unavailable');
+   }
+   return read(parts,name);
+  };
+  const execute=()=>operation==='batch'?ctx.vault.removeBatch(rows.map(r=>({id:r.id,matches:x=>recordSignature(x)===recordSignature(r)}))):
+   operation==='remove'?ctx.vault.remove(target.id,x=>recordSignature(x)===recordSignature(target)):
+   ctx.vault.save({...target,revision:target.revision+1,form:{...target.form,gross:'12000',net:'12000',...(operation==='move'?{targetMonth:'2028-04'}:{})}},undefined,x=>recordSignature(x)===recordSignature(target));
+  await assert.rejects(execute(),error=>{
+   assert.equal(/ロックが残っている可能性/.test(error.message),fault!=='finance-read');
+   if(fault.startsWith('finance-'))assert.match(error.message,/Finance連携/);
+   return true;
+  });
+  assert.ok(failed);assert.equal(Boolean(lock),fault!=='finance-read');
+  assert.equal([...g.files.keys()].filter(p=>p.includes('/originals/')).length,2);
+  if(fault==='finance-read'){
+   assert.equal(financeWrites,0);
+   await ctx.reopen();
+   const live=ctx.vault.records();
+   if(operation==='edit'||operation==='move'){
+    assert.equal(live.find(r=>r.id===target.id).form.net,'12000');
+    if(operation==='move')assert.equal(live.find(r=>r.id===target.id).form.targetMonth,'2028-04');
+   }else assert.equal(live.length,operation==='batch'?0:1);
+   await ctx.vault.syncIncome(new Set(['2027']));assert.equal(lock,null);
+   assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+  }
+ }
+ console.log('PASS verified payroll lock release and uncertain write protection: '+operation);
 }

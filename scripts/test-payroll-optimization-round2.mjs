@@ -47,11 +47,11 @@ const input={...baseRecord(9876,'2026'),fileHash:hash,form:{...baseRecord(9876,'
 delete input.pdfSize;delete input.pdfType;delete input.originalId;delete input.originalMonth;
 await vault.saveBatch([input]);
 assert.equal(commits,1);
-assert.equal(calls.list.length,3,'three independent live all-year inventory boundaries must remain');
-assert.equal(calls.read.filter(p=>p.includes('/statements/')).length,0,'no unchanged annual ciphertext GET across all three boundaries');
-assert.equal(calls.read.filter(p=>p==='payroll/index.enc').length,3,'each check must re-read the live root index');
+assert.equal(calls.list.length,2,'one live inventory after originals and one after the annual commit');
+assert.equal(calls.read.filter(p=>p.includes('/statements/')).length,0,'no unchanged annual ciphertext GET across both boundaries');
+assert.equal(calls.read.filter(p=>p==='payroll/index.enc').length,2,'each remaining check must re-read the live root index');
 assert.ok(vault.records().some(r=>r.id===9876));
-console.log('PASS 1: saveBatch retains three fresh index + four-year ETag checks, zero unchanged annual downloads');
+console.log('PASS 1: saveBatch retains two fresh index + four-year ETag checks, zero unchanged annual downloads');
 // A foreign-year collision after originals are verified must block commit and not downgrade to cached data.
 const collision={...baseRecord(9999,'2024'),fileHash:'c'.repeat(64)};
 const candidate={...input,id:9998,fileHash:collision.fileHash};
@@ -65,6 +65,23 @@ console.log('PASS 1: concurrent foreign-year duplicate fails closed after refres
 vault.storeOriginal=async()=>{files.delete('payroll/statements/2023.enc');};
 reset();await assert.rejects(vault.saveBatch([{...input,id:9997,fileHash:'d'.repeat(64),form:{...input.form,targetMonth:'2026-11',paymentDate:'2026-12-27'}}]),/年度ファイルの一覧|年度メタデータ|年度ファイル/);
 assert.equal(commits,beforeCommit);console.log('PASS 1: incomplete remote inventory fails closed, no annual commit');
+
+// Old clients may bypass the lock while a target year is being committed.
+// The remaining post-commit all-year boundary must still detect this change.
+put('payroll/statements/2023.enc',annual([baseRecord(2023,'2023')]));
+vault.storeOriginal=async()=>{};
+await vault.refresh({forceFresh:true});
+const baseline=vault.records(),commitOriginal=vault.commit;
+let incomeCalled=false;vault.syncIncomeUnderLock=async()=>{incomeCalled=true;};
+vault.commit=async(year,doc)=>{
+ await commitOriginal(year,doc);
+ const p='payroll/statements/2023.enc',foreign=JSON.parse(files.get(p).text);
+ foreign.records[0].revision++;foreign.records[0].form.gross='121';put(p,foreign);
+};
+await assert.rejects(vault.saveBatch([{...input,id:9996,fileHash:'e'.repeat(64),form:{...input.form,targetMonth:'2026-10',paymentDate:'2026-11-27'}}],undefined,baseline),/明細または認証状態が変更/);
+assert.equal(incomeCalled,false,'foreign-year change after commit must stop income publication');
+console.log('PASS 1: foreign-year change during commit is caught by the post-commit boundary');
+
 
 // 3: Dashboard download must call the edit-style pre/post signature + SHA-256 path.
 const main=read('src/main.ts'),start=main.indexOf("download.addEventListener('click', async () =>"),end=main.indexOf("const edit = document.createElement('a')",start);

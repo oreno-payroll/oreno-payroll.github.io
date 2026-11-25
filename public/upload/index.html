@@ -144,7 +144,7 @@
                     <label class="field__label" for="employer-id">勤務先</label>
                     <div class="employer-identity__row">
                       <select class="input" id="employer-id" disabled><option value="">未設定</option></select>
-                      <button class="btn btn--secondary btn--small" id="employer-load" type="button" disabled>勤務先を選択する</button>
+                      <button class="btn btn--secondary btn--small" id="employer-load" type="button" disabled>保管庫を開く</button>
                     </div>
                     <small class="employer-identity__help" id="employer-status" role="status" aria-live="polite"></small>
                   </div>
@@ -194,10 +194,21 @@
       </section>
 
       <div class="save-bar is-empty" aria-label="明細の一括保存">
+        <div class="zero-approval" id="zero-approval" hidden>
+          <label class="zero-approval__choice" for="zero-missing-amounts">
+            <input id="zero-missing-amounts" type="checkbox" autocomplete="off">
+            <span>未取得の金額を0円として登録</span>
+          </label>
+          <div id="zero-approval-count" class="zero-approval__count" aria-live="polite"></div>
+          <details class="zero-approval__details" id="zero-approval-details">
+            <summary>対象項目</summary>
+            <ul id="zero-approval-list"></ul>
+          </details>
+        </div>
         <div class="save-bar__status">
           <strong id="save-status" role="status" aria-live="polite" hidden></strong>
           <div id="save-feedback" class="save-feedback" hidden aria-label="OneDriveへの保存状況">
-            <div class="save-feedback__top"><span id="save-stage">準備中</span><span id="save-elapsed">経過 0:00</span></div>
+            <div class="save-feedback__top"><span id="save-stage" role="status" aria-live="polite">準備中</span><span id="save-elapsed">経過 0:00</span></div>
             <div id="save-progress-track" class="save-feedback__track is-indeterminate" role="progressbar" aria-label="PDF送信の進捗" aria-valuemin="0" aria-valuemax="100"><div id="save-progress-fill" class="save-feedback__fill"></div></div>
             <p id="save-guidance" class="save-feedback__guidance">保存中はページを移動しないでください。</p>
           </div>
@@ -206,7 +217,6 @@
             <p id="upload-save-recovery-status">OneDriveの状態を確認するまで再保存できません。</p>
             <div class="upload-save-recovery__actions">
               <button type="button" class="btn btn--secondary" id="upload-save-recheck">OneDriveの状態を再確認</button>
-              <button type="button" class="btn btn--secondary" id="upload-save-reload" disabled>保存済みデータを読み直す</button>
             </div>
           </div>
           <div id="save-duplicates" class="save-duplicates" hidden aria-label="保存から除外したファイル">
@@ -216,17 +226,6 @@
           </div>
         </div>
         <div class="save-bar__actions">
-          <div class="zero-approval" id="zero-approval" hidden>
-            <label class="zero-approval__choice" for="zero-missing-amounts">
-              <input id="zero-missing-amounts" type="checkbox" autocomplete="off">
-              <span>未取得の金額を0円として登録</span>
-            </label>
-            <div id="zero-approval-count" class="zero-approval__count" aria-live="polite"></div>
-            <details class="zero-approval__details" id="zero-approval-details">
-              <summary>対象項目を確認</summary>
-              <ul id="zero-approval-list"></ul>
-            </details>
-          </div>
           <button class="btn btn--primary save-bar__button" id="save-all" type="button" disabled>
             <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
             <span id="save-all-label">すべて保存</span>

@@ -29,7 +29,7 @@ assert.match(html,/id="save-guidance"/);
 assert.match(html,/端末内で暗号化し、OneDriveへ保存します/);
 assert.doesNotMatch(html,/IndexedDBへ保存します/,'stale persistence instructions must not return');
 assert.match(upload,/saveElapsed\.textContent/);
-assert.match(upload,/通信応答を待っています/);
+assert.doesNotMatch(upload,/通信応答を待っています|OneDriveの応答待ち/);
 assert.match(upload,/document\.addEventListener\('click',event=>/,'block navigation while saving');
 assert.match(upload,/stopSaveClock\(\)/,'clear timer on completion and failure');
 assert.match(upload,/saveFeedback\.classList\.add\('is-complete'\)/);

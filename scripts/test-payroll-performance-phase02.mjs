@@ -126,7 +126,9 @@ assert.equal(count(calls.body,'/years/'),1,'new ETag must fetch full encrypted a
 
 // The mutation path must *not* use read-only cached context. It still freshly
 // verifies active status and year-file mapping, ETag writes and read-back.
-reset();await repo.saveYearMemo(id,2026,'保存済みの年度メモ');
+reset();const savedMemo=await repo.saveYearMemo(id,2026,'保存済みの年度メモ');
+assert.equal(savedMemo.memo,'保存済みの年度メモ');
+assert.equal(savedMemo.memo,JSON.parse(store.get(join(annualPath,yearId+'.enc')).text).memo,'returned data matches persisted annual data');
 assert.equal(count(calls.body,'/index.enc'),1,'one fresh active index plus a final ETag check');
 assert.equal(count(calls.meta,'/index.enc'),1,'active state is rechecked at final write');
 assert.equal(count(calls.body,'/profile.enc'),1,'verified unchanged profile needs one ciphertext GET');

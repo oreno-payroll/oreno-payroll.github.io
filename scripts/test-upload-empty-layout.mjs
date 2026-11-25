@@ -30,7 +30,7 @@ assert.match(ui, /mobileFilePicker\.addEventListener\("click"/);
 // PAYROLL-UPLOAD-FOOTER-FIT-20261123: keep the version/footer visible without body-level scrolling.
 assert.match(html, /<body class="payroll-upload-viewport">/, 'upload page owns scoped viewport sizing');
 const footerFit = css.slice(css.indexOf('PAYROLL-UPLOAD-FOOTER-FIT-20261123'));
-assert.match(footerFit, /@media \(min-width: 641px\) and \(min-height: 621px\)/);
+assert.match(footerFit, /@media \(min-width: 861px\) and \(min-height: 621px\)/);
 assert.match(footerFit, /body\.payroll-upload-viewport \{[\s\S]*?height: 100dvh/);
 assert.match(footerFit, /body\.payroll-upload-viewport > \.app-shell \{[\s\S]*?flex: 1 1 auto/);
 assert.match(footerFit, /body\.payroll-upload-viewport \.upload-page \{[\s\S]*?height: auto/);

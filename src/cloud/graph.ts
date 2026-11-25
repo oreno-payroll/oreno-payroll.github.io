@@ -43,12 +43,46 @@ export interface CloudFolderItem {id:string;name:string;etag:string;folder:boole
 // The body is random ownership evidence only: no account, salary, key or timestamp.
 export const PAYROLL_WRITE_LOCK_NAME='payroll-write-lock-v1.bin';
 type WriteOwner={id:string;etag:string;text:string};
+/** Per-operation, in-memory evidence. Lock-file writes are not payroll data writes. */
+export interface PayrollWriteState {attempted:boolean;uncertain:boolean;completed:boolean;payrollSaved?:boolean;lock:'none'|'held'|'released'|'unknown'}
+class GraphReadStageError extends Error {
+  constructor(readonly stage:'auth'|'transport',cause:unknown){super(stage,{cause});}
+}
 const LOCK_RETAINED='書き込みロックが残っている可能性があります。再保存せず、設定の書き込みロック復旧手順を確認してください。';
 export class PayrollGraph {
   private writeLockBusy=false;
   private writeOwner:WriteOwner|null=null;
   private writeAttempted=false;
   private writeUncertain=false;
+  private writeSerial=0;
+  private uploadCheckpoint=-1;
+  /** Called only after an upload batch has authenticated every preceding business write. */
+  markUploadCheckpoint():void {
+    if(this.writeOwner&&!this.writeUncertain)this.uploadCheckpoint=this.writeSerial;
+  }
+  private readonly retainedOwners=new WeakMap<PayrollWriteState,{text:string;owner?:WriteOwner;settled?:boolean}>();
+  private matchesOwner(live:RemoteFile,owner:WriteOwner):boolean {
+    return live.id===owner.id&&live.etag===owner.etag&&live.text===owner.text&&live.size===owner.text.length;
+  }
+  /** A missing lock after a conditional DELETE is evidence of release, not of
+   * payroll failure. A different owner is never deleted. */
+  private async releaseOwner(owner:WriteOwner):Promise<void>{
+    const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+    if(!live||!this.matchesOwner(live,owner))throw new Error('書き込みロックの所有権が変化しました。解除しません。');
+    try{
+      const response=await this.request(`/me/drive/items/${encodeURIComponent(owner.id)}`,{
+        method:'DELETE',headers:{'If-Match':owner.etag},
+      },false,undefined,true);
+      if(response.status!==204)throw new Error('書き込みロックの解除結果を確認できません。');
+    }catch(error){
+      const current=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+      if(current)throw error;
+      // The known item is gone. No data write is retried here.
+    }
+  }
+  private markReleased(state?:PayrollWriteState):void{
+    if(state){state.lock='released';this.retainedOwners.delete(state);}
+  }
   private requireWriteOwner():void {
     if((this.enforceOperationLock||this.writeLockBusy)&&!this.writeOwner)
       throw new Error('書き込みロックを取得していないため、OneDriveへの変更を拒否しました。');
@@ -63,55 +97,98 @@ export class PayrollGraph {
   }
   /** The lock is never expired or stolen. A lost reply must not authorize a write.
    * Hold across the complete multi-file operation and its readbacks, not per PUT. */
-  async withWriteLock<T>(operation:()=>Promise<T>):Promise<T> {
+  async withWriteLock<T>(operation:()=>Promise<T>,state?:PayrollWriteState,releaseSettledFailure=false):Promise<T> {
     this.assertCurrent();
     if(this.writeLockBusy)throw new Error('この画面で別の保存処理を実行中です。完了後に読み直してください。');
-    this.writeLockBusy=true;this.writeAttempted=false;this.writeUncertain=false;
+    this.writeLockBusy=true;this.writeAttempted=false;this.writeUncertain=false;this.writeSerial=0;this.uploadCheckpoint=-1;
     try {
       const parent=await this.root();
       const text=(crypto.randomUUID()+crypto.randomUUID()).replace(/-/g,'');
       const path=`/me/drive/items/${encodeURIComponent(parent)}:/${PAYROLL_WRITE_LOCK_NAME}:/content?@microsoft.graph.conflictBehavior=fail`;
       let created:Item;
+      const evidence:{text:string;owner?:WriteOwner;settled?:boolean}={text};
+      if(state){state.lock='unknown';this.retainedOwners.set(state,evidence);}
+      let acquisitionSent=false,creationStatus:number|undefined;
       try {
-        const response=await this.request(path,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:new TextEncoder().encode(text)},false,undefined,true);
+        const response=await this.request(path,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:new TextEncoder().encode(text)},false,async()=>{acquisitionSent=true;},true);
+        creationStatus=response.status;
         if(response.status!==201)throw new Error('ロック新規作成の応答が不正です。');
         created=await response.json() as Item;
+        if(!created.id||!created.eTag||created.name!==PAYROLL_WRITE_LOCK_NAME||created.size!==text.length)
+          throw new Error('書き込みロックの作成結果が一致しません。');
+        evidence.owner={id:created.id,etag:created.eTag,text};
+        const proof=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+        if(!proof||!this.matchesOwner(proof,evidence.owner))throw new Error('書き込みロックの所有権を確認できません。');
       }catch(error){
-        if(isCollision(error))throw new Error('他の端末・タブで保存中か、前回の書き込みロックが残っています。時間切れによる自動解除は行いません。設定の書き込みロック復旧手順を確認してください。');
-        throw new Error('書き込みロックの取得を確認できません。'+LOCK_RETAINED,{cause:error});
+        if(!acquisitionSent||(creationStatus===undefined&&isCollision(error))){
+          if(state){state.lock='none';this.retainedOwners.delete(state);}
+          if(acquisitionSent&&isCollision(error))throw new Error('他の端末・タブで保存中か、前回の書き込みロックが残っています。設定の書き込みロック復旧手順を確認してください。');
+          throw error;
+        }
+        // A 200 (replacement) or other unexpected successful status cannot
+        // establish that this was a newly created lock. Never delete it here.
+        if(creationStatus!==undefined&&creationStatus!==201){
+          if(state)this.retainedOwners.delete(state);
+          throw new Error('書き込みロックの新規作成を確認できません。'+LOCK_RETAINED,{cause:error});
+        }
+        // No business write was started. The random body can prove that a
+        // lost creation reply belongs to this operation, but a 404 cannot.
+        try{
+          const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+          if(!live||live.text!==text||live.size!==text.length||(evidence.owner&&!this.matchesOwner(live,evidence.owner)))throw new Error('取得結果が不明です。');
+          evidence.owner={id:live.id,etag:live.etag,text};
+          await this.releaseOwner(evidence.owner);
+          this.markReleased(state);
+        }catch(recovery){throw new Error('書き込みロックの取得を確認できません。'+LOCK_RETAINED,{cause:recovery});}
+        throw new Error('保存ロックの取得を完了できませんでした。ロックは解除しました。そのまま再試行できます。',{cause:error});
       }
-      if(!created.id||!created.eTag||created.name!==PAYROLL_WRITE_LOCK_NAME||created.size!==text.length)
-        throw new Error('書き込みロックの作成結果が一致しません。'+LOCK_RETAINED);
-      const proof=await this.read([],PAYROLL_WRITE_LOCK_NAME,64).catch(error=>{throw new Error(LOCK_RETAINED,{cause:error});});
-      if(!proof||proof.id!==created.id||proof.etag!==created.eTag||proof.text!==text||proof.size!==text.length)
-        throw new Error('書き込みロックの所有権を確認できません。'+LOCK_RETAINED);
-      this.writeOwner={id:proof.id,etag:proof.etag,text};
-      const release=async()=>{
-        const owner=this.writeOwner!;
-        const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
-        if(!live||live.id!==owner.id||live.etag!==owner.etag||live.text!==owner.text||live.size!==owner.text.length)
-          throw new Error('書き込みロックの所有権が変化しました。解除しません。');
-        const response=await this.request(`/me/drive/items/${encodeURIComponent(owner.id)}`,{
-          method:'DELETE',headers:{'If-Match':owner.etag},
-        },false,undefined,true);
-        if(response.status!==204)throw new Error('書き込みロックの解除結果を確認できません。');
-      };
+      this.writeOwner=evidence.owner!;
+      if(state)state.lock='held';
+      const release=async()=>{await this.releaseOwner(this.writeOwner!);this.markReleased(state);};
       let result:T;
       try{result=await operation();}
       catch(error){
-        // Even a late readback failure can mean a multi-file operation partially
-        // committed. Retain the lock instead of guessing that all writes settled.
-        if(this.writeAttempted||this.writeUncertain){
+        // Only the verified payroll checkpoint or a derived-data-only operation
+        // may release after a settled failure. Other multi-file mutations retain
+        // the old policy, and an unknown write always retains protection.
+        evidence.settled=!this.writeUncertain&&(state?.payrollSaved===true||releaseSettledFailure||(state!==undefined&&this.uploadCheckpoint===this.writeSerial));
+        if(this.writeUncertain||(this.writeAttempted&&!evidence.settled)){
           if(error instanceof Error){error.message+=' '+LOCK_RETAINED;throw error;}
           throw new Error(LOCK_RETAINED,{cause:error});
         }
-        try{await release();}catch(releaseError){throw new Error(LOCK_RETAINED,{cause:releaseError});}
+        try{await release();}catch(releaseError){if(state)state.lock='unknown';throw new Error('保存ロックの所有権または解除結果を確認できません。'+LOCK_RETAINED,{cause:releaseError});}
         throw error;
       }
       if(this.writeUncertain)throw new Error('保存中の通信結果が不明です。'+LOCK_RETAINED);
-      try{await release();}catch(error){throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
+      if(state)state.completed=true;
+      try{await release();}catch(error){if(state)state.lock='unknown';throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
       return result;
-    }finally{this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.writeUncertain=false;}
+    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.writeUncertain=false;}
+  }
+
+  /** Only reconcile a lock belonging to this exact in-memory operation. Never
+   * release an uncertain write, an unverified partial write or another client's lock. */
+  async reconcileUploadLock(state:PayrollWriteState):Promise<void>{
+    if(state.lock==='none'||state.lock==='released')return;
+    this.assertCurrent();
+    if(this.writeLockBusy)throw new Error('別の保存処理が進行中です。');
+    this.writeLockBusy=true;
+    try{
+      const evidence=this.retainedOwners.get(state);
+      if(!evidence||state.uncertain||(state.attempted&&!state.completed&&!evidence.settled))
+        throw new Error('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
+      const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+      if(!live){
+        // A creation that may still arrive is not resolved by a single 404.
+        if(!evidence.owner)throw new Error('保存ロックの作成結果がまだ不明です。再保存せず確認してください。');
+        this.markReleased(state);return;
+      }
+      if(live.text!==evidence.text||live.size!==evidence.text.length||(evidence.owner&&!this.matchesOwner(live,evidence.owner)))
+        throw new Error('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
+      evidence.owner={id:live.id,etag:live.etag,text:live.text};
+      await this.releaseOwner(evidence.owner);
+      this.markReleased(state);
+    }finally{this.writeLockBusy=false;}
   }
 
   private rootId: string | undefined;
@@ -149,15 +226,19 @@ export class PayrollGraph {
     const method=(init.method??'GET').toUpperCase();
     const readonly=method==='GET'||method==='HEAD';
     if(!readonly&&!lockControl){this.requireWriteOwner();this.clearEncryptedReadCache();this.onMutation();}
-    let bearer=typeof this.token==='function'?await this.token():this.token;
+    let bearer:string;
+    try{bearer=typeof this.token==='function'?await this.token():this.token;}
+    catch(error){if(readonly&&!(error instanceof MicrosoftSignInRequiredError)&&!(error instanceof MicrosoftTemporaryError))throw new GraphReadStageError('auth',error);throw error;}
+    let dispatched=false;
     this.assertCurrent();
     const graphUrl=`${BASE}${path}`;
     const send=async()=>{
       const started=performance.now();
+      dispatched=false;
       this.assertCurrent();
       if(beforeSend){await beforeSend();this.assertCurrent();}
-      if(!readonly&&!lockControl){await this.verifyWriteOwner();if(this.writeOwner)this.writeAttempted=true;}
-      try{const response=await this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});this.assertCurrent();return response;}
+      if(!readonly&&!lockControl){await this.verifyWriteOwner();if(this.writeOwner){this.writeAttempted=true;this.writeSerial++;}}
+      try{dispatched=true;const response=await this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});this.assertCurrent();return response;}
       finally{observeGraphTransfer('graph-api',performance.now()-started);}
     };
     let retries=0,renewed=false;
@@ -165,17 +246,20 @@ export class PayrollGraph {
       let r:Response;
       try {r=await send();}
       catch(error){
-        if(!readonly&&!lockControl&&this.writeOwner)this.writeUncertain=true;
+        if(!readonly&&!lockControl&&this.writeOwner&&dispatched)this.writeUncertain=true;
         this.assertCurrent(); // A retired session is not a transient network failure.
         // GET/HEAD だけ、通信中断にも限定回数のバックオフを適用。
-        if(readonly&&retries<READ_RETRIES){observeGraphRetry();await pause(350*2**retries++);continue;}
+        if(readonly&&dispatched&&retries<READ_RETRIES){observeGraphRetry();await pause(350*2**retries++);continue;}
+        if(readonly&&dispatched)throw new GraphReadStageError('transport',error);
         throw error;
       }
       if(r.status===401&&this.unauthorized&&!renewed){
         this.unauthorized.invalidate();
         if(readonly){
           // 期限切れ認証は別系統の一回限りの再取得。書き込みは再送しない。
-          observeGraphRetry();renewed=true;bearer=await this.unauthorized.refresh();this.assertCurrent();
+          observeGraphRetry();renewed=true;
+          try{bearer=await this.unauthorized.refresh();}catch(error){if(error instanceof MicrosoftSignInRequiredError||error instanceof MicrosoftTemporaryError)throw error;throw new GraphReadStageError('auth',error);}
+          this.assertCurrent();
           continue;
         }
       }
@@ -240,18 +324,19 @@ export class PayrollGraph {
         if(response.status===304)return null;
       }catch(error){
         if(error instanceof GraphError||error instanceof MicrosoftSignInRequiredError||error instanceof MicrosoftTemporaryError)throw error;
-        throw new Error(`${stage}：GraphのGET開始前（認証など）または通信処理で失敗しました。暗号ファイルは変更していません。`,{cause:error});
+        const reason=error instanceof GraphReadStageError?(error.stage==='auth'?'認証処理で失敗しました（次の照会リクエスト送信前）':'OneDriveへの照会通信に失敗しました（再試行上限）'):'照会処理を完了できませんでした';
+        throw new Error(`${stage}：${reason}。`,{cause:error});
       }
       const contentType=(response.headers.get('content-type')??'unknown').split(';')[0].trim().toLowerCase();
       const contentLength=response.headers.get('content-length');
       if(contentLength && Number(contentLength)>1_048_576)
-        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。クラウドは変更していません。`);
+        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。`);
       let body:string;
       try {body=await response.text();}
-      catch(error){throw new Error(`${stage}：Graphの応答本文を取得できません。クラウドは変更していません。`,{cause:error});}
+      catch(error){throw new Error(`${stage}：Graphの応答本文を取得できません。`,{cause:error});}
       this.assertCurrent();
       if(new TextEncoder().encode(body).byteLength>1_048_576)
-        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。クラウドは変更していません。`);
+        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。`);
       try {
         const parsed:unknown=JSON.parse(body.replace(/^\uFEFF/,''));
         if(!parsed || typeof parsed!=='object' || Array.isArray(parsed))
@@ -265,7 +350,7 @@ export class PayrollGraph {
         const encoding=response.headers.get('content-encoding');
         // Content-Length は転送時（圧縮前後）の数値の場合がある。圧縮中は不一致を破損と断定しない。
         const lengthStatus=declaredBytes===null?'Content-Length不明':`Content-Length ${declaredBytes}バイト、取得後 ${actualBytes}バイト${encoding?'（転送圧縮あり・直接比較不可）':declaredBytes!==actualBytes?'（サイズ不一致）':''}`;
-        throw new Error(`${stage}：Graph APIのメタデータJSONが不正です（HTTP ${response.status}、MIME ${contentType}、本文 ${body.length}文字、${lengthStatus}、3回試行）。暗号ファイルは変更していません。`,{cause:error});
+        throw new Error(`${stage}：Graph APIのメタデータJSONが不正です（HTTP ${response.status}、MIME ${contentType}、本文 ${body.length}文字、${lengthStatus}、3回試行）。`,{cause:error});
       }
     }
     throw new Error(`${stage}：Graphのメタデータ取得に失敗しました。`);
@@ -479,7 +564,7 @@ export class PayrollGraph {
     return checked(new TextDecoder('utf-8',{fatal:true}).decode(bytes),size);
   }
   /** 旧暗号領域の整理用。指定したPayroll配下だけを一覧化し、名前・ID・ETagを返す。 */
-  async listFolder(parts:string[]):Promise<CloudFolderItem[]|null> {
+  async listFolder(parts:string[],reuseChildFolderIds=false):Promise<CloudFolderItem[]|null> {
     this.assertCurrent();
     const parent=await this.folder(parts,false);
     if(!parent)return null;
@@ -487,7 +572,7 @@ export class PayrollGraph {
     let path=`${endpoint}?$select=id,name,folder,file,eTag,size&$top=200`;
     const result:CloudFolderItem[]=[];
     for(let page=0;page<25;page++) {
-      const data=await this.readMetadata<{value?:Item[];'@odata.nextLink'?:string}>(path,'整理対象フォルダーの照会');
+      const data=await this.readMetadata<{value?:Item[];'@odata.nextLink'?:string}>(path,'OneDriveフォルダー一覧の取得');
       if(!Array.isArray(data.value))throw new Error('OneDriveのフォルダー一覧が不正です。削除を中断しました。');
       for(const item of data.value) {
         if(!item.id||typeof item.name!=='string'||!item.eTag||(!item.folder && !('file' in item)))
@@ -495,7 +580,15 @@ export class PayrollGraph {
         result.push({id:item.id,name:item.name,etag:item.eTag,folder:Boolean(item.folder),size:item.size??0});
         if(result.length>5000)throw new Error('整理対象が多すぎます。自動削除を中断しました。');
       }
-      const next=data['@odata.nextLink'];if(!next){this.assertCurrent();return result;}
+      const next=data['@odata.nextLink'];if(!next){
+        this.assertCurrent();
+        if(reuseChildFolderIds){
+          const folders=result.filter(item=>item.folder&&/^[A-Za-z0-9-]{1,64}$/.test(item.name));
+          if(new Set(folders.map(item=>item.name)).size!==folders.length)throw new Error('同名フォルダーを検出しました。');
+          for(const child of folders)this.folders.set([...parts,child.name].join('/'),child.id);
+        }
+        return result;
+      }
       let u:URL;try{u=new URL(next);}catch{throw new Error('一覧の次ページURLが不正です。');}
       if(u.protocol!=='https:'||u.hostname!=='graph.microsoft.com'||u.port||u.username||u.password||u.pathname!==`/v1.0${endpoint}`)
         throw new Error('不正なページングURLを拒否しました。');
@@ -591,17 +684,23 @@ export class PayrollGraph {
     // createUploadSessionの途中中断で0バイトのプレースホルダーが残る事態を避ける。
     // 更新ではETag付きアップロードセッションを維持して競合を検知する。
     if (!prior && bytes.byteLength <= 4 * 1024 * 1024) {
+      let responseReceived=false,verified=false;
       try {
       const path = `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
       const response = await this.request(path,{
         method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes,
       });
+      responseReceived=true;
       const created = await response.json() as Item;
       this.assertCurrent();
       if (!created.id || created.size !== bytes.byteLength)
         throw new Error('OneDriveへの新規保存後のサイズが一致しません。保存成功とみなせません。');
+      verified=true;
       progress?.(bytes.length,bytes.length);
       return;
+      } catch(error) {
+        if(this.writeOwner&&responseReceived&&!verified)this.writeUncertain=true;
+        throw error;
       } finally {
         // A new-file PUT can also overlap a pending GET; the final boundary
         // must invalidate even when the Graph reply is lost or malformed.
@@ -647,7 +746,7 @@ export class PayrollGraph {
       progress?.(end,bytes.length);
     }
     } catch(error) {
-      if(this.writeOwner&&!isCollision(error))this.writeUncertain=true;
+      if(this.writeOwner&&this.writeAttempted&&!isCollision(error))this.writeUncertain=true;
       throw error;
     } finally {
       // Both success and failure invalidate all encrypted bodies and pending GETs.

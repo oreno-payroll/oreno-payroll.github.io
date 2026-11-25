@@ -13,7 +13,7 @@ const zipButton=html.indexOf('id="yea-download-pdfs"');
 const fileList=html.indexOf('id="yea-drafts"');
 assert.ok(listStart<zipButton&&zipButton<fileList,'ZIP action belongs in the file-list header');
 assert.doesNotMatch(html,/id="yea-pending-deletions"/,'pending deletions must not escape the scrollable file list');
-assert.match(html,/year-end-assist\.js\?v=20261122-pending-ui-v2/,'new UI requires a fresh script URL');
+assert.match(html,/year-end-assist\.js\?v=20261125-recovery-v1/,'new UI requires a fresh script URL');
 assert.match(html,/year-end-assist\.css\?v=20261122-pending-ui-v2/,'new UI requires a fresh stylesheet URL');
 assert.match(ui,/drafts\.append\(group\)/);
 assert.match(ui,/pendingRecords\.length===1/);

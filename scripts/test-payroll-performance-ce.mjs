@@ -9,7 +9,7 @@ const base=fileURLToPath(new URL('../',import.meta.url));
 const built=await build({stdin:{contents:[
  "export {PayrollVault} from './src/cloud/vault.ts'",
  "export {encryptJson,encryptBytes,createSalt,deriveKey} from './src/cloud/crypto.ts'",
- "export {getRecordSummary,getOriginalForVerifiedEdit,recordSignature} from './src/storage/payrollStore.ts'",
+ "export {getRecordSummary,getOriginalForVerifiedEdit,recordSignature,inspectReplacementConflicts} from './src/storage/payrollStore.ts'",
  "export {rememberNavigationSnapshot} from './src/cloud/snapshot.ts'",
 ].join(';'),resolveDir:base,sourcefile:'ce-test-entry.ts',loader:'ts'},
  plugins:[{name:'mock-auth',setup(ctx){
@@ -17,7 +17,7 @@ const built=await build({stdin:{contents:[
   ctx.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'export async function cloudVault(){return globalThis.__ceVault;}',loader:'js'}));
  }}],bundle:true,platform:'node',format:'esm',target:'es2022',write:false,logLevel:'silent'});
 const mod=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].contents).toString('base64'));
-const {PayrollVault,encryptJson,encryptBytes,createSalt,deriveKey,getRecordSummary,getOriginalForVerifiedEdit,recordSignature,rememberNavigationSnapshot}=mod;
+const {PayrollVault,encryptJson,encryptBytes,createSalt,deriveKey,getRecordSummary,getOriginalForVerifiedEdit,recordSignature,inspectReplacementConflicts,rememberNavigationSnapshot}=mod;
 const storage=new Map();globalThis.sessionStorage={getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,String(v)),removeItem:k=>storage.delete(k)};
 const scope='client-synthetic:identity-synthetic',pass='synthetic-password-for-ce-tests-only';
 const encoder=new TextEncoder(),pdf=encoder.encode('%PDF-1.7\nSynthetic encrypted PDF\n%%EOF');
@@ -49,7 +49,8 @@ class FakeGraph{
 const graph=new FakeGraph(),first=new PayrollVault(graph);
 first.setNavigationScope(scope);
 const salt=createSalt(),seedKey=await deriveKey(pass,salt),years=['2023','2024','2025','2026'];
-const index={format:'payroll-index-v1',years:[...years],incomeYears:[]};
+const employer={id:'emp_'+'a'.repeat(32),name:'Synthetic employer',role:'main',current:true};
+const index={format:'payroll-index-v1',years:[...years],incomeYears:[],employers:[employer]};
 const remoteDoc=(records)=>({format:'payroll-annual-v1',records,deleted:[]});
 graph.put(['payroll'],'index.enc',await encryptJson('index',index,seedKey,salt));
 const originalRows=new Map();
@@ -70,10 +71,20 @@ assert.equal(await returning.resumeFromSnapshot(activeKey,salt),true);
 globalThis.__ceVault=returning;
 const selectedId=2026;
 graph.reset();
-const summary=await getRecordSummary(selectedId,'2026');
+let directory;
+const summary=await getRecordSummary(selectedId,'2026',value=>{directory=value;});
+assert.deepEqual(directory,[employer],'edit uses directory from the same fresh index');
 assert.ok(summary&&summary.id===selectedId&&summary.form.targetMonth==='2026-05');
 assert.deepEqual({...graph.calls},{index:1,annual:0,inventory:1,metadata:0,original:0,write:0},'E: one fresh index + one inventory, no annual decrypt');
 assert.equal('originalId' in summary,false,'physical storage key is never shown to the editor');
+const renamed={...employer,name:'Synthetic changed employer'};
+graph.put(['payroll'],'index.enc',await encryptJson('index',{...index,employers:[renamed]},seedKey,salt));
+graph.reset();
+const conflicts=await inspectReplacementConflicts([summary],selectedId,value=>{directory=value;});
+assert.equal(conflicts.length,3);assert.ok(conflicts.every(c=>c.reasons.includes('same-pdf')));
+assert.deepEqual(directory,[renamed],'save preflight uses fresh employer values');
+assert.deepEqual({...graph.calls},{index:1,annual:0,inventory:1,metadata:0,original:0,write:0});
+console.log('PASS C: edit startup and save preflight each reuse the verified index for employer directory');
 const sig=recordSignature(summary);
 graph.reset();
 const bytes=await getOriginalForVerifiedEdit(selectedId,sig);
@@ -157,7 +168,7 @@ const main=readFileSync(new URL('../src/main.ts',import.meta.url),'utf8');
 const edit=readFileSync(new URL('../src/edit.ts',import.meta.url),'utf8');
 const payroll=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
 assert.match(main,/hintYear=\$\{encodeURIComponent\(String\(hintedYear\)\)\}/);
-assert.match(edit,/getRecordSummary\(id,yearHint\)/);
+assert.match(edit,/getRecordSummary\(id,yearHint,directory=>\{employerDirectory=directory;\}\)/);
 assert.match(payroll,/bulkYearMetadata:true/);
 assert.match(payroll,/await vault\.refresh\(\{forceFresh:true\}\)/,'mutation paths still do full revalidation');
 console.log('PASS: UI hints are advisory; write paths retain full remote verification');

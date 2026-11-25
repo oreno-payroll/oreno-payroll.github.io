@@ -44,13 +44,25 @@ assert.ok(start>=0&&end>start);const source=stripTypeScriptTypes(ui.slice(start,
 const d1={...a},d2={...a},consent=createDraftReviewConsent();
 const records=[{id:'one',revision:1},{id:'two',revision:1}],drafts=new Map([['one',{draft:d1}],['two',{draft:d2}]]);
 let writes=0,controlUpdates=0;const calls=[];
-const ctx={busy:false,savingDocuments:false,saveAll:{disabled:false},selected:'synthetic',activeYear:2026,data:{documents:records},savedEdits:drafts,pendingDeletions:new Map(),fileQueue:[],isChanged:()=>true,validateSavedEdit:()=>null,validateQueueItem:()=>null,
+const ctx={captureOperationAuthorization:()=>()=>true,setTimeout,clearTimeout,requestAnimationFrame:f=>setTimeout(f,0),busy:false,savingDocuments:false,saveAll:{disabled:false},selected:'synthetic',activeYear:2026,data:{documents:records},savedEdits:drafts,pendingDeletions:new Map(),fileQueue:[],isChanged:()=>true,validateSavedEdit:()=>null,validateQueueItem:()=>null,
  requiresAmountApproval:d=>documentAmountWarnings(d).length>0&&!consent.has(d),documentAmountWarnings,structuredClone,say:m=>calls.push(m),saveResult:{replaceChildren(){}},uploadAccordion:{},showBusy(){},updateYearControls(){controlUpdates++;assert.equal(ctx.busy,true);},updateSaveState(){},
  repo:{saveDocumentsBatch:async(...args)=>{writes++;assert.equal(args[4],true);assert.notEqual(args[2][0].draft,d1);const approved=args[2][0].draft.taxable;d1.taxable++;await Promise.resolve();assert.equal(args[2][0].draft.taxable,approved,'in-flight edits cannot change the approved payload');throw new Error('synthetic stop at remote boundary');}},
- appStatus:{error(){},partial(){}},saveRecoveryRequired:false,saveRecoveryChecked:false,saveRecoverySafe:false,saveRecovery:{},saveRecoveryStatus:{},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){},
+ appStatus:{error(){},partial(){}},saveRecoveryRequired:null,saveRecovery:{},saveRecoveryStatus:{},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){},
 };
 // Isolate the save path through the awaited repository call, without executing unrelated rendering/error handlers.
-const boundary=source.indexOf('  if(selected!==id||activeYear!==year)');assert.ok(boundary>0);
+const boundary=source.indexOf('  if(selected!==id||activeYear!==year||!authorized())');assert.ok(boundary>0);
 const run=runInNewContext(source.slice(0,boundary)+'\n }catch(error){if(error.message!=="synthetic stop at remote boundary")throw error;}finally{busy=false;}\n}\nsaveAllDocuments',ctx);
 await run();assert.equal(writes,0);consent.set(d1,true);await run();assert.equal(writes,0,'one approval cannot authorize both drafts');consent.set(d2,true);d2.taxable++;await run();assert.equal(writes,0,'changed amount invalidates approval at actual save boundary');consent.set(d2,true);await run();assert.equal(writes,1);assert.equal(controlUpdates,1,"only the approved save may enter the busy state");
 console.log('PASS: shared review rows, blank vs zero, isolated draft approval, DOM render and year-end save boundary');
+// Actual click/catch/finally path: a failed pre-write attempt remains editable.
+for(const mode of ['prewrite','lock','partial','uncertain','completed']){
+ const approved={...a};const edit={draft:approved};const map=new Map([['one',edit]]);
+ const f={...ctx,busy:false,savingDocuments:false,saveAll:{disabled:false},data:{documents:[{id:'one',revision:1}]},savedEdits:map,pendingDeletions:new Map(),fileQueue:[],
+  requiresAmountApproval:()=>false,saveRecoveryRequired:null,saveRecovery:{hidden:true},saveRecoveryStatus:{},saveReload:{},
+  updateYearControls(){},updateDrafts(){f.updateSaveState();},updateSaveState(){f.saveAll.disabled=f.busy||Boolean(f.saveRecoveryRequired);},repo:{async saveDocumentsBatch(...args){const state=args[7];assert.ok(state);if(mode==='lock')state.lock='unknown';if(['partial','uncertain','completed'].includes(mode)){state.attempted=true;state.lock='held';state.uncertain=mode==='uncertain';state.completed=mode==='completed';}throw Error('synthetic failure');}}};
+ const save=runInNewContext(source+'\nsaveAllDocuments',f);const pending=save();assert.equal(f.busy,true);assert.equal(f.saveAll.disabled,true);await pending;
+ assert.equal(f.busy,false);assert.equal(f.savedEdits.get('one'),edit);assert.equal(f.savedEdits.get('one').draft,approved);assert.equal(Boolean(f.saveRecoveryRequired),mode!=='prewrite');assert.equal(f.saveAll.disabled,mode!=='prewrite');
+ if(mode==='lock')assert.match(f.saveRecoveryStatus.textContent,/書き込みは開始していません/);
+ if(mode==='completed')assert.match(f.saveRecoveryStatus.textContent,/保存は完了/);
+}
+console.log('PASS: year-end pre-write retry, lock/partial/unknown/complete distinctions, drafts retained');

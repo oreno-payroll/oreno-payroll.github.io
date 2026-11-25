@@ -82,7 +82,7 @@ test('upload page displays PDF-only selection and returns home', async ({ page }
   const pdfInput = page.locator('input[type="file"]').first();
   await expect(pdfInput).toHaveAttribute('accept', /pdf/i);
   await expect(page.locator('.eyebrow,.section-kicker,.notice--privacy')).toHaveCount(0);
-  await expect(page.locator('#drop-heading')).toHaveText('PDFを追加する');
+  await expect(page.locator('#drop-heading')).toHaveText('PDFを選択');
   await page.locator('a.header-back').click();
   await expect(page.getByRole('heading', { name: '収入ダッシュボード' })).toBeVisible();
 });

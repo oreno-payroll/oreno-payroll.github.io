@@ -82,7 +82,8 @@ for(const phase of ['source-refresh','income-prewrite-refresh','income-postwrite
  assert.ok(incomeSync.includes(`await perf.measure('${phase}',()=>this.refresh(options))`));
 assert.match(incomeSync,/!same\(documents\(years\),expected\)/);
 assert.match(storeCode,/onProgress\?\./);
-assert.match(upload,/saveRecordsSkippingDuplicates\(records,showSaveProgress,writeState,authorized\)/);
+// Preserve authorization and the explicit recovery-only cross-month search flag.
+assert.match(upload,/saveRecordsSkippingDuplicates\(records,showSaveProgress,writeState,authorized,recoverAcrossMonths\)/);
 assert.match(upload,/保存・検証しました/);
 assert.match(source('.gitignore'),/!\/public\/payroll-cloud-session\.js/);
 console.log('PASS: 認証画面・同一オリジンの鍵継承・保存進捗・変更年のみの同期');

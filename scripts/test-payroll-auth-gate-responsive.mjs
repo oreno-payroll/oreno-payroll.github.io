@@ -35,6 +35,7 @@ const show={};runInNewContext(`${showJs}\nglobalThis.invoke=showAccount`,show);
  assert.equal(ui.loginForm.hidden,true);
  assert.equal(ui.unlockForm.hidden,true);
  assert.match(ui.checkMessage.textContent,/接続状態を確認/);
+ assert.equal(ui.retry.hidden,true);assert.equal(ui.reload.hidden,true);
  show.invoke(ui,'temporary');
  assert.equal(ui.checking.hidden,true);
  assert.equal(ui.loginForm.hidden,false);
@@ -72,7 +73,9 @@ async function simulate(mode){
  assert.equal(ui.checking.hidden,false,'immediate status visible');
  assert.equal(ui.loginForm.hidden,true);
  assert.ok(callbacks.has(1));
+ assert.equal(ui.retry.hidden,true);assert.equal(ui.reload.hidden,true);
  callbacks.get(1)();
+ assert.equal(ui.retry.hidden,false);assert.equal(ui.reload.hidden,false);
  assert.match(ui.checkMessage.textContent,/時間がかかっています/,'slow MSAL must not leave a logo-only dialog');
  if(mode==='manual'){
   ui.retry.listeners.click();

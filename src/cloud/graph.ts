@@ -31,12 +31,15 @@ interface CachedEncryptedRead {file:RemoteFile;bytes:number}
 
 
 export interface RemoteFile { id: string; etag: string; text: string; size?: number; }
-interface Item { id?: string; name?: string; folder?: Record<string,unknown>; eTag?: string; size?: number; '@microsoft.graph.downloadUrl'?: string }
+export interface NewWriteReceipt {id:string;etag:string;size:number;name:string}
+interface Item { parentReference?:{id?:string}; id?: string; name?: string; folder?: Record<string,unknown>; eTag?: string; size?: number; '@microsoft.graph.downloadUrl'?: string }
 export class GraphError extends Error {
   constructor(readonly status: number, readonly code: string) {
     super(status===403?'OneDriveへのアクセス権限がありません。Microsoftの接続権限を確認してください（HTTP 403）。':status===401?'Microsoft認証が無効です。再接続後にOneDriveの状態を確認してください（HTTP 401）。':`OneDrive通信エラー HTTP ${status}${code ? ` (${code})` : ''}`);
   }
 }
+// Explicit Graph rejections are not lost write replies. Do not resend mutations.
+const rejectedWriteStatus=(status:number):boolean=>[401,403,409,412,429].includes(status);
 export const isCollision = (e: unknown): boolean => e instanceof GraphError && (e.status === 409 || e.status === 412);
 export interface CloudFolderItem {id:string;name:string;etag:string;folder:boolean;size:number}
 // A generation-independent sibling of payroll/, shared by personal and year-end writes.
@@ -53,20 +56,49 @@ export class PayrollGraph {
   private writeLockBusy=false;
   private writeOwner:WriteOwner|null=null;
   private writeAttempted=false;
-  private writeUncertain=false;
+  private uncertainWrites=0;
+  private get writeUncertain():boolean{return this.uncertainWrites!==0;}
+  private markUncertain(proof?:{uncertain:boolean}):void{
+    if(proof?.uncertain)return;
+    if(proof)proof.uncertain=true;
+    this.uncertainWrites++;
+  }
+  // A rejection cannot invalidate an earlier verified checkpoint. Parallel
+  // requests are counted individually; checkpoints are taken after all workers settle.
+  private markRejected():void{this.writeSerial--;this.writeAttempted=this.writeSerial>0;}
   private writeSerial=0;
   private uploadCheckpoint=-1;
   /** Called only after an upload batch has authenticated every preceding business write. */
   markUploadCheckpoint():void {
     if(this.writeOwner&&!this.writeUncertain)this.uploadCheckpoint=this.writeSerial;
   }
-  private readonly retainedOwners=new WeakMap<PayrollWriteState,{text:string;owner?:WriteOwner;settled?:boolean}>();
+  private pendingContentChecks:Array<()=>Promise<boolean>>=[];
+  private readonly retainedOwners=new WeakMap<PayrollWriteState,{text:string;owner?:WriteOwner;settled?:boolean;confirm?:()=>Promise<boolean>}>();
   private matchesOwner(live:RemoteFile,owner:WriteOwner):boolean {
     return live.id===owner.id&&live.etag===owner.etag&&live.text===owner.text&&live.size===owner.text.length;
+  }
+  // Persist only a fingerprint of an owner which is already safe to release.
+  // Never store a pending write, account, file path, token or PDF information.
+  private async releaseReceipt(owner:WriteOwner):Promise<string|null>{
+    try{
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([owner.id,owner.etag,owner.text])));
+      return 'payroll-settled-lock-v1:'+Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+    }catch{return null;}
+  }
+  private async recoverSettledOwner():Promise<boolean>{
+    const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+    if(!live||!live.id||!live.etag||!(/^[a-f0-9]{64}$/.test(live.text))||live.size!==64)return false;
+    const owner={id:live.id,etag:live.etag,text:live.text};
+    const receipt=await this.releaseReceipt(owner);
+    try{if(!receipt||localStorage.getItem(receipt)!=='1')return false;}catch{return false;}
+    await this.releaseOwner(owner);
+    return true;
   }
   /** A missing lock after a conditional DELETE is evidence of release, not of
    * payroll failure. A different owner is never deleted. */
   private async releaseOwner(owner:WriteOwner):Promise<void>{
+    const receipt=await this.releaseReceipt(owner);
+    try{if(receipt)localStorage.setItem(receipt,'1');}catch{/* Storage may be disabled; same-tab recovery remains available. */}
     const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
     if(!live||!this.matchesOwner(live,owner))throw new Error('書き込みロックの所有権が変化しました。解除しません。');
     try{
@@ -79,6 +111,7 @@ export class PayrollGraph {
       if(current)throw error;
       // The known item is gone. No data write is retried here.
     }
+    try{if(receipt)localStorage.removeItem(receipt);}catch{}
   }
   private markReleased(state?:PayrollWriteState):void{
     if(state){state.lock='released';this.retainedOwners.delete(state);}
@@ -100,15 +133,16 @@ export class PayrollGraph {
   async withWriteLock<T>(operation:()=>Promise<T>,state?:PayrollWriteState,releaseSettledFailure=false):Promise<T> {
     this.assertCurrent();
     if(this.writeLockBusy)throw new Error('この画面で別の保存処理を実行中です。完了後に読み直してください。');
-    this.writeLockBusy=true;this.writeAttempted=false;this.writeUncertain=false;this.writeSerial=0;this.uploadCheckpoint=-1;
+    this.writeLockBusy=true;this.writeAttempted=false;this.uncertainWrites=0;this.writeSerial=0;this.uploadCheckpoint=-1;this.pendingContentChecks=[];
     try {
       const parent=await this.root();
       const text=(crypto.randomUUID()+crypto.randomUUID()).replace(/-/g,'');
       const path=`/me/drive/items/${encodeURIComponent(parent)}:/${PAYROLL_WRITE_LOCK_NAME}:/content?@microsoft.graph.conflictBehavior=fail`;
       let created:Item;
-      const evidence:{text:string;owner?:WriteOwner;settled?:boolean}={text};
+      const evidence:{text:string;owner?:WriteOwner;settled?:boolean;confirm?:()=>Promise<boolean>}={text};
       if(state){state.lock='unknown';this.retainedOwners.set(state,evidence);}
       let acquisitionSent=false,creationStatus:number|undefined;
+      for(let recovery=0;;recovery++){
       try {
         const response=await this.request(path,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:new TextEncoder().encode(text)},false,async()=>{acquisitionSent=true;},true);
         creationStatus=response.status;
@@ -120,9 +154,16 @@ export class PayrollGraph {
         const proof=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
         if(!proof||!this.matchesOwner(proof,evidence.owner))throw new Error('書き込みロックの所有権を確認できません。');
       }catch(error){
-        if(!acquisitionSent||(creationStatus===undefined&&isCollision(error))){
+        if(!acquisitionSent||(creationStatus===undefined&&error instanceof GraphError&&rejectedWriteStatus(error.status))){
           if(state){state.lock='none';this.retainedOwners.delete(state);}
-          if(acquisitionSent&&isCollision(error))throw new Error('他の端末・タブで保存中か、前回の書き込みロックが残っています。設定の書き込みロック復旧手順を確認してください。');
+          if(acquisitionSent&&isCollision(error)){
+            if(recovery===0&&await this.recoverSettledOwner()){
+              acquisitionSent=false;creationStatus=undefined;
+              if(state){state.lock='unknown';this.retainedOwners.set(state,evidence);}
+              continue;
+            }
+            throw new Error('他の端末・タブで保存中か、前回の書き込みロックが残っています。設定の書き込みロック復旧手順を確認してください。');
+          }
           throw error;
         }
         // A 200 (replacement) or other unexpected successful status cannot
@@ -142,6 +183,8 @@ export class PayrollGraph {
         }catch(recovery){throw new Error('書き込みロックの取得を確認できません。'+LOCK_RETAINED,{cause:recovery});}
         throw new Error('保存ロックの取得を完了できませんでした。ロックは解除しました。そのまま再試行できます。',{cause:error});
       }
+      break;
+      }
       this.writeOwner=evidence.owner!;
       if(state)state.lock='held';
       const release=async()=>{await this.releaseOwner(this.writeOwner!);this.markReleased(state);};
@@ -152,6 +195,12 @@ export class PayrollGraph {
         // may release after a settled failure. Other multi-file mutations retain
         // the old policy, and an unknown write always retains protection.
         evidence.settled=!this.writeUncertain&&(state?.payrollSaved===true||releaseSettledFailure||(state!==undefined&&this.uploadCheckpoint===this.writeSerial));
+        // Only a verified payroll checkpoint / derived-only operation can use
+        // delayed positive content proofs. Never treat a partial annual commit as settled.
+        if(state&&(state.payrollSaved||releaseSettledFailure)&&this.uncertainWrites>0&&this.pendingContentChecks.length===this.uncertainWrites){
+          const checks=[...this.pendingContentChecks];
+          evidence.confirm=async()=>{for(const check of checks)if(!await check())return false;return true;};
+        }
         if(this.writeUncertain||(this.writeAttempted&&!evidence.settled)){
           if(error instanceof Error){error.message+=' '+LOCK_RETAINED;throw error;}
           throw new Error(LOCK_RETAINED,{cause:error});
@@ -163,11 +212,11 @@ export class PayrollGraph {
       if(state)state.completed=true;
       try{await release();}catch(error){if(state)state.lock='unknown';throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
       return result;
-    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.writeUncertain=false;}
+    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.uncertainWrites=0;this.pendingContentChecks=[];}
   }
 
-  /** Only reconcile a lock belonging to this exact in-memory operation. Never
-   * release an uncertain write, an unverified partial write or another client's lock. */
+  /** Only reconcile a lock belonging to this exact in-memory operation. Positive
+   * content proofs can settle a lost final reply after a verified payroll checkpoint. */
   async reconcileUploadLock(state:PayrollWriteState):Promise<void>{
     if(state.lock==='none'||state.lock==='released')return;
     this.assertCurrent();
@@ -175,16 +224,21 @@ export class PayrollGraph {
     this.writeLockBusy=true;
     try{
       const evidence=this.retainedOwners.get(state);
-      if(!evidence||state.uncertain||(state.attempted&&!state.completed&&!evidence.settled))
+      if(!evidence||(state.uncertain&&!evidence.confirm)||(state.attempted&&!state.completed&&!evidence.settled&&!evidence.confirm))
         throw new Error('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
       const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
       if(!live){
         // A creation that may still arrive is not resolved by a single 404.
         if(!evidence.owner)throw new Error('保存ロックの作成結果がまだ不明です。再保存せず確認してください。');
+        if(state.uncertain)throw new Error('書き込み結果がまだ不明です。再保存せず確認してください。');
         this.markReleased(state);return;
       }
       if(live.text!==evidence.text||live.size!==evidence.text.length||(evidence.owner&&!this.matchesOwner(live,evidence.owner)))
         throw new Error('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
+      if(state.uncertain){
+        if(!evidence.confirm||!await evidence.confirm())throw new Error('書き込み結果がまだ不明です。再保存せず確認してください。');
+        state.uncertain=false;evidence.settled=true;delete evidence.confirm;
+      }
       evidence.owner={id:live.id,etag:live.etag,text:live.text};
       await this.releaseOwner(evidence.owner);
       this.markReleased(state);
@@ -221,7 +275,7 @@ export class PayrollGraph {
   }
 
   constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>},private readonly assertCurrent:()=>void=()=>{},private readonly enforceOperationLock=true) {}
-  private async request(path: string, init: RequestInit = {}, accept304=false,beforeSend?:()=>Promise<void>,lockControl=false): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, accept304=false,beforeSend?:()=>Promise<void>,lockControl=false,proof?:{uncertain:boolean}): Promise<Response> {
     this.assertCurrent();
     const method=(init.method??'GET').toUpperCase();
     const readonly=method==='GET'||method==='HEAD';
@@ -246,7 +300,7 @@ export class PayrollGraph {
       let r:Response;
       try {r=await send();}
       catch(error){
-        if(!readonly&&!lockControl&&this.writeOwner&&dispatched)this.writeUncertain=true;
+        if(!readonly&&!lockControl&&this.writeOwner&&dispatched)this.markUncertain(proof);
         this.assertCurrent(); // A retired session is not a transient network failure.
         // GET/HEAD だけ、通信中断にも限定回数のバックオフを適用。
         if(readonly&&dispatched&&retries<READ_RETRIES){observeGraphRetry();await pause(350*2**retries++);continue;}
@@ -272,7 +326,9 @@ export class PayrollGraph {
       }
       // HTTP 304 is allowed only by an explicitly conditional, read-only caller.
       if (!r.ok && !(readonly&&accept304&&r.status===304)) {
-        if(!readonly&&!lockControl&&this.writeOwner&&r.status!==409&&r.status!==412)this.writeUncertain=true;
+        if(!readonly&&!lockControl&&this.writeOwner){
+          if(rejectedWriteStatus(r.status))this.markRejected();else this.markUncertain(proof);
+        }
         let code = '';
         try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
         this.assertCurrent();
@@ -672,7 +728,29 @@ export class PayrollGraph {
     return archive;
   });
  }
-  async write(parts: string[], name: string, text: string, prior: Pick<RemoteFile,'id'|'etag'>|null, limit: number, progress?:(sent:number,total:number)=>void): Promise<void> {
+  private async confirmLostContent(parts:string[],name:string,text:string,prior:Pick<RemoteFile,'id'|'etag'>|null,limit:number,proof:{uncertain:boolean}):Promise<boolean>{
+    if(!this.writeOwner||!proof.uncertain)return false;
+    // The caller supplied freshly encrypted content. An exact positive match
+    // proves this final write; mere absence, matching size, or an old ETag do not.
+    const size=new TextEncoder().encode(text).length;
+    const digest=async(value:string)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))),b=>b.toString(16).padStart(2,'0')).join('');
+    let expected:string;
+    try{expected=await digest(text);}catch{return false;}
+    const check=async()=>{
+      try{
+        this.clearEncryptedReadCache();
+        const current=await this.read(parts,name,limit);
+        return Boolean(current&&current.id&&current.etag&&current.size===size&&
+          (!prior||(current.id===prior.id&&current.etag!==prior.etag))&&await digest(current.text)===expected);
+      }catch{return false;}
+    };
+    if(await check()){
+      try{await this.verifyWriteOwner();proof.uncertain=false;this.uncertainWrites--;return true;}catch{/* Keep protection. */}
+    }
+    this.pendingContentChecks.push(check);
+    return false;
+  }
+  async write(parts: string[], name: string, text: string, prior: Pick<RemoteFile,'id'|'etag'>|null, limit: number, progress?:(sent:number,total:number)=>void,freshCiphertext=true): Promise<NewWriteReceipt|undefined> {
     this.assertCurrent();
     if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('クラウドファイル名が不正です。');
     const bytes = new TextEncoder().encode(text);
@@ -680,16 +758,22 @@ export class PayrollGraph {
     progress?.(0,bytes.length);
     const parent = await this.folder(parts,true);
     if (!parent) throw new Error('保存先フォルダーがありません。');
+    // Only a complete creation response can replace an original readback.
+    const receipt=(item:Item,status:number):NewWriteReceipt|undefined=>
+      !prior&&status===201&&typeof item.id==='string'&&item.id&&typeof item.eTag==='string'&&item.eTag&&
+      !item.folder&&item.name===name&&item.size===bytes.length&&item.parentReference?.id===parent
+       ?{id:item.id,etag:item.eTag,size:item.size,name}:undefined;
     // 新規の小さな暗号ファイルは Graph の一括PUTで確定する。
     // createUploadSessionの途中中断で0バイトのプレースホルダーが残る事態を避ける。
     // 更新ではETag付きアップロードセッションを維持して競合を検知する。
     if (!prior && bytes.byteLength <= 4 * 1024 * 1024) {
       let responseReceived=false,verified=false;
+      const proof={uncertain:false};
       try {
       const path = `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
       const response = await this.request(path,{
         method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes,
-      });
+      },false,undefined,false,proof);
       responseReceived=true;
       const created = await response.json() as Item;
       this.assertCurrent();
@@ -697,9 +781,10 @@ export class PayrollGraph {
         throw new Error('OneDriveへの新規保存後のサイズが一致しません。保存成功とみなせません。');
       verified=true;
       progress?.(bytes.length,bytes.length);
-      return;
+      return receipt(created,response.status);
       } catch(error) {
-        if(this.writeOwner&&responseReceived&&!verified)this.writeUncertain=true;
+        if(this.writeOwner&&responseReceived&&!verified)this.markUncertain(proof);
+        if(freshCiphertext&&await this.confirmLostContent(parts,name,text,prior,limit,proof)){progress?.(bytes.length,bytes.length);return;}
         throw error;
       } finally {
         // A new-file PUT can also overlap a pending GET; the final boundary
@@ -712,6 +797,9 @@ export class PayrollGraph {
     // request() invalidates at session creation; the *completion* boundary must
     // invalidate again so overlapping GETs cannot publish pre-upload ciphertext.
     // Failure is equally ambiguous: Graph may have committed the final chunk.
+    let sessionAccepted=false,finalDispatched=false,chunkDispatched=false;
+    let createdReceipt:NewWriteReceipt|undefined;
+    const proof={uncertain:false};
     try {
     const path = prior
       ? `/me/drive/items/${encodeURIComponent(prior.id)}/createUploadSession`
@@ -720,6 +808,7 @@ export class PayrollGraph {
       method:'POST',headers:{'Content-Type':'application/json',...(prior?{'If-Match':prior.etag}:{})},
       body:JSON.stringify({item:{'@microsoft.graph.conflictBehavior':prior?'replace':'fail'}}),
     });
+    sessionAccepted=true;
     const session=await sessionResponse.json() as {uploadUrl?:string};
     this.assertCurrent();
     if (!session.uploadUrl || new URL(session.uploadUrl).protocol !== 'https:') throw new Error('OneDriveアップロードURLが不正です。');
@@ -728,12 +817,13 @@ export class PayrollGraph {
       this.assertCurrent();
       const end=Math.min(start+size,bytes.length);
       await this.verifyWriteOwner();
+      chunkDispatched=true;finalDispatched=end===bytes.length;
       const response=await this.http(session.uploadUrl,{
         method:'PUT',credentials:'omit',headers:{'Content-Range':`bytes ${start}-${end-1}/${bytes.length}`},body:bytes.slice(start,end),
       });
       this.assertCurrent();
       if (!response.ok) {
-        if(response.status===409||response.status===412)throw new GraphError(response.status,'conflict');
+        if(rejectedWriteStatus(response.status)){chunkDispatched=false;finalDispatched=false;if(this.writeOwner)this.markRejected();throw new GraphError(response.status,'upload-rejected');}
         throw new Error(`OneDriveのアップロードに失敗しました (HTTP ${response.status})。`);
       }
       if (end<bytes.length && response.status!==202) throw new Error('分割アップロードが途中終了しました。');
@@ -742,11 +832,17 @@ export class PayrollGraph {
         const item=await response.json() as Item;
         this.assertCurrent();
         if(!item.id || item.size !== bytes.length)throw new Error('OneDriveの保存IDまたはサイズが一致しません。');
+        createdReceipt=receipt(item,response.status);
       }
+      chunkDispatched=false;finalDispatched=false;
       progress?.(end,bytes.length);
     }
+    return createdReceipt;
     } catch(error) {
-      if(this.writeOwner&&this.writeAttempted&&!isCollision(error))this.writeUncertain=true;
+      // An explicitly rejected session creation has not sent any content.
+      // Accepted/abandoned sessions without a final reply remain protected.
+      if(this.writeOwner&&sessionAccepted&&(!(error instanceof GraphError)||!rejectedWriteStatus(error.status)))this.markUncertain(proof);
+      if(freshCiphertext&&finalDispatched&&chunkDispatched&&await this.confirmLostContent(parts,name,text,prior,limit,proof)){progress?.(bytes.length,bytes.length);return;}
       throw error;
     } finally {
       // Both success and failure invalidate all encrypted bodies and pending GETs.

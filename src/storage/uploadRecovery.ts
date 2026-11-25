@@ -7,13 +7,13 @@ export interface UploadRecoveryAttempt {targetMonth:string;fileHash:string;job:s
 export interface UploadRecoveryRecord {id:number;fileHash?:string;form:Record<string,string>;employerId?:string}
 export interface UploadRecoveryVault<T extends UploadRecoveryRecord> {
  refresh(options:{forceFresh:true;reuseVerifiedYears:true;bulkYearMetadata:true}):Promise<T[]>;
- inspectDetachedOriginals(reuseVerifiedYears?:boolean):Promise<DetachedOriginalReport>;
+ inspectDetachedOriginals(reuseVerifiedYears?:boolean,scope?:readonly string[]):Promise<DetachedOriginalReport>;
  inspectDetachedUploadMatches(report:DetachedOriginalReport,attempt:readonly UploadRecoveryAttempt[]):Promise<readonly DetachedUploadMatch[]>;
  inspectIncomeConsistency(years:ReadonlySet<string>):Promise<string[]>;
  original(record:T):Promise<Blob>;
  legacyOriginalDigest(record:T):Promise<string>;
 }
-export interface UploadRecoveryEvidence {inventory:DetachedOriginalReport;matches:readonly DetachedUploadMatch[];candidateIncomeYears:readonly string[]}
+export interface UploadRecoveryEvidence {inventory:DetachedOriginalReport;matches:readonly DetachedUploadMatch[];candidateIncomeYears:readonly string[];scope?:readonly string[]}
 export interface UploadRecoveryReport {saved:number;attempted:number;originalsVerified:number;detached:number;incomeUnsyncedYears:string[]}
 export function uploadRecoveryAttempt(record:{fileHash?:string;form:Record<string,string>;employerId?:string}):UploadRecoveryAttempt {
  const {targetMonth,job,kind,paymentDate}=record.form;
@@ -35,7 +35,7 @@ export async function resolveLegacyOriginalHashes<T extends UploadRecoveryRecord
 }
 export async function inspectUploadRecovery<T extends UploadRecoveryRecord>(
  vault:UploadRecoveryVault<T>,attempt:readonly UploadRecoveryAttempt[],signature:(item:T)=>string,progress?:(stage:string)=>void,
- baseline?:readonly T[],evidence?:(value:UploadRecoveryEvidence)=>void,checkIncome=true,
+ baseline?:readonly T[],evidence?:(value:UploadRecoveryEvidence)=>void,checkIncome=true,scope?:readonly string[],
 ):Promise<UploadRecoveryReport>{
  if(!attempt.length||attempt.some(item=>!/^(19|20|21)\d{2}-(0[1-9]|1[0-2])$/.test(item.targetMonth)||!/^[a-f0-9]{64}$/.test(item.fileHash)||
    !/^(19|20|21)\d{2}$/.test(item.paymentYear)||!['main','side'].includes(item.job)||!['salary','bonus'].includes(item.kind)||!validEmployerId(item.employerId)))
@@ -43,10 +43,10 @@ export async function inspectUploadRecovery<T extends UploadRecoveryRecord>(
  const options={forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true} as const;
  progress?.('保存済みデータを確認中…');
  const before=baseline??await vault.refresh(options);
- // Locked ordinary uploads can move the sole clean inventory to the final
- // boundary. Recovery/restore and any detached content still use two scans.
+ // Locked ordinary uploads inspect only their scoped months at the final
+ // boundary. Explicit recovery/restore retain the full inventory and detached checks.
  const ordinary=baseline!==undefined&&!checkIncome;
- const scan=()=>{progress?.('PDF原本の一覧を確認中…');return vault.inspectDetachedOriginals(baseline!==undefined);};
+ const scan=()=>{progress?.('PDF原本の一覧を確認中…');return vault.inspectDetachedOriginals(baseline!==undefined,scope);};
  const match=async(inventory:DetachedOriginalReport)=>{
   if(baseline!==undefined&&!inventory.originals.length)return [];
   progress?.('未参照PDF原本を確認中…');
@@ -85,11 +85,11 @@ export async function inspectUploadRecovery<T extends UploadRecoveryRecord>(
  let lastInventory=firstInventory;
  if(!ordinary||firstInventory.originals.length){
   progress?.('PDF原本の一覧を再確認中…');
-  lastInventory=await vault.inspectDetachedOriginals(baseline!==undefined);
+  lastInventory=await vault.inspectDetachedOriginals(baseline!==undefined,scope);
   if(JSON.stringify(firstInventory)!==JSON.stringify(lastInventory))
    throw new Error('PDF原本の一覧が照合中に変更されました。再保存せず、再検査してください。');
  }
- evidence?.({inventory:lastInventory,matches:detached,candidateIncomeYears:[...new Set(candidates.map(item=>item.form.paymentDate.slice(0,4)))]});
+ evidence?.({inventory:lastInventory,matches:detached,scope,candidateIncomeYears:[...new Set(candidates.map(item=>item.form.paymentDate.slice(0,4)))]});
  const saved=attempt.filter(p=>after.some(item=>exact(p,item,hashOf(item)))).length;
  const originalsVerified=attempt.filter(p=>after.some(item=>hashOf(item)===p.fileHash)||detached.some(item=>item.fileHash===p.fileHash)).length;
  return {saved,attempted:attempt.length,originalsVerified,detached:detached.length,incomeUnsyncedYears};

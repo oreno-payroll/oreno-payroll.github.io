@@ -83,31 +83,31 @@
               <form id="yea-review-form" novalidate>
                 <div class="form-section"><div class="form-section__heading"><span class="form-section__number">01</span><h3>明細の基本情報</h3></div>
                   <div class="form-grid form-grid--two">
-                    <fieldset class="field field--choice yea-review-kind"><legend class="field__label">明細種別</legend>
+                    <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" data-field="targetMonth" type="month"></label>
+                    <label class="field"><span class="field__label">支給日 <span class="field__required">*</span></span><input class="input" data-field="paymentDate" type="date"></label>
+                    <fieldset class="field field--choice yea-review-kind"><legend class="field__label">明細種別 <span class="field__required">*</span></legend>
                       <div class="segmented-choice" role="group" aria-label="明細種別">
                         <label><input type="radio" name="yea-review-kind" data-field="kind" value="salary"><span>給与</span></label>
                         <label><input type="radio" name="yea-review-kind" data-field="kind" value="bonus"><span>賞与</span></label>
                       </div>
                     </fieldset>
-                    <label class="field"><span class="field__label">支給日</span><input class="input" data-field="paymentDate" type="date"></label>
-                    <label class="field"><span class="field__label">対象年月</span><input class="input" data-field="targetMonth" type="month"></label>
                   </div>
                 </div>
                 <div class="form-section"><div class="form-section__heading"><span class="form-section__number">02</span><h3>支給額</h3></div>
                   <div class="form-grid form-grid--two">
-                    <label class="field"><span class="field__label">課税支給額</span><span class="unit-field"><input class="input" data-field="taxable" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">総支給額</span><span class="unit-field"><input class="input" data-field="gross" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">非課税交通費</span><span class="unit-field"><input class="input" data-field="transportation" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">非課税支給額</span><span class="unit-field"><input class="input" data-field="nonTaxable" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">課税支給額 <span class="field__required">*</span></span><span class="unit-field"><input class="input" data-field="taxable" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">総支給額</span><span class="unit-field"><input class="input" data-field="gross" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">非課税交通費</span><span class="unit-field"><input class="input" data-field="transportation" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">非課税支給額</span><span class="unit-field"><input class="input" data-field="nonTaxable" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
                   </div>
                 </div>
                 <div class="form-section"><div class="form-section__heading"><span class="form-section__number">03</span><h3>控除額</h3></div>
                   <div class="form-grid form-grid--two">
-                    <label class="field"><span class="field__label">健康保険料</span><span class="unit-field"><input class="input" data-field="healthInsurance" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">厚生年金保険料</span><span class="unit-field"><input class="input" data-field="pension" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">雇用保険料</span><span class="unit-field"><input class="input" data-field="employmentInsurance" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">所得税</span><span class="unit-field"><input class="input" data-field="incomeTax" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
-                    <label class="field"><span class="field__label">住民税</span><span class="unit-field"><input class="input" data-field="residentTax" type="number" min="0" max="999999999" step="1"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">健康保険料</span><span class="unit-field"><input class="input" data-field="healthInsurance" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">厚生年金保険料</span><span class="unit-field"><input class="input" data-field="pension" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">雇用保険料</span><span class="unit-field"><input class="input" data-field="employmentInsurance" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">所得税</span><span class="unit-field"><input class="input" data-field="incomeTax" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
+                    <label class="field"><span class="field__label">住民税</span><span class="unit-field"><input class="input" data-field="residentTax" type="number" min="0" max="999999999" step="1" inputmode="numeric" placeholder="未入力"><span>円</span></span></label>
                   </div>
                 </div>
                 <p class="validation-message" id="yea-review-validation" hidden></p>
@@ -129,7 +129,7 @@
       </div>
     </details>
     <details class="card yea-taxable-audit yea-accordion">
-     <summary class="yea-upload-summary accordion-summary"><strong>年間課税支給額の月別内訳を確認</strong></summary>
+     <summary class="yea-upload-summary accordion-summary"><strong>月別内訳</strong></summary>
      <p class="yea-taxable-audit__note">支給日が選択年に属する給与・賞与の課税支給額と、保存済みの見込みを合算します。対象年月ではなく支給日を基準に集計しています。</p>
      <div class="yea-taxable-audit__scroll" id="yea-taxable-breakdown"></div>
     </details>
@@ -160,7 +160,7 @@
      <h2 id="yea-memo-heading">年別メモ</h2>
      <label class="sr-only" for="yea-year-memo">年別メモ</label>
      <textarea id="yea-year-memo" disabled class="yea-memo-textarea" maxlength="16000" rows="7" placeholder="メモを入力"></textarea>
-     <div class="yea-memo-actions"><span id="yea-memo-state" role="status" aria-live="polite"></span><button class="btn btn--primary" id="yea-save-memo" type="button" disabled>年別メモを保存</button></div>
+     <div class="yea-memo-actions"><span id="yea-memo-state" role="status" aria-live="polite"></span><button class="btn btn--primary" id="yea-save-memo" type="button" disabled>メモを保存</button></div>
     </section>
    </div>
   </div>

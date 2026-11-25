@@ -214,7 +214,7 @@ function newNumericId(used:Set<number>):number {
 export interface SkippedPayroll {fileName:string;originalFileName?:string;reason:'saved-pdf'|'saved-period'|'batch-pdf'|'batch-period'}
 export interface SaveSkipResult {saved:number;skipped:SkippedPayroll[]}
 /** 新規明細を年度単位のバッチで確定。PDFは最大2件並列、年度JSONと収入はまとめて更新。 */
-export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordInput[],onProgress?:PayrollSaveProgress,state?:PayrollWriteState,authorized:()=>boolean=()=>true):Promise<SaveSkipResult> {
+export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordInput[],onProgress?:PayrollSaveProgress,state?:PayrollWriteState,authorized:()=>boolean=()=>true,recoverAcrossMonths=false):Promise<SaveSkipResult> {
  const report=(title:string)=>onProgress?.({phase:0,title,count:'',percent:null});
  if(!records.length)throw new Error('保存対象がありません。');
  report('OneDriveへの接続を確認中…');
@@ -247,7 +247,8 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
  const uploadPreflight=async(baseline?:readonly CloudRecord[]):Promise<UploadRecoveryEvidence>=>{
   report('PDF原本を確認中…');
   let evidence:UploadRecoveryEvidence|undefined;
-  const preflight=await inspectUploadRecovery(vault,records.map(uploadRecoveryAttempt),recordSignature,report,baseline,value=>{evidence=value;},baseline===undefined);
+  const scope=recoverAcrossMonths?undefined:[...new Set(accepted.map(r=>r.form.targetMonth))].sort();
+  const preflight=await inspectUploadRecovery(vault,records.map(uploadRecoveryAttempt),recordSignature,report,baseline,value=>{evidence=value;},baseline===undefined,scope);
   if(baseline===undefined&&preflight.incomeUnsyncedYears.length){
    if(!authorized())throw new Error('認証状態が変更されました。');
    report('Finance連携を更新中…');

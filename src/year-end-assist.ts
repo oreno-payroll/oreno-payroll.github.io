@@ -672,7 +672,7 @@ function updateNameWarning(){
 }
 function validateQueueItem(item:QueueItem):string|null{
  const d=item.draft;
- if(item.status!=='ready'||!d)return 'PDFを正常に解析できていません。';
+ if(item.status!=='ready'||!d)return 'PDFを正常に読み取れていません。';
  if(item.fieldErrors.size)return '金額は円単位の整数で入力してください。';
  if(!['salary','bonus'].includes(d.kind))return '給与・賞与の区分を確認してください。';
  if(!validDate(d.paymentDate)||Number(d.paymentDate.slice(0,4))!==item.year)return '支給日が対象年と一致しません。';
@@ -710,8 +710,8 @@ function updateSaveState(){
  saveAll.textContent=savingDocuments?'保存中…':'すべて保存';
  saveRecheck.disabled=busy;
  $('yea-upload-progress').textContent=savingDocuments?'保存中…':
-  !ready.length&&!updates.length&&!pendingDeletions.size&&!errors&&!pending&&!duplicates?'':pending?'PDFを解析中…':
-  errors?'解析できないPDFを確認・削除してください。':blocked?'入力内容に問題があります。':
+  !ready.length&&!updates.length&&!pendingDeletions.size&&!errors&&!pending&&!duplicates?'':pending?'PDFを読み取り中…':
+  errors?'読み取れないPDFを確認して一覧から外してください。':blocked?'入力内容に問題があります。':
   saveRecoveryRequired?'前回の保存が未完了です。OneDriveの状態を確認してください。':
   unreviewed?`${unreviewed}件の検算結果を原本と照合してください。`:
   !ready.length&&!updates.length&&duplicates?`重複${duplicates}件は保存対象外です。`:
@@ -728,13 +728,13 @@ function promoteRemainingDuplicate(removed:QueueItem){
  if(!next){updateDrafts();return;}
  next.status='reading';next.error='';next.draft=null;
  updateDrafts();
- void action('重複PDFの再解析',async()=>{
+ void action('重複PDFの再読み取り',async()=>{
   try{
    const parsed=await parseAssistedPdf(next.file);
    if(!fileQueue.includes(next))return;
    next.draft=parsed;next.status='ready';
   }catch(error){
-   next.status='error';next.error=error instanceof Error?error.message:'PDFの解析に失敗しました。';
+   next.status='error';next.error=error instanceof Error?error.message:'PDFの読み取りに失敗しました。';
   }finally{updateDrafts();}
  },false);
 }
@@ -746,7 +746,7 @@ function renderSelectedReview(){
  if(!visible)return;
  $('yea-selected-name').textContent=record?yearEndVisiblePdfName(record.kind,record.paymentDate,record.fileName):queue?.draft?yearEndPdfName(queue.draft.kind,queue.draft.paymentDate,queue.file.name):queue?.file.name??'';
  $('yea-selected-meta').textContent=record?(saved&&isChanged(record,saved)?'変更あり':'保存済み'):
-  queue?.status==='ready'?'新規・保存待ち':queue?.status==='reading'?'解析中':queue?.status==='duplicate'?'重複・保存対象外':'読み取りエラー';
+  queue?.status==='ready'?'新規・保存待ち':queue?.status==='reading'?'読み取り中':queue?.status==='duplicate'?'重複・保存対象外':'読み取りエラー';
  const warningAmounts=d?documentAmountWarnings(d):[];
  const message=record?(saved&&isChanged(record,saved)?'':warningAmounts.join('\n')):queue?.status==='ready'&&queue?.draft?
   [possibleNameMismatch(queue)?'他のPDFと読み取り氏名が一致しません。':'',...queue.draft.warnings].filter(Boolean).join('\n'):
@@ -828,7 +828,7 @@ function updateDrafts(preserveReview=false){
   const failed=item.status==='error'||item.status==='duplicate';
   const valid=item.status==='ready'&&!validateQueueItem(item);
   const unreviewed=Boolean(valid&&item.draft&&requiresAmountApproval(item.draft));
-  const label=item.status==='reading'?'解析中':item.status==='duplicate'?'重複・除外':item.status==='error'?'読取不可':unreviewed?'要確認':valid?'保存待ち':'要修正';
+  const label=item.status==='reading'?'読み取り中':item.status==='duplicate'?'重複・除外':item.status==='error'?'読取不可':unreviewed?'要確認':valid?'保存待ち':'要修正';
   const status=el('span',`file-status file-status--${item.status==='duplicate'?'warning':failed?'error':item.status==='reading'?'pending':valid&&!unreviewed?'ready':'warning'}`,label);
   if(item.status==='duplicate')detail.textContent=`${formatBytes(item.file.size)} · ${item.error||'同一PDF'}`;
   info.append(name,detail,status);choose.append(icon,info);
@@ -1064,7 +1064,7 @@ function bind(){
   const items:QueueItem[]=files.map(file=>({id:++draftSerial,file,draft:null,personId:id,year,hash:'',status:'reading',error:'',fieldErrors:new Set<string>()}));
   fileQueue.push(...items);activeDraft=items[0]?.id??null;activeSavedId=null;
   uploadAccordion.open=false;updateDrafts();
-  void action('PDFをブラウザ内で解析',async()=>{
+  void action('PDFを読み取り',async()=>{
    // Keep PDF.js work bounded to two workers to reduce ten-file parsing time
    // without spawning ten decoders at once on a phone.
    let cursor=0;
@@ -1080,7 +1080,7 @@ function bind(){
       // earlier hash results after the workers settle before allowing save.
       if(saved){item.status='duplicate';item.error='OneDriveに同じPDF原本が保存済みです。';continue;}
       item.draft=await parseAssistedPdf(item.file,bytes);item.status='ready';
-     }catch(error){item.status='error';item.error=error instanceof Error?error.message:'PDFの解析に失敗しました。';}
+     }catch(error){item.status='error';item.error=error instanceof Error?error.message:'PDFの読み取りに失敗しました。';}
      finally{updateDrafts();}
     }
    };
@@ -1093,7 +1093,7 @@ function bind(){
     }else if(!firstHash.has(item.hash))firstHash.set(item.hash,item);
    }
    updateDrafts();
-   if(selected!==id||activeYear!==year){clearDrafts();throw new Error('解析中に従業員や年が変更されました。');}
+   if(selected!==id||activeYear!==year){clearDrafts();throw new Error('読み取り中に従業員や年が変更されました。');}
   },false).finally(()=>{if(selected===id&&activeYear===year)uploadAccordion.open=true;});
  };
  uiPdf.addEventListener('change',()=>{const files=Array.from(uiPdf.files??[]);uiPdf.value='';queuePdfFiles(files);});

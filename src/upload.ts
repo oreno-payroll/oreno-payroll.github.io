@@ -188,6 +188,7 @@ let uploadSaveRecoveryRequired=false;
 let uploadSaveRecoveryChecking=false;
 let uploadSaveAttempt:UploadRecoveryAttempt[]=[];
 let uploadLockState:PayrollWriteState|undefined;
+let recoverAcrossMonths=false;
 let saveTick:ReturnType<typeof setInterval>|undefined;
 let saveStartedAt=0;
 let savePhase:PayrollSavePhase=0;
@@ -281,7 +282,7 @@ function activateOrphanDuplicates(): void {
   if (requeued) void drainQueue();
 }
 function stillActive(entry: Entry): void {
-  if (entry.cancelled || !entries.includes(entry)) throw new Error('解析が中断されました。');
+  if (entry.cancelled || !entries.includes(entry)) throw new Error('読み取りが中断されました。');
 }
 
 /** 確認済みの対象を明細ごとに固定する。フォーム・警告が変わったら失効。 */
@@ -341,10 +342,12 @@ function renderFileList(): void {
   listEmpty.hidden = hasFiles;
   fileList.hidden = !hasFiles;
   clearButton.hidden = !hasFiles;
-  $("file-count").textContent = `${entries.length}件`;
+  $("file-count").hidden = !hasFiles;
+  $("file-count").textContent = hasFiles ? `${entries.length}件` : "";
   const completed = entries.filter(entry => entry.status !== "queued" && entry.status !== "reading").length;
   const active = entries.some(entry => entry.status === "queued" || entry.status === "reading");
-  $("file-summary").textContent = !hasFiles ? "PDF追加待ち" : active ? `${completed} / ${entries.length} 件のPDF解析が完了` : `${entries.length}件のPDF（未保存）`;
+  $("file-summary").textContent = "未保存";
+  $("file-summary").parentElement!.hidden = !hasFiles || active;
   progressWrap.hidden = !active;
   const parsing = entries.find(entry => entry.status === "reading");
   progressText.textContent = parsing
@@ -481,7 +484,7 @@ function renderReview(): void {
     readResult.textContent = "同一内容のPDFは一覧内で最初の1件だけ保存します。このファイルは保存対象外です。";
     readResult.classList.add("read-result--warning");
   } else if (entry.status === "queued" || entry.status === "reading") {
-    readResult.textContent = `PDFを解析しています。${entry.pages ? ` ${entry.currentPage ?? 0}/${entry.pages}ページ` : ""}`;
+    readResult.textContent = `PDFを読み取っています。${entry.pages ? ` ${entry.currentPage ?? 0}/${entry.pages}ページ` : ""}`;
   } else if (entry.status === "ready") {
     const parsed = entry.parsed;
     if (parsed?.profile) {
@@ -750,7 +753,7 @@ clearButton.addEventListener("click", () => {
   entries = [];
   selectedId = null;
   render();
-  notice("info","選択中のPDFを一覧から削除しました。保存済みデータは削除されません。");
+  notice("info","選択中のPDFをすべて外しました。保存済みデータは変更していません。");
 });
 employerInput.addEventListener('change',()=>{
  const entry=selectedEntry();if(!entry||employerInput.disabled||!employerDirectory)return;
@@ -865,7 +868,7 @@ function updateSaveState(): void {
   renderReviewConfirmation(reviewConfirmation,reviewConfirm,{
     required:Boolean(current&&(current.status==="ready"||current.status==="no-text")&&!duplicated().has(current.id)&&hasReviewIssue(current)),
     approved:Boolean(current&&isReviewed(current)),disabled:!editable||Boolean(formIssue),
-    warnings:current?[...validatePayrollForm(current.form).warnings,...(current.status==="no-text"||!current.parsed?.profile||current.parsed.warnings.length||current.parsed.missingFields.length?["PDF解析時の確認事項も原本と照合してください。"]:[])]:[],rows:current?personalReviewRows(current.form):[],
+    warnings:current?[...validatePayrollForm(current.form).warnings,...(current.status==="no-text"||!current.parsed?.profile||current.parsed.warnings.length||current.parsed.missingFields.length?["PDF読み取り時の確認事項も原本と照合してください。"]:[])]:[],rows:current?personalReviewRows(current.form):[],
   });
   // Consent is only valid for the exact current batch and field values. Changing
   // any PDF/form/status after checking resets it, never silently extends consent.
@@ -894,7 +897,7 @@ function updateSaveState(): void {
   saveBar.classList.toggle('is-empty',isEmpty&&!saving&&!uploadSaveRecoveryRequired);
   saveStatus.hidden=isEmpty||saving;
   saveBar.classList.toggle('is-recovering',uploadSaveRecoveryRequired);
-  uploadGuide.textContent=uploadSaveRecoveryRequired?'前回の保存結果が未確認です。OneDriveを再照合してください。':isEmpty?'PDFを追加してください。':saving?'':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
+  uploadGuide.textContent=uploadSaveRecoveryRequired?'前回の保存結果が未確認です。OneDriveを再照合してください。':isEmpty?'':saving?'':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
   if (saving) {
     saveStatus.textContent = "";
   } else if (!entries.length) {
@@ -904,7 +907,7 @@ function updateSaveState(): void {
   } else if (pending) {
     saveStatus.textContent = `PDFの読み取り完了後に保存できます（全${entries.length}件）。`;
   } else if (badPdf) {
-    saveStatus.textContent = `「${badPdf.file.name}」はPDFとして正常に読めないため保存できません。削除して再追加してください。`;
+    saveStatus.textContent = `「${badPdf.file.name}」はPDFとして正常に読めないため保存できません。一覧から外して再追加してください。`;
   } else if (invalidEntry) {
     saveStatus.textContent = `「${invalidEntry.file.name}」：${!validEmployerId(invalidEntry.employerId)?'勤務先の選択が不正です。':formError(invalidEntry)}`;
   } else if (unreviewed.length) {
@@ -940,6 +943,7 @@ uploadRecoveryRecheck.addEventListener('click',()=>{void(async()=>{
     if(!authorized()||attempt!==uploadSaveAttempt)throw new Error('接続状態が変更されました。');
     // Keep the in-memory drafts. The next save repeats its live duplicate and
     // integrity checks; already saved entries are skipped, not overwritten.
+    recoverAcrossMonths=true;
     uploadSaveRecoveryRequired=false;uploadSaveAttempt=[];uploadRecovery.hidden=true;saveFeedback.hidden=true;clearInlineError(saveStatus);
     notice('info',uploadRecoveryMessage(report)+(report.attempted>0&&report.saved===report.attempted?' すべての明細は保存済みです。再登録は不要です。':' 入力内容を保持しています。必要な明細だけ再保存できます。'));
   }catch(error){
@@ -1022,7 +1026,8 @@ saveButton.addEventListener("click", async () => {
       ], reviewedAt: new Date().toISOString() } : {}),
       };
     });
-    const result = await saveRecordsSkippingDuplicates(records,showSaveProgress,writeState,authorized);
+    const result = await saveRecordsSkippingDuplicates(records,showSaveProgress,writeState,authorized,recoverAcrossMonths);
+    recoverAcrossMonths=false;
     const duplicateOwnersAtSave=duplicated();
     const skippedDetails=describeUploadDuplicates(result.skipped,[...duplicateOwnersAtSave].map(([duplicateId,firstId])=>({
       fileName:entries.find(entry=>entry.id===duplicateId)?.file.name??'名前不明',

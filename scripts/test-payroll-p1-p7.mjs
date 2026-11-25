@@ -33,7 +33,7 @@ class FakeGraph{
   if(this.trashFault?.(p))throw new Error('synthetic trash interruption');
   this.trashed.push(p);this.files.delete(p);
  }
- async write(parts,name,text,prior,limit){const p=this.path(parts,name),old=this.files.get(p);if(prior?old?.etag!==prior.etag:!!old)throw new GraphError(412,'conflict');if(this.fault?.(p,old))throw new Error('synthetic write interruption');const size=enc.encode(text).length;assert.ok(size<=limit);this.writes.push(p);if(this.discard?.(p,old))return;this.files.set(p,{id:p,etag:'e'+(++this.revision),text,size});}
+ async write(parts,name,text,prior,limit){const p=this.path(parts,name),old=this.files.get(p);if(prior?old?.etag!==prior.etag:!!old)throw new GraphError(412,'conflict');if(this.fault?.(p,old))throw new Error('synthetic write interruption');const size=enc.encode(text).length;assert.ok(size<=limit);this.writes.push(p);if(this.discard?.(p,old))return;const row={id:p,etag:'e'+(++this.revision),text,size};this.files.set(p,row);if(!prior)return {id:row.id,etag:row.etag,size,name};}
 }
 async function setup(){const graph=new FakeGraph();let vault=new PayrollVault(graph);await vault.unlock('synthetic-integrity-passphrase',true);const {key,salt}=vault.sessionKey();globalThis.__p1p7Vault=vault;return {graph,key,get vault(){return vault;},async reopen(){vault.lock();vault=new PayrollVault(graph);await vault.unlockWithKey(key,salt);await vault.refresh({forceFresh:true});globalThis.__p1p7Vault=vault;return vault;}};}
 async function removeFixtureHash(ctx,id){
@@ -361,11 +361,11 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  const report=await verify(ctx,corrected);assert.equal(report.detached,1);assert.equal(report.saved,0);assert.equal(report.originalsVerified,1);
  await assert.rejects(inspectAdditiveRestore([{...corrected,id:124,savedAt:'2026-11-01T00:00:00.000Z',revision:1}]),/未参照原本/);assert.equal(ctx.graph.writes.length,n);
  const originals=ctx.graph.writes.filter(p=>p.includes('/originals/')).length;
- assert.equal((await saveRecordsSkippingDuplicates([corrected])).saved,1);await ctx.reopen();
+ assert.equal((await saveRecordsSkippingDuplicates([corrected],undefined,undefined,()=>true,true)).saved,1);await ctx.reopen();
  assert.equal(ctx.vault.records()[0].originalMonth,'2026-10');assert.equal(ctx.vault.records()[0].form.targetMonth,'2027-04');
  assert.equal(ctx.graph.writes.filter(p=>p.includes('/originals/')).length,originals);
  assert.equal((await ctx.vault.original(ctx.vault.records()[0])).size,a.pdf.size);
- console.log('PASS A1: ordinary upload reuses cross-year detached PDF; additive restore retains its guard');
+ console.log('PASS A1: explicit recovery reuses cross-year detached PDF; additive restore retains its guard');
 }
 async function replacementFixture(){
  const ctx=await setup(),a=await sample(102,A,'2026-10'),b=await sample(103,B,'2027-04');
@@ -660,18 +660,73 @@ async function assignmentFixture(){
  let scans=0;const inventory=ctx.vault.inspectDetachedOriginals.bind(ctx.vault);
  ctx.vault.inspectDetachedOriginals=async(...args)=>{scans++;return inventory(...args);};
  assert.equal((await saveRecordsSkippingDuplicates([b])).saved,1);
- assert.equal(scans,1,'clean ordinary upload performs one final full inventory');
+ assert.equal(scans,1,'clean ordinary upload performs one scoped inventory');
  assert.equal(ctx.vault.records().length,2);
- console.log('PASS C: clean upload performs one full original scan; retained cross-month recovery remains strict');
+ console.log('PASS P02: clean upload performs one scoped inventory; explicit cross-month recovery remains strict');
 }
 {
  const ctx=await setup(),a=await sample(826,A,'2026-04'),b=await sample(827,A,'2026-05');
  await saveRecordsSkippingDuplicates([a]);
  const [path]=[...ctx.graph.files].find(([p])=>p.includes('/originals/'));ctx.graph.files.delete(path);
  const writes=ctx.graph.writes.length;
- await assert.rejects(saveRecordsSkippingDuplicates([b]),/参照する原本が見つかりません/);
- assert.equal(ctx.graph.writes.length,writes,'missing live original blocks writes even on clean fast path');
- console.log('PASS C: missing referenced original blocks all writes');
+ assert.equal((await saveRecordsSkippingDuplicates([b])).saved,1);
+ assert.ok(ctx.graph.writes.length>writes);
+ await assert.rejects(()=>ctx.vault.inspectDetachedOriginals(),/参照する原本が見つかりません/);
+ await assert.rejects(()=>saveRecordsSkippingDuplicates([a]),/原本/);
+ console.log('PASS P02: missing unrelated historical original does not block new upload; full audit and duplicate verification still reject');
+}
+
+// P02/P03: five years of unrelated historical originals do not create a scan or
+// download in a normal save. A complete creation receipt is sufficient; incomplete
+// receipts retain the original readback, and restore keeps the strict path.
+{
+ const ctx=await setup();
+ for(let i=0;i<5;i++)await saveRecordsSkippingDuplicates([await sample(850+i,A,`${2021+i}-04`)]);
+ const old=await sample(860,A,'2025-05');ctx.graph.fault=p=>p.includes('/statements/');
+ await assert.rejects(saveRecordsSkippingDuplicates([old]));ctx.graph.fault=undefined;await ctx.reopen();
+ const lists=[],reads=[];
+ const list=ctx.graph.listFolder.bind(ctx.graph),read=ctx.graph.read.bind(ctx.graph);
+ ctx.graph.listFolder=async(parts,...args)=>{if(parts.includes('originals'))lists.push(parts.join('/'));return list(parts,...args);};
+ ctx.graph.read=async(parts,...args)=>{if(parts.includes('originals'))reads.push(parts.join('/'));return read(parts,...args);};
+ const fresh=await sample(861,A,'2026-11');
+ assert.equal((await saveRecordsSkippingDuplicates([fresh])).saved,1);
+ assert.deepEqual(lists,['payroll/originals/2026/11']);assert.deepEqual(reads,[]);
+ assert.equal((await ctx.vault.original(ctx.vault.records().find(r=>r.fileHash===fresh.fileHash))).size,fresh.pdf.size);
+ console.log('PASS P02/P03: one target-month list, zero historical orphan downloads, zero new-original readback across five years');
+}
+{
+ const ctx=await setup(),a=await sample(862,A,'2026-11');
+ const write=ctx.graph.write.bind(ctx.graph),read=ctx.graph.read.bind(ctx.graph);let reads=0;
+ ctx.graph.write=async(parts,...args)=>{const result=await write(parts,...args);return parts.includes('originals')?undefined:result;};
+ ctx.graph.read=async(parts,...args)=>{if(parts.includes('originals'))reads++;return read(parts,...args);};
+ assert.equal((await saveRecordsSkippingDuplicates([a])).saved,1);assert.equal(reads,1);
+ const b=await sample(863,A,'2026-12');ctx.graph.discard=p=>p.includes('/originals/');
+ await assert.rejects(saveRecordsSkippingDuplicates([b]),/読み戻せません/);
+ assert.equal(ctx.vault.records().length,1);
+ console.log('PASS P03: missing creation receipt uses authenticated readback and blocks missing original');
+}
+{
+ const ctx=await setup(),a=await sample(864,A,'2026-11');ctx.graph.fault=p=>p.includes('/statements/');
+ await assert.rejects(saveRecordsSkippingDuplicates([a]));ctx.graph.fault=undefined;await ctx.reopen();
+ const corrected={...a,form:{...a.form,targetMonth:'2026-12'}};
+ assert.equal((await saveRecordsSkippingDuplicates([corrected])).saved,1);
+ assert.equal((await ctx.vault.inspectDetachedOriginals()).originals.length,1);
+ assert.equal(ctx.vault.records().length,1);
+ console.log('PASS P02: ordinary cross-month retry preserves older detached original; no double payroll record');
+}
+
+{
+ const ctx=await setup(),a=await sample(865,A,'2026-11');
+ const read=ctx.graph.read.bind(ctx.graph);let reads=0;
+ ctx.graph.read=async(parts,...args)=>{if(parts.includes('originals'))reads++;return read(parts,...args);};
+ const uuid=crypto.randomUUID();
+ await ctx.vault.storeOriginal(a,uuid,a.form.targetMonth);
+ assert.equal(reads,1,'strict non-ordinary save still reads back despite receipt');
+ reads=0;await ctx.vault.storeOriginal(a,uuid,a.form.targetMonth,undefined,true);
+ assert.equal(reads,1,'collision reads authenticated original only once');
+ const different=await sample(866,A,'2026-11');
+ await assert.rejects(ctx.vault.storeOriginal(different,uuid,a.form.targetMonth,undefined,true),/異なるPDF/);
+ console.log('PASS P03: strict save retains readback; collision compares existing original once and refuses differing bytes');
 }
 
 // Join the real Graph lock/request state machine to the encrypted in-memory

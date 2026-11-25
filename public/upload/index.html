@@ -57,14 +57,14 @@
         </div>
       </div>
 
-      <section class="workspace is-empty" aria-label="PDF解析と内容確認">
+      <section class="workspace is-empty" aria-label="PDFの読み取りと内容確認">
         <div class="upload-left">
           <section class="card upload-zone-card" aria-labelledby="drop-heading">
             <div class="zone-content" id="drop-zone" role="button" tabindex="-1" aria-disabled="true" aria-labelledby="drop-heading" aria-describedby="drop-description">
               <div class="zone-icon"><svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg></div>
               <div class="zone-copy">
-                <h2 id="drop-heading">PDFを追加する</h2>
-                <p id="drop-description">クリックして選択、またはここにPDFをドロップ（複数可）</p>
+                <h2 id="drop-heading">PDFを選択</h2>
+                <p id="drop-description">クリックまたはドラッグ＆ドロップ（複数可）</p>
               </div>
               <div class="zone-privacy"><svg class="icon" aria-hidden="true"><use href="#icon-shield"></use></svg><span>PDFのみ・1件25MBまで・最大30件</span></div>
             </div>
@@ -79,12 +79,12 @@
         <div class="card file-panel">
           <div class="panel-title-row">
             <div>
-              <h2>追加したPDF <span class="count-badge" id="file-count">0件</span></h2>
+              <h2>追加したPDF <span class="count-badge" id="file-count" hidden></span></h2>
             </div>
-            <button class="btn btn--ghost btn--small" type="button" id="clear-files" hidden>すべて削除</button>
+            <button class="btn btn--ghost btn--small" type="button" id="clear-files" hidden>すべて外す</button>
           </div>
           <div class="progress-wrap" id="progress-wrap" role="status" aria-live="polite" hidden>
-            <div class="progress-copy"><span>文字情報を確認しています</span><span id="progress-text">0 / 0</span></div>
+            <div class="progress-copy"><span>PDFを読み取り中</span><span id="progress-text">0 / 0</span></div>
             <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
           </div>
           <div class="file-list-empty" id="file-list-empty">
@@ -92,7 +92,7 @@
             <strong>未選択</strong>
           </div>
           <ul class="file-list" id="file-list" aria-label="選択されたPDF一覧" hidden></ul>
-          <div class="file-panel__foot"><span class="status-dot"></span><span id="file-summary">PDF追加待ち</span></div>
+          <div class="file-panel__foot"><span class="status-dot"></span><span id="file-summary"></span></div>
         </div>
         </div>
 
@@ -112,14 +112,14 @@
             <div class="read-result" id="read-result" role="status" aria-live="polite"></div>
             <p class="field-source-note"><span class="field-source-note__sample field-source-note__sample--auto" aria-hidden="true"></span> PDFから取得 <span class="field-source-note__sample" aria-hidden="true"></span> 手入力 <span class="field-source-note__sample field-source-note__sample--missing" aria-hidden="true"></span> 未取得。原本と照合してください。</p>
             <section class="analysis-issues" id="analysis-issues" aria-labelledby="analysis-issues-heading" hidden>
-              <div class="analysis-issues__head"><strong id="analysis-issues-heading">解析時の確認事項</strong><span id="analysis-issues-count"></span></div>
+              <div class="analysis-issues__head"><strong id="analysis-issues-heading">読み取り時の確認事項</strong><span id="analysis-issues-count"></span></div>
               <ul id="analysis-issues-list"></ul>
               <p>検出されなかった項目は空欄のままです。原本で確認して、必要に応じて入力してください。</p>
             </section>
 
             <details class="upload-troubleshooting">
               <summary>詳細・トラブルシューティング</summary>
-              <p>PDF原本と解析データは端末内で暗号化し、OneDriveへ保存します。</p>
+              <p>PDF原本と読み取りデータは端末内で暗号化し、OneDriveへ保存します。</p>
               <p>PDFの文字認識や座標が合わない場合の診断機能です。個人情報を含む可能性があるため、共有にはマスク済みの診断結果を使用してください。</p>
               <button class="btn btn--secondary btn--small" type="button" id="diagnostic-button">座標診断を開く</button>
             </details>
@@ -128,6 +128,8 @@
               <section class="form-section">
                 <div class="form-section__heading"><span class="form-section__number">01</span><h3>明細の基本情報</h3></div>
                 <div class="form-grid form-grid--two">
+                  <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" name="targetMonth" type="month" required></label>
+                  <label class="field"><span class="field__label">支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
                   <fieldset class="field field--choice"><legend class="field__label">勤務区分 <span class="field__required">*</span></legend>
                     <div class="segmented-choice" role="group" aria-label="勤務区分">
                       <label><input type="radio" name="job" value="main" required><span>本業</span></label>
@@ -148,8 +150,6 @@
                     </div>
                     <small class="employer-identity__help" id="employer-status" role="status" aria-live="polite"></small>
                   </div>
-                  <label class="field"><span class="field__label">対象年月 <span class="field__required">*</span></span><input class="input" name="targetMonth" type="month" required></label>
-                  <label class="field"><span class="field__label">支給日 <span class="field__required">*</span></span><input class="input" name="paymentDate" type="date" required></label>
                   <label class="field" data-salary-only><span class="field__label">出勤日数</span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
                 </div>
               </section>

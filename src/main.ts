@@ -81,7 +81,7 @@ function employerName(record:SavedPayrollSummary):string{return employerDisplayN
 const visibleCounts: Record<Job, number> = { main: 50, side: 50 };
 const deletingRecordIds = new Set<number>();
 const pendingDeletion=new PendingDeletion();
-const deletionPanel=required<HTMLElement>('#pending-deletion');
+const deletionPanel=required<HTMLDetailsElement>('#pending-deletion');
 const deletionList=required<HTMLUListElement>('#pending-deletion-list');
 const deletionStatus=required<HTMLElement>('#pending-deletion-status');
 const deletionSave=required<HTMLButtonElement>('#pending-deletion-save');
@@ -92,6 +92,7 @@ const deletionBusy=()=>confirmingDeletion||deletingRecordIds.size>0;
 function deletionMatches():boolean{return pendingDeletion.matches(saved.map(r=>({id:r.id,signature:recordSignature(r)})));}
 function deletionLabel(record:SavedPayrollSummary):string{return `${record.form.targetMonth} / ${record.form.job==='main'?'本業':'副業'} / ${employerName(record)} / ${record.fileName}`;}
 function renderPendingDeletion():void{
+ if(deletionPanel.hidden&&pendingDeletion.size)deletionPanel.open=true;
  deletionPanel.hidden=pendingDeletion.size===0;
  deletionList.replaceChildren();
  const blocked=deletionBusy()||exportingSideZip||dashboardLoading||dashboardStale;
@@ -115,7 +116,7 @@ deletionSave.addEventListener('click',async()=>{
  confirmingDeletion=true;renderPendingDeletion();
  const approved=await confirmOperation({title:'削除待ちの明細を確定',subject:`給与明細 ${targets.length}件`,tone:'danger',acceptLabel:'明細を削除',details:[
   ...targets.map(t=>{const record=saved.find(r=>r.id===t.id);return record?deletionLabel(record):t.label;}),
-  '解析・入力情報とFinance連携用の収入情報から選択した明細を除外します。',
+  '明細情報とFinance連携用の収入情報から選択した明細を除外します。',
   '明細とFinance連携を更新し、暗号化PDF原本は保全します。不要な原本は設定の未参照PDF原本の管理から別途整理できます。',
   '復元には削除前のバックアップなどが必要です。',
  ]},guard);
@@ -352,13 +353,15 @@ function updateSummary(prefix: 'total' | Job, result: Summary, count: number, si
 }
 function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:string): void {
   const list = required<HTMLUListElement>(`#${job}-records`);
+  const pendingCount=records.filter(record=>pendingDeletion.has(record.id)).length;
+  records=records.filter(record=>!pendingDeletion.has(record.id));
   required<HTMLElement>(`#${job}-count`).textContent = `${records.length}件`;
   list.replaceChildren();
   if (!records.length) {
     const li = document.createElement('li');
     li.className = 'empty-state';
     const strong = document.createElement('strong');
-    strong.textContent = emptyMessage??(saved.some(item=>item.form.job===job)?(selectedPeriodRecords().some(item=>item.form.job===job)?'条件に一致する明細はありません':'この期間の明細はありません'):'明細が登録されていません');
+    strong.textContent = pendingCount?"削除待ちの明細は上の一覧で確認できます":emptyMessage??(saved.some(item=>item.form.job===job)?(selectedPeriodRecords().some(item=>item.form.job===job)?'条件に一致する明細はありません':'この期間の明細はありません'):'明細が登録されていません');
     li.append(strong);
     list.append(li);
     return;
@@ -447,16 +450,10 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
     remove.type = 'button';
     remove.className = 'btn btn--icon btn--delete';
     remove.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>';
-    const pending=pendingDeletion.has(record.id);
-    remove.setAttribute('aria-label', `${record.fileName} ${pending?'の削除を取り消す':'を削除待ちにする'}`);
+    remove.setAttribute('aria-label', `${record.fileName} を削除待ちにする`);
     remove.title = '削除待ちにする（確定までは暗号化PDF原本はOneDriveに保持）';
     remove.dataset.recordId=String(record.id);
     remove.disabled = deletionBusy() || dashboardLoading || dashboardStale;
-    if(pending){
-      item.classList.add('statement-item--pending');
-      remove.className='btn btn--secondary';remove.textContent='元に戻す';
-      const mark=document.createElement('span');mark.className='pending-deletion-mark';mark.textContent='削除待ち';detail.append(mark);
-    }
     remove.addEventListener('click', () => {
       if (deletionBusy()||dashboardLoading||dashboardStale||!saved.some(r=>r.id===record.id&&recordSignature(r)===recordSignature(record)))return;
       if(!pendingDeletion.size)deletionAuthorization=captureOperationAuthorization();

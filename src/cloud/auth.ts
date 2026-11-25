@@ -229,11 +229,10 @@ function mount():GateUI {
  <div class="payroll-cloud-heading"><span class="payroll-cloud-symbol" aria-hidden="true">&#9670;</span><div>
  <p class="payroll-cloud-eyebrow">SECURE VAULT</p><h2 id="payroll-cloud-title">給与データを開く</h2></div></div>
  <div id="payroll-cloud-checking" class="payroll-cloud-checking" role="status" aria-live="polite" hidden>
- <div class="payroll-cloud-checking__message"><span class="payroll-cloud-spinner" aria-hidden="true"></span><p id="payroll-cloud-check-message">Microsoftアカウントの接続状態を確認しています…</p></div>
- <p class="payroll-cloud-checking__help">確認が完了するまで接続状態を調べています。必要なら手動確認に切り替えられます。</p>
+ <div class="payroll-cloud-checking__message"><span class="payroll-cloud-spinner" aria-hidden="true"></span><p id="payroll-cloud-check-message">Microsoftへの接続状態を確認中…</p></div>
  <div class="payroll-cloud-checking__actions">
- <button id="payroll-cloud-check-retry" type="button" class="payroll-cloud-login">手動で接続を確認</button>
- <button id="payroll-cloud-check-reload" type="button" class="payroll-cloud-reload">ページを再読み込み</button>
+ <button id="payroll-cloud-check-retry" type="button" hidden class="payroll-cloud-login">手動で接続を確認</button>
+ <button id="payroll-cloud-check-reload" type="button" hidden class="payroll-cloud-reload">ページを再読み込み</button>
  </div>
  </div>
  <form id="payroll-cloud-login-form" class="payroll-cloud-form" autocomplete="off" hidden>
@@ -268,7 +267,7 @@ function mount():GateUI {
 }
 function showAccount(ui:GateUI, state:'checking'|'connected'|'disconnected'|'reauth'|'temporary'|'error'):void {
  ui.checking.hidden=state!=='checking';
- if(state==='checking')ui.checkMessage.textContent='Microsoftアカウントの接続状態を確認しています…';
+ if(state==='checking'){ui.checkMessage.textContent='Microsoftへの接続状態を確認中…';ui.retry.hidden=true;ui.reload.hidden=true;}
  ui.loginForm.hidden=state==='connected'||state==='checking';
  ui.unlockForm.hidden=state!=='connected';
  ui.login.disabled=state==='checking'||state==='connected';
@@ -464,8 +463,9 @@ async function beginUnlock():Promise<PayrollVault> {
   const currentCheck=++checkVersion;
   const active=()=>allowCheckUpdate(currentCheck);
   checkSlowTimer=setTimeout(()=>{
-   if(active()&&!ui.checking.hidden)
-    ui.checkMessage.textContent='Microsoftの応答に時間がかかっています。手動確認や再読み込みも選べます。';
+   if(active()&&!ui.checking.hidden){
+    ui.checkMessage.textContent='Microsoftの応答に時間がかかっています。';ui.retry.hidden=false;ui.reload.hidden=false;
+   }
   },7000);
   void getMsal().then(async app=>{
    if(!active())return;

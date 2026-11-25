@@ -38,12 +38,17 @@ function makeStatus(element:HTMLElement){
  }
  let timer: ReturnType<typeof setTimeout>|undefined;
  let version=0;
- const clear=()=>{version++;if(timer!==undefined)clearTimeout(timer);timer=undefined;element.hidden=true;messageNode.textContent='';dismiss.hidden=true;element.removeAttribute('data-state');};
- dismiss.addEventListener('click',clear);clear();
+ let loadingDismissed=false;
+ const clear=()=>{loadingDismissed=false;version++;if(timer!==undefined)clearTimeout(timer);timer=undefined;element.hidden=true;messageNode.textContent='';dismiss.hidden=true;element.removeAttribute('data-state');};
+ dismiss.addEventListener('click',()=>{
+  if(element.dataset.state==='loading'){loadingDismissed=true;element.hidden=true;messageNode.textContent='';dismiss.hidden=true;}
+  else clear();
+ });clear();
  function show(kind:AppStatusKind,message:string,persistent=false) {
+  if(kind==='loading'&&loadingDismissed)return;
   clear();const current=version;
   const sticky=kind==='error'||kind==='partial'||(kind==='warning'&&persistent);
-  element.dataset.state=kind;messageNode.textContent=message;element.hidden=false;dismiss.hidden=!sticky;position();
+  element.dataset.state=kind;messageNode.textContent=message;element.hidden=false;dismiss.hidden=false;position();
   if(kind!=='loading'&&!sticky)timer=setTimeout(()=>{if(current===version)clear();},kind==='warning'?9000:3500);
  }
  return {element,clear,show,info:(message:string)=>show('info',message),warning:(message:string,persistent=false)=>show('warning',message,persistent),partial:(message:string)=>show('partial',message),loading:(message:string)=>show('loading',message),success:(message:string)=>show('success',message),error:(message:string)=>show('error',message)};

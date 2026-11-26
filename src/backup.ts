@@ -94,7 +94,6 @@ const employerCurrentHint=$<HTMLElement>('employer-current-hint');
 const employerDirectoryError=$<HTMLElement>('employer-directory-error');
 const employerForecastSettings=$<HTMLFieldSetElement>('employer-forecast-settings');
 const employerSalaryMethod=$<HTMLSelectElement>('employer-salary-method');
-const employerSalaryHint=$<HTMLElement>('employer-salary-hint');
 const employerBonusHint=$<HTMLElement>('employer-bonus-month-hint');
 const employerBonusMonths=Array.from(employerForecastSettings.querySelectorAll<HTMLInputElement>('input[name="employer-bonus-month"]'));
 const employerDirectorySave=$<HTMLButtonElement>('employer-directory-save');
@@ -186,7 +185,6 @@ function renderBulkPanel():void{
  bulkStatus.textContent='';renderBulkList();
 }
 const roleLabel=(role:string)=>role==='main'?'本業':'副業';
-const salaryDescriptions:Record<string,string>={latest:'最新1件の通常給与を使用します。',median:'直近最大3件の中央値を使用します。',average:'直近最大3件の平均値を使用します。',none:'給与の見込みを加算しません。'};
 function updateEmployerButtons():void{
  const verified=!!employers&&!!bulkAuthorized?.();
  employerDirectoryLoad.disabled=busy;
@@ -201,7 +199,6 @@ function updateEmployerButtons():void{
  employerDirectoryCurrent.disabled=!enabled;
  const role=selectedEmployerRole(),roleValid=role==='main'||role==='side';
  employerForecastSettings.disabled=!enabled||!roleValid;
- employerSalaryHint.textContent=salaryDescriptions[employerSalaryMethod.value]??'';
  const months=employerBonusMonths.filter(input=>input.checked).length;
  employerBonusHint.textContent=months?`年${months}回`:'算出しない';
  const old=draft?.expected.find(x=>x.current&&x.role===role&&x.id!==draft.id);

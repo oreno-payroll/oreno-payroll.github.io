@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ja"><head>
 
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1, interactive-widget=resizes-content"><meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <script src="../frame-guard.js"></script>
 <script src="../theme.js"></script>
@@ -120,7 +120,7 @@
             </div>
           </section>
         </div>
-        <div class="yea-upload-savebar"><span id="yea-upload-progress" role="status" aria-live="polite"></span><button type="button" class="btn btn--primary" id="yea-save-all" disabled>すべて保存</button></div>
+        <div class="yea-upload-savebar"><div data-status-inline><span id="yea-upload-progress" role="status" aria-live="polite"></span></div><button type="button" class="btn btn--primary" id="yea-save-all" disabled>すべて保存</button></div>
         <section id="yea-save-result" class="yea-save-result" role="status" aria-live="polite" hidden></section>
         <section id="yea-save-recovery" class="yea-save-recovery" hidden>
           <p id="yea-save-recovery-status" role="status" aria-live="polite"></p>
@@ -166,11 +166,12 @@
   </div>
  </main></div>
  <dialog id="yea-create-dialog" class="operation-dialog yea-create-dialog" aria-labelledby="yea-create-heading">
-  <div class="yea-manage-head"><h2 id="yea-create-heading">従業員を追加</h2><button type="button" class="btn btn--ghost btn--small" id="yea-create-close">閉じる</button></div>
-  <form id="yea-person-create" class="yea-create-form">
+  <div class="operation-dialog__header"><h2 id="yea-create-heading">従業員を追加</h2><button type="button" class="btn btn--ghost btn--small btn--square operation-dialog__close" id="yea-create-close" aria-label="閉じる">×</button></div>
+  <form id="yea-person-create" class="operation-dialog__form yea-create-form">
+     <div class="operation-dialog__body yea-create-fields">
      <label for="yea-new-name">表示名</label>
      <input class="input" id="yea-new-name" maxlength="80" required autocomplete="off" placeholder="スタッフA">
-     <button type="submit" class="btn btn--primary">登録する</button>
+     </div><div class="operation-dialog__actions"><button type="submit" class="btn btn--primary">登録する</button></div>
     </form>
  </dialog>
 </body></html>

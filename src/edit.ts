@@ -8,7 +8,7 @@ import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 import {preparePdfHandoff} from './pdf/handoff';
 import {readNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
-import {capturePdfHandoffAuthorization,captureOperationAuthorization} from './cloud/auth';
+import {capturePdfHandoffAuthorization,captureOperationAuthorization,cloudVault} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,needsEditConflictReview,PayrollEditConflictError,type ReplacementConflict,type SavedPayrollSummary} from './storage/payrollStore';
 import {emptyOptionalAmounts,reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
@@ -66,11 +66,30 @@ let leavingAfterSave = false;
 
 const employerInput=$<HTMLSelectElement>('employer-id');
 const employerStatus=$<HTMLElement>('employer-status');
+const employerRefresh=$<HTMLButtonElement>('employer-refresh');
+const employerManage=$<HTMLAnchorElement>('employer-manage');
+let employerRefreshing=false;
 let employerDirectory:EmployerEntry[]=[];
 let employerRoleSelectionRequired=false;
 function refreshEmployerSelect(selected?:string):void{
  renderEmployerSelect(employerInput,employerDirectory,getValues().job,selected);
 }
+employerManage.addEventListener('click',event=>{if(saving||deletionPending||deletionNeedsReload||employerRefreshing){event.preventDefault();return;}employerRefresh.hidden=false;});
+employerRefresh.addEventListener('click',()=>{void(async()=>{
+ if(!record||saving||deletionPending||deletionNeedsReload||employerRefreshing)return;
+ const authorized=captureOperationAuthorization(),target=record;
+ employerRefreshing=true;employerRefresh.disabled=true;employerStatus.textContent='勤務先一覧を確認しています…';updateUI();
+ try{
+  const fresh=await (await cloudVault()).readEmployerDirectory();
+  if(!authorized()||record!==target)return;
+  const selected=employerInput.value||undefined;
+  employerDirectory=fresh;
+  if(!employerRoleSelectionRequired&&employerAssignmentAllowed(fresh,getValues().job,selected,target))refreshEmployerSelect(selected);
+  else {refreshEmployerSelect();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='勤務先を選択してください';placeholder.disabled=true;employerInput.prepend(placeholder);employerInput.selectedIndex=0;employerRoleSelectionRequired=true;reviewApproval=null;}
+  employerStatus.textContent='';employerRefresh.hidden=true;
+ }catch{if(authorized()){employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度お試しください。';recordNotification('edit','error');}}
+ finally{employerRefreshing=false;employerRefresh.disabled=false;updateUI();}
+ })();});
 employerInput.addEventListener('change',()=>{employerRoleSelectionRequired=false;reviewApproval=null;clearInlineError(errorView);updateUI();});
 function hideConditional(kind: string): void {
   form.querySelectorAll<HTMLElement>('[data-bonus-only]').forEach(el => { el.hidden = kind !== 'bonus'; });
@@ -135,21 +154,25 @@ function updateUI(): void {
   }
   reviewConfirmation.querySelector('h3')!.textContent=changed?'原本との照合が必要です':'現在の検算警告';
   confirmDiff.closest('label')!.hidden=!changed;
+  status.toggleAttribute('data-routine',!errors.length&&!(changed&&warnings.length&&!hasApproval()));
   status.textContent = errors[0] ?? (changed&&warnings.length&&!hasApproval() ? '確認事項を原本と照合してください。' : changed
     ? '未保存の変更があります。'
     : '');
-  saveButton.disabled = saving || !changed || errors.length > 0 || Boolean(warnings.length && !hasApproval());
-  zeroSaveButton.hidden=deletionPending||deletionNeedsReload;
-  zeroSaveButton.disabled=saving||deletionPending||deletionConfirming||deletionNeedsReload||errors.length>0||!zeroInputTargets(values).length;
-  employerInput.disabled=saving||deletionPending||deletionNeedsReload;
+  saveButton.disabled = saving || employerRefreshing || !changed || errors.length > 0 || Boolean(warnings.length && !hasApproval());
+  const zeroCount=zeroInputTargets(values).length;
+  zeroSaveButton.hidden=deletionPending||deletionNeedsReload||zeroCount===0;
+  zeroSaveButton.textContent=`未入力${zeroCount}項目を0円として保存`;
+  zeroSaveButton.disabled=saving||employerRefreshing||deletionPending||deletionConfirming||deletionNeedsReload||errors.length>0||zeroCount===0;
+  employerInput.disabled=saving||employerRefreshing||deletionPending||deletionNeedsReload;
   if(deletionPending||deletionNeedsReload){
     reviewConfirmation.hidden=true;currentReview.hidden=true;
+    status.removeAttribute('data-routine');
     status.textContent=deletionNeedsReload?'最新データを確認するため画面を開き直してください。':'削除待ち。確定するまで保存済みの明細は変更しません。';
     saveButton.disabled=saving||deletionConfirming||deletionNeedsReload||!deletionAuthorization?.();
   }
   currentReview.hidden=deletionPending||deletionNeedsReload;
-  deleteButton.disabled=saving||deletionConfirming||deletionNeedsReload;
-  diagnosticButton.disabled=saving||deletionPending||deletionConfirming||deletionNeedsReload;
+  deleteButton.disabled=saving||employerRefreshing||deletionConfirming||deletionNeedsReload;
+  diagnosticButton.disabled=saving||employerRefreshing||deletionPending||deletionConfirming||deletionNeedsReload;
 }
 diagnosticButton.addEventListener('click',()=>{
   if(!record||diagnosticButton.disabled)return;
@@ -157,8 +180,8 @@ diagnosticButton.addEventListener('click',()=>{
   openRecordDiagnostic(()=>JSON.stringify({...target,pdf:{size:target.pdfSize,type:target.pdfType,loaded:false}},null,2),()=>session()&&unlocked()&&record===target&&!diagnosticButton.disabled);
 });
 function showError(message: string): void {
-  appStatus.error(message);
-  showInlineError(errorView, message);
+  if(editor.hidden){appStatus.clear();showInlineError(errorView,message);recordNotification('edit','error');}
+  else {clearInlineError(errorView);appStatus.error(message);}
 }
 form.addEventListener('input', event => {
   const el = event.target;
@@ -198,18 +221,22 @@ function saveWithOptionalZeros():void {
   reviewApproval=null;
   clearInlineError(errorView);
   updateUI();
+  status.removeAttribute('data-routine');
   if(!saveButton.disabled)saveButton.click();
-  else if(!reviewConfirmation.hidden&&!confirmDiff.disabled)confirmDiff.focus();
+  else if(!reviewConfirmation.hidden&&!confirmDiff.disabled){
+    status.textContent=`${targets.length}項目を0円にしました。まだ保存されていません。原本との照合後に「変更を保存」を押してください。`;
+    confirmDiff.focus();
+  }else status.textContent=`${targets.length}項目を0円にしました。まだ保存されていません。入力内容を確認してください。`;
 }
 zeroSaveButton.addEventListener('click',saveWithOptionalZeros);
 saveButton.addEventListener('click', async () => {
   if(deletionPending){await commitPendingDeletion();return;}
-  if (!record || saving || deletionNeedsReload || !hasUnsavedChanges()) return;
+  if (!record || saving || employerRefreshing || deletionNeedsReload || !hasUnsavedChanges()) return;
   const employerId=employerInput.value.trim()||undefined;
   const formValues = applicablePayrollForm(getValues());
-  if(employerRoleSelectionRequired||!validEmployerId(employerId)||!employerAssignmentAllowed(employerDirectory,formValues.job,employerId,record)){showError('勤務区分に対応する勤務先（または未設定）を選び直してください。');return;}
+  if(employerRoleSelectionRequired||!validEmployerId(employerId)||!employerAssignmentAllowed(employerDirectory,formValues.job,employerId,record)){updateUI();return;}
   const checked = validatePayrollForm(formValues);
-  if (checked.errors.length) { showError(checked.errors[0]); return; }
+  if (checked.errors.length) { updateUI(); return; }
   if (checked.warnings.length && !hasApproval()) return;
   const operationEpoch=authEpoch(),authorized=captureOperationAuthorization();
   const perf=beginPerfOperation('payroll-edit');
@@ -294,12 +321,12 @@ saveButton.addEventListener('click', async () => {
       if(operationEpoch===authEpoch())rememberNavigationNotice({operation:error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial'},operationEpoch,true);
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }
-    showError(`保存処理を完了できませんでした。再読込して最新の状態を確認してください。\n${detail}`);
+    showError(`保存処理を完了できませんでした。入力内容は保持しています。再読込して最新の状態を確認してください。\n${detail}`);
     updateUI();
   }finally{perf.finish(completed);}
 });
 deleteButton.addEventListener('click',()=>{
-  if(!record||saving||deletionConfirming||deletionNeedsReload)return;
+  if(!record||saving||employerRefreshing||deletionConfirming||deletionNeedsReload)return;
   if(!deletionPending)deletionAuthorization=captureOperationAuthorization();
   if(!deletionAuthorization?.())return;
   deletionPending=!deletionPending;updateUI();

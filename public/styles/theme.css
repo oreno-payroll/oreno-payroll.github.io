@@ -157,7 +157,6 @@ html[data-theme="dark"] .review-panel .field--auto .field__label::after { color:
 html[data-theme="dark"] .review-panel .field--manual .field__label::after { color:var(--color-muted); }
 html[data-theme="dark"] .diagnostic-dialog,
 html[data-theme="dark"] .yea-create-dialog { background:var(--color-surface); color:var(--color-text); }
-html[data-theme="dark"] .diagnostic-dialog__textarea { background:#101d2e; color:var(--color-text); border-color:var(--color-border-strong); }
 
 /* Settings, backups and encryption/authentication gate. */
 html[data-theme="dark"] .vault-step,

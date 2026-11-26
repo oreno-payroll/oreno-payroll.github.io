@@ -931,16 +931,25 @@ export class PayrollVault {
   }
   const added:CloudRecord[]=[];
   const snapshot=(items:readonly CloudRecord[])=>canonicalJson([...items].sort((a,b)=>a.id-b.id));
+  let baseline=expectedExisting;
   const checkBaseline=(current:readonly CloudRecord[])=>{
-   if(!authorized()||(expectedExisting&&snapshot(current)!==snapshot([...expectedExisting,...added])))
+   if(!authorized()||(baseline&&snapshot(current)!==snapshot([...baseline,...added])))
     throw new Error('保存前の照合後に明細または認証状態が変更されました。再検査してください。');
   };
   const preflightBaseline=expectedExisting?await this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true}):undefined;
-  if(preflightBaseline)checkBaseline(preflightBaseline);
+  if(preflightBaseline&&!uploadPreflight)checkBaseline(preflightBaseline);
   // Ordinary upload preflight runs under the same lock as the writes, so a
   // second client cannot leave another detached copy between the two stages.
   const reusable=new Map<string,DetachedOriginal>();
   const evidence=await uploadPreflight?.(preflightBaseline);
+  // The ordinary caller revalidates the duplicate/skip decision against the
+  // locked inventory, including legacy hashes. Only then adopt unrelated changes.
+  if(preflightBaseline&&uploadPreflight){
+   baseline=preflightBaseline;
+   checkBaseline(preflightBaseline);
+   if(records.some(candidate=>preflightBaseline.some(r=>r.id===candidate.id||r.fileHash===candidate.fileHash||payrollPeriodsConflict(r,candidate))))
+    throw new Error('保存前の照合後に明細が変更されました。再検査してください。');
+  }
   if(evidence?.matches.length){
    const inventory=await this.inspectDetachedOriginals(true,evidence.scope);
    if(!same(inventory,evidence.inventory))throw new Error('原本一覧か年別明細が更新されました。再検査してください。');
@@ -985,13 +994,13 @@ export class PayrollVault {
    // All workers have settled. No annual write has begun; verified originals
    // remain detached. A rejected mutation is not a failed readback or lost reply.
    // The Graph checkpoint itself refuses to advance while any write is uncertain.
-   if(state&&originalsDone>0&&onlyRejectedWrites&&authorized())this.graph.markUploadCheckpoint();
+   if(state&&originalsDone>0&&onlyRejectedWrites&&authorized())await this.graph.markUploadCheckpoint();
    if(state&&originalsDone===0&&firstFailure instanceof Error)throw firstFailure;
    const msg=firstFailure instanceof Error?firstFailure.message:String(firstFailure);
    throw new Error(`PDF原本 ${originalsDone}/${records.length}件の保存・照合後に失敗しました。解析明細は未確定ですが、暗号化原本が一部OneDriveに残っている可能性があります。原因: ${msg}`,{cause:firstFailure});
   }
 
-  if(state)this.graph.markUploadCheckpoint();
+  if(state)await this.graph.markUploadCheckpoint();
   // 原本の全件検証後、最新の索引と全年度ETagを確認して重複・容量を検証。
   // 変更のない年度だけ復号済み本文を再利用。直後の初回年度保存と照合を共有する。
   // 保存本体は commit() のライブ索引、最新年度本文、条件付きETag書込で保護する。
@@ -1031,14 +1040,14 @@ export class PayrollVault {
      const doc=copy(this.shards.get(year)??emptyDoc());
      doc.records.push(...items);
      await this.commit(year,doc,remote=>{
-      if(!authorized()||(expectedExisting&&snapshot(remote.records)!==snapshot([...expectedExisting,...added].filter(r=>shardYear(r)===year))))
+      if(!authorized()||(baseline&&snapshot(remote.records)!==snapshot([...baseline,...added].filter(r=>shardYear(r)===year))))
        throw new Error('保存前の照合後に年度明細が変更されました。再検査してください。');
       for(const rec of items)if(remote.records.some(r=>r.id===rec.id)||collides(rec,remote.records))
        throw new Error(`${year}年度に別端末が同じ給与を保存しました。重複登録を防ぐため中止しました。`);
       this.assertRecordLimits([...this.records().filter(r=>!remote.records.some(x=>x.id===r.id)),...remote.records,...items]);
      });
     committed+=items.length;added.push(...items);
-    if(state)this.graph.markUploadCheckpoint();
+    if(state)await this.graph.markUploadCheckpoint();
     const after=await verifiedBatchRefresh();
     checkBaseline(after);
     current=after;
@@ -1525,7 +1534,7 @@ export class PayrollVault {
   // PDF原本は事故時の復元と監査のためOneDriveに保持。
   },state);
  }
- /** Capture the actual original identities before the approved metadata removal. */
+ /** Backup replacement preflight only: verify originals before replacing the restored inventory. */
  async captureDeletionOriginals(records:readonly CloudRecord[]):Promise<Map<string,DetachedOriginal>> {
   // Capture the exact encrypted original before deleting any metadata. Never
   // auto-trash unrelated orphans (including interrupted uploads).
@@ -1589,7 +1598,7 @@ export class PayrollVault {
     validateDoc(doc);
     attempted=true;
     await this.commit(year,doc,remote=>{if(!authorized()||canonicalJson(remote)!==before)throw new Error('年度書き込み直前に明細が変更されました。');},checkIndex);
-    this.graph.markUploadCheckpoint();
+    await this.graph.markUploadCheckpoint();
     baseline=baseline.map(r=>next.find(x=>x.id===r.id)??r);
     await checkState();
    }
@@ -1603,7 +1612,7 @@ export class PayrollVault {
   }
   },state);
  }
- /** Confirmed personal deletion batch. Preserve verified originals after income sync.
+ /** Confirmed personal deletion batch. Preserve originals without fetching them.
   * Each annual write is ETag-protected; separate years are not an atomic transaction. */
  async removeBatch(targets:readonly {id:number;matches:(current:CloudRecord)=>boolean}[]):Promise<void> {
   const state:PayrollWriteState={attempted:false,uncertain:false,completed:false,lock:'none'};
@@ -1620,7 +1629,6 @@ export class PayrollVault {
    const {year,record}=located[0],list=grouped.get(year)??[];
    list.push(copy(record));grouped.set(year,list);paymentYears.add(incomeYear(record));
   }
-  await this.captureDeletionOriginals([...grouped.values()].flat());
   const ids=new Set(targets.map(t=>t.id));
   const completedYears=new Set<string>();
   try{

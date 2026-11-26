@@ -45,9 +45,9 @@ assert.ok(personalSaveCard.indexOf('id="export-summary"')<personalSaveCard.index
 assert.match(css,/\.settings-page \.backup-save-button\s*\{\s*width:\s*100%;\s*white-space:\s*normal;/,'both save buttons must share full-width styling');
 assert.match(html,/<section class="card settings-panel backup-cloud-settings"/);
 assert.match(html,/<section class="card settings-panel backup-key-change"/);
-const withoutRestorePreview=html.replace(/<details id="ye-restore-people"[\s\S]*?<\/details>/,'').replace(/<details class="backup-cloud-settings__form"[\s\S]*?<\/details>/,'');
+const withoutRestorePreview=html.replace(/<details class="settings-recovery-details"[\s\S]*?<\/details>/g,'').replace(/<details id="ye-restore-people"[\s\S]*?<\/details>/,'').replace(/<details class="backup-cloud-settings__form"[\s\S]*?<\/details>/,'');
 assert.match(html,/<details class="backup-cloud-settings__form" id="backup-cloud-advanced" open>/);
-assert.doesNotMatch(withoutRestorePreview,/<details\b|<summary\b/,'settings sections must not be accordions; only restore-preview list may collapse');
+assert.doesNotMatch(withoutRestorePreview,/<details\b|<summary\b/,'normal settings remain exposed; exceptional recovery details and restore preview may collapse');
 assert.match(html,/id="ye-restore-people"/,'large restore preview can collapse');
 for(const [id,title] of [['settings-backup-title','本人のバックアップ'],['settings-yearend-backup-title','年末調整のバックアップ'],['settings-auth-title','Microsoft接続・認証'],['settings-details-title','メンテナンス']]){
  assert.ok(html.includes(`<h2 id="${id}">${title}</h2>`));
@@ -65,6 +65,7 @@ assert.ok(authSection.indexOf('id="backup-cloud-title"')<authSection.indexOf('id
 assert.doesNotMatch(authSection,/write-lock-recovery-title/);
 assert.match(maintenance,/<section class="settings-details-column settings-write-lock-recovery" aria-labelledby="write-lock-recovery-title">/);
 assert.equal((html.match(/id="write-lock-recovery-title"/g)??[]).length,1);
+assert.equal((maintenance.match(/<details class="settings-recovery-details">/g)??[]).length,2);
 assert.match(maintenance,/確認済みの場合のみ[\s\S]*?索引・年度・PDF原本は削除しないでください。/);
 assert.match(css,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,1fr\)/);
 assert.match(css,/\.settings-page \.settings-details-column \+ \.settings-details-column\s*\{\s*border-top:/);

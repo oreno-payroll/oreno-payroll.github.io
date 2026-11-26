@@ -137,22 +137,17 @@
 
 /* PDF診断：共通モーダルと同じ見た目、1つの表示モードとコピー操作。 */
 .upload-page .selected-file__actions { display:flex; }
-.upload-page #diagnostic-button { width:var(--control-height-small); height:var(--control-height-small); padding:0; flex:none; color:var(--color-muted); }
-.upload-page #diagnostic-button:not(:disabled):hover { color:var(--color-primary); background:var(--color-primary-soft); }
+.upload-page #diagnostic-button { flex:none; }
 .diagnostic-dialog { width:min(680px,calc(100% - 32px)); }
-.diagnostic-dialog__header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px; }
-.diagnostic-dialog__header h2 { margin:0; }
-.diagnostic-dialog__close { flex:none; min-width:36px; min-height:36px; padding:0; font-size:22px; }
-.diagnostic-dialog__description,.diagnostic-dialog__state { color:var(--color-muted); font-size:13px; line-height:1.6; margin:0; overflow-wrap:anywhere; }
+
+
+
+.diagnostic-dialog__description { color:var(--color-muted); font-size:13px; line-height:1.6; margin:0; overflow-wrap:anywhere; }
 .diagnostic-dialog__modes { border:0; min-width:0; margin:12px 0 8px; padding:0; }
 .diagnostic-dialog__modes legend { font-size:12px; color:var(--color-muted); margin-bottom:5px; }
-.diagnostic-dialog__modes .segmented-choice { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
 .diagnostic-dialog__modes .segmented-choice span { white-space:normal; text-align:center; overflow-wrap:anywhere; }
 .diagnostic-dialog__description[data-private="true"] { color:var(--state-warning-text); }
-.diagnostic-dialog__textarea { display:block; width:100%; height:min(40dvh,320px); min-height:96px; margin:10px 0 0; padding:12px; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:var(--color-surface); color:var(--color-text); font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12px; line-height:1.6; resize:none; overflow-wrap:anywhere; }
-.diagnostic-dialog__textarea:focus-visible { outline:2px solid var(--color-primary); outline-offset:1px; }
-.diagnostic-dialog__state:not(:empty) { margin-top:8px; }
-.diagnostic-dialog__actions { margin-top:12px; }
+
 @media(max-width:640px) { .upload-page .selected-file__actions #open-pdf { flex:1; min-width:0; } }
 
 /* 取り込みファイル: カードのクリック領域全体が明細選択。削除は独立したボタン */
@@ -353,8 +348,8 @@
   .upload-page .file-list__text { flex: 1; overflow: hidden; }
 }
 @media (max-width: 640px) {
-  .diagnostic-dialog__actions { flex-wrap: wrap; }
-  .diagnostic-dialog__actions .btn { min-width: 0; width: 100%; }
+
+
 }
 
 /* OneDrive save activity: show honest per-file byte progress and elapsed cloud wait. */
@@ -548,3 +543,16 @@
 .review-confirmation__check[hidden]{display:none!important}
 
 #employer-status:empty { display:none; }
+
+.save-bar__status > :empty{display:none}
+
+.employer-identity__tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:5px;font-size:12px}
+.employer-identity__tools a{color:var(--color-primary);text-decoration:underline;text-underline-offset:2px}
+.employer-identity__help:empty{display:none}
+
+/* A space-constrained notice is part of the save area, so retain natural
+ * scrolling instead of clipping the workspace in a fixed-height layout. */
+body.payroll-upload-viewport:has(.save-bar .app-status[data-inline]:not([hidden])){height:auto;min-height:100dvh;overflow:visible}
+body.payroll-upload-viewport:has(.save-bar .app-status[data-inline]:not([hidden])) > .app-shell{height:auto;min-height:100dvh}
+.upload-page:has(.save-bar .app-status[data-inline]:not([hidden])){height:auto;overflow:visible}
+.upload-page:has(.save-bar .app-status[data-inline]:not([hidden])) .workspace:not(.is-empty){min-height:400px;flex:none}

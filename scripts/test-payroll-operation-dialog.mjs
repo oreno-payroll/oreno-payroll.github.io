@@ -43,7 +43,7 @@ assert.equal(await confirmOperation(req,()=>false),false);assert.equal(dialog(),
 p=confirmOperation(req,yes);dismissOperationDialog();assert.equal(await p,false);assert.equal(dialog(),undefined);
 p=confirmOperation(req,yes);window.dispatchEvent(new Event('pagehide'));assert.equal(await p,false);
 showFails=true;assert.equal(await confirmOperation(req,yes),false);assert.equal(dialog(),undefined);showFails=false;
-p=showOperationMessage({...req,acceptLabel:'閉じる'},yes);assert.equal(focused,button('閉じる'));assert.equal(button('キャンセル'),undefined);button('閉じる').click();assert.equal(await p,true);
+p=showOperationMessage({...req,acceptLabel:'閉じる'},yes);assert.equal(focused,button('×'));assert.equal(button('キャンセル'),undefined);button('×').click();assert.equal(await p,true);
 // Only local statement routes can become links; an invalidated dialog cannot navigate.
 let linkValid=true;
 p=showOperationMessage({...req,acceptLabel:'閉じる',links:[{label:'<synthetic>',href:'./edit/index.html#id=3&mode=fiscal&year=2026&hintYear=2026'},{label:'blocked',href:'javascript:void(0)'}]},()=>linkValid);
@@ -57,7 +57,7 @@ const structured=find(dialog(),n=>n.tag==='ul');assert.equal(structured.children
 const structuredLink=structured.children[0].children[0];assert.equal(structuredLink.tag,'a');assert.equal(structuredLink.href,'./edit/index.html#id=3&mode=calendar&year=2026&hintYear=2025');
 assert.equal(find(structuredLink,n=>n.className==='operation-dialog__link-label').textContent,'<synthetic>.pdf');
 assert.equal(find(structuredLink,n=>n.className==='operation-dialog__link-description').textContent,'2026年2月 · 本業 · <synthetic> · 賞与');
-assert.deepEqual(structured.parent.children.map(n=>n.tag),['p','ul','p']);button('閉じる').click();assert.equal(await p,true);
+assert.deepEqual(structured.parent.children.map(n=>n.tag),['p','ul','p']);button('×').click();assert.equal(await p,true);
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 for(const file of ['src/main.ts','src/edit.ts','src/upload.ts'])assert.doesNotMatch(read(file),/window\.(?:confirm|alert)\(/);
 assert.match(read('src/main.ts'),/deletionMatches\(\)&&JSON\.stringify\(targets\)===JSON\.stringify\(pendingDeletion\.snapshot\(\)\)/);

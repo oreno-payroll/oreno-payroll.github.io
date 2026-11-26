@@ -3,7 +3,7 @@
 <head>
 
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content"><meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <script src="../frame-guard.js"></script>
 <script src="../theme.js"></script>
@@ -142,6 +142,7 @@
                       <select class="input" id="employer-id" disabled><option value="">未設定</option></select>
                       <button class="btn btn--secondary btn--small" id="employer-load" type="button" disabled>保管庫を開く</button>
                     </div>
+                    <div class="employer-identity__tools"><a href="../backup/index.html#employers" target="_blank" rel="noopener noreferrer" id="employer-manage">勤務先管理（別タブ）</a></div>
                     <small class="employer-identity__help" id="employer-status" role="status" aria-live="polite"></small>
                   </div>
                   <label class="field" data-salary-only><span class="field__label">出勤日数</span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
@@ -191,11 +192,11 @@
         <div class="zero-approval" id="zero-approval" hidden>
           <label class="zero-approval__choice" for="zero-missing-amounts">
             <input id="zero-missing-amounts" type="checkbox" autocomplete="off">
-            <span>未取得の金額を0円として登録</span>
+            <span>未入力の金額を0円として保存</span>
           </label>
           <div id="zero-approval-count" class="zero-approval__count" aria-live="polite"></div>
         </div>
-        <div class="save-bar__status">
+        <div class="save-bar__status" data-status-inline>
           <strong id="save-status" role="status" aria-live="polite" hidden></strong>
           <div id="save-feedback" class="save-feedback" hidden aria-label="OneDriveへの保存状況">
             <div class="save-feedback__top"><span id="save-stage" role="status" aria-live="polite">準備中</span><span id="save-elapsed">経過 0:00</span></div>
@@ -225,10 +226,11 @@
     </main>
   </div>
   <dialog id="diagnostic-dialog" class="operation-dialog diagnostic-dialog" aria-labelledby="diagnostic-title" aria-describedby="diagnostic-note">
-    <div class="diagnostic-dialog__header">
+    <div class="operation-dialog__header">
       <h2 id="diagnostic-title">PDFの詳細診断</h2>
-      <button id="diagnostic-close" class="btn btn--ghost btn--small btn--square diagnostic-dialog__close" type="button" aria-label="閉じる">×</button>
+      <button id="diagnostic-close" class="btn btn--ghost btn--small btn--square operation-dialog__close" type="button" aria-label="閉じる">×</button>
     </div>
+    <div class="operation-dialog__body">
     <p id="diagnostic-note" class="diagnostic-dialog__description">PDFから読み取った文字と位置を確認できます。読み取りの不具合を調べるための情報です。</p>
     <fieldset class="diagnostic-dialog__modes" id="diagnostic-modes" disabled>
       <legend>表示する内容</legend>
@@ -238,9 +240,10 @@
       </div>
     </fieldset>
     <p id="diagnostic-mode-note" class="diagnostic-dialog__description">文字をすべて伏せ、位置だけを残します。</p>
-    <textarea id="diagnostic-shared" class="diagnostic-dialog__textarea" rows="12" spellcheck="false" readonly aria-label="診断データ" placeholder="診断結果を作成しています…"></textarea>
-    <p id="diagnostic-state" class="diagnostic-dialog__state" role="status" aria-live="polite"></p>
-    <div class="operation-dialog__actions diagnostic-dialog__actions">
+    <pre id="diagnostic-shared" class="operation-dialog__data" tabindex="0" aria-label="診断データ" hidden></pre>
+    </div>
+    <div class="operation-dialog__actions">
+      <p id="diagnostic-state" class="operation-dialog__status" role="status" aria-live="polite"></p>
       <button id="diagnostic-copy" class="btn btn--primary" type="button" disabled>共有用データをコピー</button>
     </div>
   </dialog>

@@ -30,7 +30,7 @@
       <a id="original-pdf" class="btn btn--soft btn--small" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>原本を見る</a>
       <a id="download-pdf" class="btn btn--soft btn--small btn--square" title="原本PDFをダウンロード" aria-label="原本PDFをダウンロード"><svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg></a>
       <button id="edit-delete" type="button" class="btn btn--danger-outline btn--small" title="削除待ちにする（確定まではPDF原本はOneDriveに保持）" aria-label="明細を削除待ちにする"><svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>削除</button>
-      <button class="btn btn--small btn--square" id="record-diagnostic-open" type="button" title="詳細診断" aria-label="詳細診断" disabled><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></button>
+      <button class="btn btn--small btn--square btn--ghost" id="record-diagnostic-open" type="button" title="詳細診断" aria-label="詳細診断" disabled><svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></button>
     </div>
   </div>
 
@@ -57,7 +57,7 @@
                     <div class="employer-identity__row">
                       <select class="input" id="employer-id" disabled><option value="">未設定</option></select>
                     </div>
-                    <small class="employer-identity__help">勤務先の追加・変更は設定から行えます。</small>
+                    <div class="employer-identity__tools"><a href="../backup/index.html#employers" target="_blank" rel="noopener noreferrer" id="employer-manage">勤務先管理（別タブ）</a><button class="btn btn--secondary btn--small" id="employer-refresh" type="button" hidden>勤務先一覧を更新</button></div>
                     <small class="employer-identity__help" id="employer-status" role="status" aria-live="polite"></small>
                   </div>
                   <label class="field" data-salary-only><span class="field__label">出勤日数</span><span class="unit-field"><input class="input" name="workDays" type="number" min="0" step="any" inputmode="decimal" placeholder="未入力"><span>日</span></span></label>
@@ -101,6 +101,6 @@
 <details id="edit-review-history" class="review-history" hidden><summary>最後に記録した確認内容</summary><p>過去の確認記録です。現在の検算結果や今回の保存承認とは異なります。</p><p data-review-history-date></p><ul></ul></details>
 </section>
 </div>
-<div class="vault-bottom" data-status-dock><div class="vault-bottom__status"><p id="edit-status" role="status" aria-live="polite"></p></div><div class="edit-save-actions"><button class="btn btn--secondary" id="edit-save-zero" type="button" title="未入力の任意金額を0円にして保存" disabled>未入力を0にして保存</button><button class="btn btn--primary" id="edit-save" type="button">変更を保存</button></div></div>
+<div class="vault-bottom"><div class="vault-bottom__status" data-status-inline="always"><p id="edit-status" role="status" aria-live="polite"></p></div><div class="edit-save-actions"><button class="btn btn--secondary" id="edit-save-zero" type="button" title="未入力の任意金額を0円として保存" hidden disabled>未入力を0円として保存</button><button class="btn btn--primary" id="edit-save" type="button">変更を保存</button></div></div>
 </div>
 </main></div></body></html>

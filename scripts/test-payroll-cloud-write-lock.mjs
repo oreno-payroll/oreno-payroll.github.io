@@ -4,13 +4,30 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
-const receipts=new Map();
+const receipts=new Map(),checkpoints=new Map();
+let checkpointDeleteBlocked=false,checkpointDeleteGate=null;
+// Simulated browser-wide lock manager. A terminated context drops its guard
+// without running JS cleanup, but the remote lock and receipt survive.
+const held=new Map();
+const navigator={locks:{async request(name,options,callback){
+ assert.equal(options.ifAvailable,true);
+ if(held.has(name))return callback(null);
+ const guard={name};held.set(name,guard);
+ try{return await callback(guard);}finally{if(held.get(name)===guard)held.delete(name);}
+}}};
 const localStorage={getItem:k=>receipts.get(k)??null,setItem:(k,v)=>receipts.set(k,v),removeItem:k=>receipts.delete(k)};
 const src=readFileSync(new URL('../src/cloud/graph.ts',import.meta.url),'utf8');
 const {PayrollGraph,PAYROLL_WRITE_LOCK_NAME:name}=runInNewContext(stripTypeScriptTypes(src.replace(/^import[^\n]*\n/gm,'').replace(/\bexport\s+/g,''),{mode:'transform'})+'\n({PayrollGraph,PAYROLL_WRITE_LOCK_NAME})',{
- URL,Response,Request,Headers,TextEncoder,TextDecoder,Uint8Array,performance,crypto:webcrypto,setTimeout,clearTimeout,localStorage,
+ URL,Response,Request,Headers,TextEncoder,TextDecoder,Uint8Array,performance,crypto:webcrypto,setTimeout,clearTimeout,localStorage,navigator,DOMException,
  observeGraphTransfer:()=>{},observeGraphRetry:()=>{},MicrosoftSignInRequiredError:class extends Error{},MicrosoftTemporaryError:class extends Error{},
 });
+PayrollGraph.prototype.checkpointStorage=async function(receipt,action){
+ if(action==='read')return checkpoints.has(receipt);
+ if(action==='put'){checkpoints.set(receipt,1);return true;}
+ if(checkpointDeleteGate)await checkpointDeleteGate.promise;
+ if(checkpointDeleteBlocked)throw Error('synthetic durable transaction failure');
+ checkpoints.delete(receipt);return true;
+};
 function fixture(){
  const state={lock:null,serial:0,writes:0,lostCreate:false,delayedCreate:false,createStatus:201,lostWrite:false,lostRelease:false,blockedRelease:false,events:[],content:null,contentMode:"ok",rejectStatus:0,lockReject:0,sessionReject:0,chunkReject:0,contentReadBlocked:false};
  const meta=()=>({name,id:state.lock.id,eTag:state.lock.etag,size:state.lock.text.length,'@microsoft.graph.downloadUrl':'https://storage.example.test/'+state.lock.id});
@@ -154,7 +171,7 @@ for(const completed of [false,true]){
 for(const laterWrite of ['none','settled','unknown']){
  const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
  await assert.rejects(a.withWriteLock(async()=>{
-  await f.write(a);a.markUploadCheckpoint();
+  await f.write(a);await a.markUploadCheckpoint();
   if(laterWrite!=='none'){f.state.lostWrite=laterWrite==='unknown';await f.write(a);}
   throw Error('next stage failed');
  },state));
@@ -213,7 +230,7 @@ for(const kind of ['direct','session','chunk']){
 }
 {
  const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
- await assert.rejects(a.withWriteLock(async()=>{await f.write(a);a.markUploadCheckpoint();f.state.rejectStatus=429;await f.write(a);},state),/429/);
+ await assert.rejects(a.withWriteLock(async()=>{await f.write(a);await a.markUploadCheckpoint();f.state.rejectStatus=429;await f.write(a);},state),/429/);
  assert.equal(state.uncertain,false);assert.equal(f.state.lock,null);assert.equal(f.state.writes,1);
 }
 console.log('PASS P01: explicit Graph/fragment 429 rejection and verified checkpoint release');
@@ -240,6 +257,65 @@ console.log('PASS P01: explicit Graph/fragment 429 rejection and verified checkp
  await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);assert.ok(f.state.lock);
 }
 console.log('PASS P01: reload recovers only a fingerprint of a settled exact owner');
+// Crash before the first write, or at a verified upload checkpoint. While the
+// original execution is active a competing tab cannot recover it. After
+// termination a fresh instance can recover, without replaying any old writes.
+for(const checkpoint of [false,true]){
+ receipts.clear();checkpoints.clear();held.clear();const f=fixture(),a=f.graph(),b=f.graph(),entered=deferred();
+ void a.withWriteLock(async()=>{
+  if(checkpoint){await f.write(a);await a.markUploadCheckpoint();}
+  entered.resolve();await new Promise(()=>{});
+ });
+ await entered.promise;
+ const [key]=checkpoints.keys();assert.match(key,/^payroll-settled-lock-v1:[a-f0-9]{64}$/);
+ assert.equal(checkpoints.get(key),1);assert.equal(held.has(key),true);
+ await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);
+ assert.equal(f.state.writes,Number(checkpoint));
+ // Synthetic browser termination: no JS continuation of the old operation.
+ held.delete(key);
+ await b.withWriteLock(()=>f.write(b));
+ assert.equal(f.state.writes,Number(checkpoint)+1);assert.equal(f.state.lock,null);assert.equal(receipts.size,0);assert.equal(checkpoints.size,0);
+}
+{
+ // A new mutation must revoke the checkpoint *before* it is sent, even if the
+ // HTTP reply never returns. No elapsed-time heuristic can make it recoverable.
+ receipts.clear();checkpoints.clear();held.clear();const f=fixture(),a=f.graph(),b=f.graph();
+ f.state.lostWrite=true;
+ await assert.rejects(a.withWriteLock(async()=>{assert.equal(checkpoints.size,1);await f.write(a);}));
+ assert.equal(receipts.size,0);assert.equal(checkpoints.size,0);assert.ok(f.state.lock);assert.equal(f.state.writes,1);
+ await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);
+ assert.equal(f.state.writes,1);
+}
+{
+ // An unremovable recovery marker must never coexist with a dispatched write.
+ receipts.clear();checkpoints.clear();held.clear();const f=fixture(),a=f.graph();
+ checkpointDeleteBlocked=true;
+ try{await assert.rejects(a.withWriteLock(()=>f.write(a)),/復旧情報を更新/);assert.equal(f.state.writes,0);}
+ finally{checkpointDeleteBlocked=false;receipts.clear();checkpoints.clear();}
+}
+{
+ // An altered remote identity or another browser without the matching marker
+ // is not recoverable, even if there is no active local execution.
+ receipts.clear();checkpoints.clear();held.clear();const f=fixture(),a=f.graph(),b=f.graph(),entered=deferred();
+ void a.withWriteLock(async()=>{entered.resolve();await new Promise(()=>{});});await entered.promise;
+ held.clear();const owner=f.state.lock;f.state.lock={...owner,etag:'other-etag'};
+ await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);assert.equal(f.state.writes,0);assert.equal(f.state.lock.etag,'other-etag');
+ f.state.lock=owner;receipts.clear();checkpoints.clear();
+ await assert.rejects(b.withWriteLock(()=>f.write(b)),/他の端末/);assert.equal(f.state.writes,0);
+}
+{
+ // Neither parallel request may reach the transport until the revocation
+ // transaction completes. The second request must share the first deletion.
+ receipts.clear();checkpoints.clear();held.clear();const f=fixture(),a=f.graph(),entered=deferred(),gate=deferred();
+ const pending=a.withWriteLock(async()=>{
+  checkpointDeleteGate=gate;
+  const writes=Promise.all([f.write(a),f.write(a)]);
+  entered.resolve();await writes;
+ });
+ await entered.promise;await new Promise(r=>setTimeout(r,5));assert.equal(f.state.writes,0);assert.equal(checkpoints.size,1);
+ gate.resolve();await pending;checkpointDeleteGate=null;assert.equal(f.state.writes,2);assert.equal(checkpoints.size,0);
+}
+console.log('PASS audit03: browser restart checkpoints, active-owner refusal, durable revocation before parallel dispatch, storage failure, exact identity');
 for(const prior of [null,{id:'data',etag:'before'}]){
  receipts.clear();const f=fixture(),a=f.graph(),state={attempted:false,uncertain:false,completed:false,lock:'none'};
  f.state.contentMode='lost';

@@ -10,6 +10,8 @@
 !/.gitignore
 !/.gitleaksignore
 !/README.md
+!/CHANGELOG.md
+!/AGENTS.md
 !/package.json
 !/package-lock.json
 !/tsconfig.json
@@ -31,6 +33,7 @@
 !/public/**/
 !/public/**/*.html
 !/public/**/*.css
+!/public/release-notes.json
 
 # Only these two reviewed favicon assets are allowed; all other images remain ignored.
 !/public/favicon.ico

@@ -62,3 +62,23 @@ await assert.rejects(readBackup(withManifest({...manifest,employers:[a,a]})),/�
 await assert.rejects(readBackup(withManifest({...manifest,employers:undefined})),/勤務先/);
 await assert.rejects(readBackup(withManifest({...manifest,schemaVersion:1})),/勤務先/);
 console.log('PASS: encrypted employer directory, stable identity, stale/failed writes, safe restore, legacy and v2 backup metadata, Finance ID-only export');
+
+// New settings travel only inside encrypted employer metadata; live entries win during additive restore.
+const beforeCustom=await other.readEmployerDirectory();
+const configured={...current,forecast:{salaryMethod:'average',bonusMonths:[2,12]}};
+const afterCustom=upsertEmployer(beforeCustom,configured);
+await other.writeEmployerDirectory(beforeCustom,afterCustom);
+const reloaded=new PayrollVault(graph);await reloaded.unlockWithKey(key,salt);
+assert.deepEqual(await reloaded.readEmployerDirectory(),afterCustom);
+const savedIndex=await decryptJson('index',graph.files.get('payroll/index.enc').text,key);
+assert.deepEqual(savedIndex.employers,afterCustom);assert.deepEqual(savedIndex.years,oldIndex.years);assert.deepEqual(savedIndex.incomeYears,oldIndex.incomeYears);
+assert.ok(!graph.files.get('payroll/index.enc').text.includes('salaryMethod'));
+assert.throws(()=>validateEmployerDirectory([{...configured,forecast:{salaryMethod:'average',bonusMonths:[12,12]}}]),/見込み設定/);
+await reloaded.restoreEmployerDirectory([a,b]);assert.deepEqual(await reloaded.readEmployerDirectory(),afterCustom);
+const customArchive=await createBackup([],afterCustom);
+const customEncrypted=await encryptBackup(customArchive,'synthetic-backup-passphrase');
+assert.deepEqual((await readBackup(await decryptBackup(customEncrypted,'synthetic-backup-passphrase'))).employers,afterCustom);
+assert.deepEqual((await readBackup(await createBackup([]))).employers,undefined);
+const customIncome=toPublicIncomeRecord({id:1,employerId:B,forecast:configured.forecast,form:{job:'main',kind:'salary',targetMonth:'2026-10',paymentDate:'2026-10-27',gross:'100',net:'100'}});
+assert.deepEqual(Object.keys(customIncome).sort(),Object.keys(income).sort());assert.ok(!JSON.stringify(customIncome).includes('salaryMethod'));
+console.log('PASS: forecast preferences encrypted persistence, reload, old directory restore, encrypted backup and Finance export isolation');

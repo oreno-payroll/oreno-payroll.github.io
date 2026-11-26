@@ -1,3 +1,4 @@
+import type {NoticeCode} from './ui/notificationHistory';
 import {createDraftReviewConsent,yearEndReviewRows,renderReviewConfirmation} from './ui/payrollReview';
 import {confirmOperation,type OperationDialogRequest} from './ui/operationDialog';
 import {captureOperationAuthorization} from './cloud/auth';
@@ -138,9 +139,10 @@ const memoState=$<HTMLElement>('yea-memo-state');
 const yen=(amount:number)=>`${Math.round(amount).toLocaleString('ja-JP')}円`;
 const totalDetails=$<HTMLElement>('yea-taxable-breakdown');
 const zipDownload=$<HTMLButtonElement>('yea-download-pdfs');
-const appStatus=createAppStatus(status);
+const appStatus=createAppStatus(status,'yearEnd');
+let recoveryNoticeTarget:object|undefined;
 function say(message:string,kind:Exclude<AppStatusKind,'loading'>='info'){if(message)appStatus.show(kind,message);else appStatus.clear();}
-function showBusy(message:string){appStatus.loading(`${message}…`);}
+function showBusy(message:string,scope?:ReturnType<typeof appStatus.begin>){appStatus.show('loading',`${message}…`,false,{scope});}
 function el<K extends keyof HTMLElementTagNameMap>(tag:K,klass='',label=''):HTMLElementTagNameMap[K]{const node=document.createElement(tag);if(klass)node.className=klass;if(label)node.textContent=label;return node;}
 function setLocalError(node:HTMLElement,message=''){node.hidden=!message;node.textContent=message;}
 function proposedForecastChanged():boolean{
@@ -293,14 +295,14 @@ function restoreForecastInput(snapshot:ForecastInputSnapshot){
 }
 function clearDrafts(){fileQueue=[];activeDraft=null;activeSavedId=null;savedEdits.clear();pendingDeletions.clear();pendingGroupExpanded=false;drafts.replaceChildren();uiPdf.value='';updateDrafts();}
 function pendingEdits(){return Boolean(fileQueue.length||pendingDeletions.size)||[...savedEdits].some(([id,edit])=>{const original=data?.documents.find(r=>r.id===id);return Boolean(original&&isChanged(original,edit));});}
-async function action(description:string,fn:()=>Promise<void>,_showSuccess=true){
+async function action(description:string,fn:()=>Promise<void>,_showSuccess=true,code:NoticeCode='yearEnd',target?:object|string){
  if(busy)return;
- busy=true;showBusy(description);updateDirectoryControls();updateYearControls();updateForecastSaveState();updateBonusSaveState();
+ busy=true;const authorized=captureOperationAuthorization(),scope=appStatus.begin(code,target);showBusy(description,scope);updateDirectoryControls();updateYearControls();updateForecastSaveState();updateBonusSaveState();
  let failed=false;
  try{await fn();}
- catch(err){failed=true;say(`失敗：${err instanceof Error?err.message:'通信または処理エラー'}`,'error');}
+ catch(err){failed=true;if(authorized())appStatus.show('error',`失敗：${err instanceof Error?err.message:'通信または処理エラー'}`,false,{scope});}
  finally{
-  busy=false;if(!failed&&appStatus.element.dataset.state==='loading'){if(_showSuccess)appStatus.success(`${description.replace(/を保存中$/,'の保存').replace(/を削除中$/,'の削除')}が完了しました`);else appStatus.clear();}
+  busy=false;if(!failed&&authorized()){if(_showSuccess)appStatus.show('success',`${description.replace(/を保存中$/,'の保存').replace(/を削除中$/,'の削除')}が完了しました`,false,{scope});else appStatus.clear(scope);}
   if(failed&&!selected)directory.hidden=false;
   if(selected&&data)updateDrafts(true);
   updateDirectoryControls();updateYearControls();updateForecastSaveState();updateBonusSaveState();
@@ -350,7 +352,7 @@ function renderPeople(){
    const save=el('button','btn btn--primary btn--small','保存');save.type='submit';
    cancel.addEventListener('click',()=>{if(!busy){form.remove();row.hidden=false;updateDirectoryControls();rename.focus();}});
    form.addEventListener('submit',e=>{e.preventDefault();if(busy||peopleStale||selected||!authorized()||!people.includes(p)||!form.isConnected)return;
-    const id=p.id,name=input.value;void action('従業員名の変更',async()=>{const updated=await repo.renamePerson(id,name,p.alias,p.displayName);if(!authorized())throw new Error('認証状態が変更されました。');people=people.map(row=>row.id===id?{...updated,state:row.state}:row);renderPeople();});
+    const id=p.id,name=input.value;void action('従業員名の変更',async()=>{const updated=await repo.renamePerson(id,name,p.alias,p.displayName);if(!authorized())throw new Error('認証状態が変更されました。');people=people.map(row=>row.id===id?{...updated,state:row.state}:row);renderPeople();},true,'ye-person-rename');
    });
    form.append(input,cancel,save);row.after(form);row.hidden=true;updateDirectoryControls();input.focus();
   });
@@ -359,14 +361,14 @@ function renderPeople(){
    const authorized=captureOperationAuthorization(),id=p.id,name=displayPerson(p);
    const guard=()=>authorized()&&!busy&&!selected&&people.includes(p)&&!peopleStale&&displayPerson(p)===name&&!personList.querySelector('.yea-person-rename');
    if(!await approveYearEnd({title:'従業員データを削除',subject:name,details:['PDF原本・暦年データ・見込みを含む従業員データを削除します。','OneDriveのごみ箱やバージョン履歴には残る場合があります。'],tone:'danger',requiredText:name,acceptLabel:'従業員を削除'},guard))return;
-   void action('従業員を削除中',async()=>{await repo.deletePerson(id,p);if(!authorized())throw new Error('認証状態が変更されました。');people=people.filter(row=>row.id!==id);renderPeople();});
+   void action('従業員を削除中',async()=>{await repo.deletePerson(id,p);if(!authorized())throw new Error('認証状態が変更されました。');people=people.filter(row=>row.id!==id);renderPeople();},true,'ye-person-delete',id);
   });
   row.append(button,rename,remove);personList.append(row);
  }
  const pending=$<HTMLElement>('yea-pending-deletes');pending.replaceChildren();
  for(const p of people.filter(x=>x.state==='deleting')){
   const button=el('button','btn btn--danger',`${displayPerson(p)}：削除を再試行`);button.type='button';
-  button.addEventListener('click',async()=>{if(busy||peopleStale||selected||personList.querySelector('.yea-person-rename'))return;const authorized=captureOperationAuthorization();const guard=()=>authorized()&&!busy&&!selected&&people.includes(p)&&!peopleStale&&p.state==='deleting'&&!personList.querySelector('.yea-person-rename');if(!await approveYearEnd({title:'従業員の削除を再試行',subject:displayPerson(p),details:['削除未完了の従業員データを再検査し、削除を続けます。'],tone:'danger',acceptLabel:'削除を再試行'},guard))return;void action('削除の再試行',async()=>{await repo.deletePerson(p.id,p);if(!authorized())throw new Error('認証状態が変更されました。');people=people.filter(row=>row.id!==p.id);renderPeople();});});
+  button.addEventListener('click',async()=>{if(busy||peopleStale||selected||personList.querySelector('.yea-person-rename'))return;const authorized=captureOperationAuthorization();const guard=()=>authorized()&&!busy&&!selected&&people.includes(p)&&!peopleStale&&p.state==='deleting'&&!personList.querySelector('.yea-person-rename');if(!await approveYearEnd({title:'従業員の削除を再試行',subject:displayPerson(p),details:['削除未完了の従業員データを再検査し、削除を続けます。'],tone:'danger',acceptLabel:'削除を再試行'},guard))return;void action('削除の再試行',async()=>{await repo.deletePerson(p.id,p);if(!authorized())throw new Error('認証状態が変更されました。');people=people.filter(row=>row.id!==p.id);renderPeople();},true,'ye-person-delete',p.id);});
   pending.append(button);
  }
  pending.hidden=!pending.childElementCount;
@@ -614,7 +616,7 @@ function saveForecast(){
     renderEstimateMonths();
    }
    bonusMonthInput.value='';bonusValueInput.value='';bonusClearedMonth='';bonusLastMonth='';updateBonusSaveState();
-  });
+  },true,'ye-forecast-save');
  }catch(err){setLocalError(forecastError,err instanceof Error?err.message:'見込み額の入力内容を確認してください。');}
 }
 function openBlobPdf(blob:Blob,displayedName?:string){
@@ -943,14 +945,15 @@ async function saveAllDocuments(){
  const approvedAdditions=additions.map(item=>({file:item.file,draft:structuredClone(item.draft!)}));
  saveResult.hidden=true;saveResult.replaceChildren();
  const writeState:PayrollWriteState={attempted:false,uncertain:false,completed:false,lock:'none'};
- busy=true;savingDocuments=true;showBusy('明細を保存中');updateYearControls();updateSaveState();
+ const noticeTarget={},noticeScope=appStatus.begin('ye-document-save',noticeTarget);
+ busy=true;savingDocuments=true;showBusy('明細を保存中',noticeScope);updateYearControls();updateSaveState();
  try{
   // Paint the busy state before repository access and local PDF work.
   await new Promise<void>(resolve=>{const timer=setTimeout(resolve,100);requestAnimationFrame(()=>{clearTimeout(timer);setTimeout(resolve,0);});});
   if(!authorized()||selected!==id||activeYear!==year)throw new Error('接続状態が変更されました。');
   const result=await repo.saveDocumentsBatch(id,year,
    approvedUpdates,approvedAdditions,acknowledged,
-   (done,total)=>showBusy(`明細を保存中（原本${done}/${total}件を照合済み）`),deletions,writeState);
+   (done,total)=>{if(authorized())showBusy(`明細を保存中（原本${done}/${total}件を照合済み）`,noticeScope);},deletions,writeState);
   if(selected!==id||activeYear!==year||!authorized())throw new Error('保存中に従業員または年が変更されました。');
   const forecastSnapshot=forecastDirty?captureForecastInput():null;
   const bonusSnapshot=bonusDirty?captureBonusInput():null;
@@ -964,16 +967,16 @@ async function saveAllDocuments(){
   if(forecastSnapshot)restoreForecastInput(forecastSnapshot);
   if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
   if(result.data.documents.length)uploadAccordion.open=excluded.length>0;
-  if(result.cleanupPending)appStatus.success(`明細を保存しました。暗号化PDF原本${result.cleanupPending}件は保全しています。`);
-  else appStatus.success(excluded.length?`明細を保存しました。重複${excluded.length}件は除外しました。`:'明細を保存しました');
+  appStatus.show('success',result.cleanupPending?`明細を保存しました。暗号化PDF原本${result.cleanupPending}件は保全しています。`:excluded.length?`明細を保存しました。重複${excluded.length}件は除外しました。`:'明細を保存しました',false,{scope:noticeScope});
+  recoveryNoticeTarget=undefined;
   resetSaveRecoveryStateAfterSuccess();
  }catch(error){
   uploadAccordion.open=true;
   saveRecoveryRequired=(writeState.attempted||writeState.uncertain||writeState.completed||writeState.lock==='held'||writeState.lock==='unknown')?writeState:null;
   saveRecovery.hidden=!saveRecoveryRequired;
   saveRecoveryStatus.textContent=!saveRecoveryRequired?'':writeState.completed?'明細の保存は完了しましたが、終了処理を確認できません。':writeState.attempted||writeState.uncertain?'保存状態が不明です。再保存する前にOneDriveの状態を確認してください。':'明細の書き込みは開始していません。保存ロックの状態を確認してください。';
-  if(writeState.completed)say('明細は保存済みです。終了処理の状態を確認してください。','warning');
-  else say(`保存できませんでした：${error instanceof Error?error.message:'通信エラー'}`,'error');
+  recoveryNoticeTarget=saveRecoveryRequired?noticeTarget:undefined;
+  if(authorized())appStatus.show(writeState.completed?'partial':'error',writeState.completed?'明細は保存済みです。終了処理の状態を確認してください。':`保存できませんでした：${error instanceof Error?error.message:'通信エラー'}`,false,{scope:noticeScope});
  }finally{
   busy=false;savingDocuments=false;updateYearControls();updateDrafts();updateForecastSaveState();updateBonusSaveState();
  }
@@ -981,6 +984,7 @@ async function saveAllDocuments(){
 async function recoverDocuments(){
  if(busy||!selected||!data||!saveRecoveryRequired)return;
  const id=selected,year=activeYear,before=data,state=saveRecoveryRequired,authorized=captureOperationAuthorization();
+ const noticeScope=appStatus.begin('ye-document-save',recoveryNoticeTarget);
  busy=true;updateYearControls();updateSaveState();saveRecoveryStatus.textContent='OneDriveの保存状態を確認しています…';
  try{
   const result=await repo.recoverDocumentsBatch(id,year,state,fileQueue.filter(q=>q.status==='ready').map(q=>q.file));
@@ -1002,8 +1006,8 @@ async function recoverDocuments(){
   if(forecastSnapshot)restoreForecastInput(forecastSnapshot);
   if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
   resetSaveRecoveryStateAfterSuccess();uploadAccordion.open=true;
-  say('保存状態を確認しました。保存済みの変更は反映し、未保存の入力は保持しました。','info');
- }catch(error){saveRecoveryStatus.textContent=`OneDriveの確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;}
+  appStatus.show('success','保存状態を確認しました。保存済みの変更は反映し、未保存の入力は保持しました。',false,{scope:noticeScope,code:'ye-document-recovery'});recoveryNoticeTarget=undefined;
+ }catch(error){saveRecoveryStatus.textContent=`OneDriveの確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;if(authorized())appStatus.show('error','OneDriveの保存状態を確認できませんでした。',false,{scope:noticeScope,code:'ye-document-recovery'});}
  finally{busy=false;updateYearControls();updateDrafts();updateForecastSaveState();updateBonusSaveState();}
 }
 function bind(){
@@ -1034,7 +1038,7 @@ function bind(){
  createDialog.addEventListener('close',()=>{createName.value='';});
  window.addEventListener('pagehide',()=>{if(createDialog.open)createDialog.close();const form=personList.querySelector('.yea-person-rename');if(form){const row=form.previousElementSibling;if(row instanceof HTMLElement)row.hidden=false;form.remove();updateDirectoryControls();}});
  yearSelect.addEventListener('change',async()=>{const y=Number(yearSelect.value);if(busy||!selected||!validYear(y)){yearSelect.value=String(activeYear);return;}const current=captureDetailConsent();const guard=()=>current()&&yearSelect.value===String(y);if(!await checkDetailExit(guard)||!guard()){yearSelect.value=String(activeYear);return;}resetSaveRecovery();activeYear=y;clearMemo();data=null;clearDrafts();resetForecastForm();resetBonusForm();void action('暦年データの読み込み',loadYear,false);});
- $<HTMLFormElement>('yea-person-create').addEventListener('submit',e=>{e.preventDefault();if(busy||peopleStale||!peopleLoaded||selected||!createDialog.open)return;const name=createName.value,authorized=captureOperationAuthorization();void action('従業員の登録',async()=>{const created=await repo.createPerson(name,'');if(!authorized())throw new Error('認証状態が変更されました。');createDialog.close();people=[...people,{...created,state:'active' as const}].sort((a,b)=>a.createdAt.localeCompare(b.createdAt));renderPeople();});});
+ $<HTMLFormElement>('yea-person-create').addEventListener('submit',e=>{e.preventDefault();if(busy||peopleStale||!peopleLoaded||selected||!createDialog.open)return;const name=createName.value,authorized=captureOperationAuthorization();void action('従業員の登録',async()=>{const created=await repo.createPerson(name,'');if(!authorized())throw new Error('認証状態が変更されました。');createDialog.close();people=[...people,{...created,state:'active' as const}].sort((a,b)=>a.createdAt.localeCompare(b.createdAt));renderPeople();},true,'ye-person-create');});
  yearRetry.addEventListener('click',()=>{if(!busy&&selected&&!data)void action('暦年データの再読み込み',loadYear,false);});
  memoInput.addEventListener('input',()=>{if(busy||!data)return;memoDirty=memoInput.value!==(data?.memo??'');memoButton.disabled=Boolean(saveRecoveryRequired)||!memoDirty;memoState.textContent=memoDirty?'未保存の変更があります。':'';});
  memoButton.addEventListener('click',()=>{if(!selected||!data||!memoDirty||busy||saveRecoveryRequired)return;const id=selected,year=activeYear,text=memoInput.value,authorized=captureOperationAuthorization();
@@ -1046,7 +1050,7 @@ function bind(){
    data=saved;memoDirty=false;renderYear();
    if(draft)restoreForecastInput(draft);
    if(bonusDraft){bonusMonthInput.value=bonusDraft.month;bonusValueInput.value=bonusDraft.amount;bonusDirty=true;updateBonusSaveState();}
-  });
+  },true,'ye-memo-save');
  });
  window.addEventListener('beforeunload',event=>{if(memoDirty||pendingEdits()||forecastDirty||bonusDirty){event.preventDefault();event.returnValue='';}});
  methodChoices.addEventListener('change',event=>{

@@ -1,3 +1,4 @@
+import {recordNotification} from './ui/notificationHistory';
 import {openRecordDiagnostic} from './ui/recordDiagnostic';
 import {personalReviewRows,renderReviewConfirmation,editedReviewRecord} from './ui/payrollReview';
 import {confirmOperation,showOperationMessage} from './ui/operationDialog';
@@ -28,7 +29,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const form = $<HTMLFormElement>('review-form');
 const errorView = $<HTMLElement>('edit-error');
 const editor = $<HTMLElement>('editor');
-const appStatus=createAppStatus();
+const appStatus=createAppStatus(undefined,'edit');
 const status = $<HTMLElement>('edit-status');
 const saveButton = $<HTMLButtonElement>('edit-save');
 const deleteButton = $<HTMLButtonElement>('edit-delete');
@@ -225,6 +226,7 @@ saveButton.addEventListener('click', async () => {
   } catch (error) {
     leavingAfterSave = false;
     saving = false;
+    if(!authorized()){updateUI();return;}
     const detail=error instanceof Error?error.message:String(error);
     if(error instanceof PayrollPartialSuccessError){
       const heading=error.stage==='duplicate-cleanup'
@@ -232,11 +234,11 @@ saveButton.addEventListener('click', async () => {
         : error.stage==='year-move'
           ? '編集内容は移動先年度に保存済みですが、移動元年度の明細整理が未完了の可能性があります。'
           : '編集内容は保存済みですが、Finance連携用の収入同期が未完了です。';
-      appStatus.partial(heading);
+      recordNotification(error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial','partial');
       saving=true;updateUI();
       await showOperationMessage({title:'明細編集・一部完了',details:[heading,detail],tone:'warning',acceptLabel:'閉じる'},authorized);
       if(!authorized()){saving=false;updateUI();return;}
-      if(operationEpoch===authEpoch())rememberNavigationNotice({operation:error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial'},operationEpoch);
+      if(operationEpoch===authEpoch())rememberNavigationNotice({operation:error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial'},operationEpoch,true);
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }
     showError(`保存処理を完了できませんでした。再読込して最新の状態を確認してください。\n${detail}`);
@@ -274,23 +276,24 @@ async function commitPendingDeletion():Promise<void>{
   } catch (error) {
     leavingAfterSave = false;
     saving = false;
+    if(!authorized()){updateUI();return;}
     const detail=error instanceof Error?error.message:String(error);
     if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
-      appStatus.partial(incompleteDeleteIncomeNotice());
+      recordNotification('delete-income-partial','partial');
       saving=true;updateUI();
       await showOperationMessage({title:'明細削除・一部完了',details:[incompleteDeleteIncomeNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
       if(!authorized()){saving=false;updateUI();return;}
-      if(operationEpoch===authEpoch())rememberNavigationNotice({operation:'delete-income-partial'},operationEpoch);
+      if(operationEpoch===authEpoch())rememberNavigationNotice({operation:'delete-income-partial'},operationEpoch,true);
       leavingAfterSave=true;
       window.location.assign(homeHref);
       return;
     }
     if(error instanceof PayrollPartialSuccessError&&error.stage==='original-trash'){
-      appStatus.partial(incompleteDeleteOriginalNotice());
+      recordNotification('delete-original-partial','partial');
       saving=true;updateUI();
       await showOperationMessage({title:'PDF原本の整理・一部完了',details:[incompleteDeleteOriginalNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
       if(!authorized()){saving=false;updateUI();return;}
-      if(operationEpoch===authEpoch())rememberNavigationNotice({operation:'delete-original-partial'},operationEpoch);
+      if(operationEpoch===authEpoch())rememberNavigationNotice({operation:'delete-original-partial'},operationEpoch,true);
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }
     deletionNeedsReload=true;

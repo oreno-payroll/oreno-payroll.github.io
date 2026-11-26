@@ -1,3 +1,4 @@
+import {recordNotification} from './ui/notificationHistory';
 import {personalReviewRows,renderReviewConfirmation} from './ui/payrollReview';
 import {confirmOperation} from './ui/operationDialog';
 import {rememberNavigationNotice} from './ui/navigationNotice';
@@ -126,7 +127,7 @@ const progressWrap = $<HTMLDivElement>("progress-wrap");
 const progressFill = $<HTMLDivElement>("progress-fill");
 const progressText = $<HTMLSpanElement>("progress-text");
 const toast = $<HTMLDivElement>("toast");
-const appStatus=createAppStatus(toast);
+const appStatus=createAppStatus(toast,'upload');
 const diagnosticButton = $<HTMLButtonElement>("diagnostic-button");
 const diagnosticDialog = $<HTMLDialogElement>("diagnostic-dialog");
 const diagnosticClose = $<HTMLButtonElement>("diagnostic-close");
@@ -945,9 +946,11 @@ uploadRecoveryRecheck.addEventListener('click',()=>{void(async()=>{
     // integrity checks; already saved entries are skipped, not overwritten.
     recoverAcrossMonths=true;
     uploadSaveRecoveryRequired=false;uploadSaveAttempt=[];uploadRecovery.hidden=true;saveFeedback.hidden=true;clearInlineError(saveStatus);
+    recordNotification('upload-recovery','success');
     notice('info',uploadRecoveryMessage(report)+(report.attempted>0&&report.saved===report.attempted?' すべての明細は保存済みです。再登録は不要です。':' 入力内容を保持しています。必要な明細だけ再保存できます。'));
   }catch(error){
     uploadRecoveryStatus.textContent=`再保存できません：${error instanceof Error?error.message:'通信エラー'}。入力内容は保持しています。`;
+    if(authorized())recordNotification('upload-recovery','error');
   }finally{uploadSaveRecoveryChecking=false;updateSaveState();}
  })()});
 // Let the disabled controls and progress panel paint before authentication or
@@ -1067,6 +1070,7 @@ saveButton.addEventListener("click", async () => {
     }
     // 重複がなければ従来どおり自動帰還。重複があればファイル名と理由を画面に残す。
     leavingAfterSave = true;
+    if(skipped&&result.saved&&authorized())recordNotification('upload-saved','success');
     if(!skipped) {
       if(result.saved&&operationEpoch===authEpoch())rememberNavigationNotice({operation:'upload-saved',count:result.saved},operationEpoch);
       window.location.assign('../index.html');
@@ -1093,6 +1097,7 @@ saveButton.addEventListener("click", async () => {
     saveStatus.hidden=false;
     if(writeState.payrollSaved)showInlineError(saveStatus, error instanceof Error ? error.message : '給与明細は保存済みです。Finance連携を確認してください。');
     else showInlineError(saveStatus, `保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+    if(authorized())recordNotification('upload-saved',writeState.payrollSaved||writeState.completed?'partial':'error');
     appStatus.clear();
   }
 });

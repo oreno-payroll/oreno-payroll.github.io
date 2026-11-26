@@ -1,3 +1,4 @@
+import {recordNotification} from './ui/notificationHistory';
 import {confirmOperation,showOperationMessage} from './ui/operationDialog';
 import {takeNavigationNotice,navigationFeedback} from './ui/navigationNotice';
 import { createAppStatus, type AppStatusKind } from './ui/appStatus';
@@ -23,6 +24,7 @@ import { calendarYearOfPaymentDate, calculateCalendarForecast, type CalendarFore
 import { monthlySalaryRegistration } from './forecast/monthlyRegistration';
 import {employerDisplayName,legacyEmployers,type LegacyEmployer} from './ui/employerSelection';
 import type {EmployerEntry} from './storage/employerDirectory';
+import {SALARY_FORECAST_LABELS} from './storage/employerForecast';
 
 type Job = 'main' | 'side';
 type PeriodMode = 'fiscal' | 'calendar';
@@ -32,7 +34,7 @@ function required<T extends HTMLElement>(selector: string): T {
   if (!node) throw new Error(`必要な画面要素が見つかりません: ${selector}`);
   return node;
 }
-const appStatus=createAppStatus();
+const appStatus=createAppStatus(undefined,'home');
 const yearSelect = required<HTMLSelectElement>('#fiscal-year');
 const fiscalModeButton = required<HTMLButtonElement>('#mode-fiscal');
 const calendarModeButton = required<HTMLButtonElement>('#mode-calendar');
@@ -132,21 +134,24 @@ deletionSave.addEventListener('click',async()=>{
  }catch(error){
   if(error instanceof PayrollPartialSuccessError&&error.stage==='income-sync'){
    completion={kind:'partial',message:incompleteDeleteIncomeNotice()};
-   appStatus.partial(completion.message);
+   if(authorized())appStatus.show('partial',completion.message,false,{code:'delete-income-partial'});
    await showOperationMessage({title:'明細削除・一部完了',details:[incompleteDeleteIncomeNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
   }else if(error instanceof PayrollPartialSuccessError&&error.stage==='original-trash'){
    completion={kind:'partial',message:incompleteDeleteOriginalNotice()};
-   appStatus.partial(completion.message);
+   if(authorized())appStatus.show('partial',completion.message,false,{code:'delete-original-partial'});
    await showOperationMessage({title:'PDF原本の整理・一部完了',details:[completion.message],tone:'warning',acceptLabel:'閉じる'},authorized);
   }else{
    completion={kind:'error',message:'削除結果を確認できません。年度ごとに一部確定した可能性があります。最新データを確認し、設定からFinance連携を再生成してください。'};
-   appStatus.error(completion.message);
+   if(authorized())appStatus.show('error',completion.message,false,{code:'delete-saved'});
    await showOperationMessage({title:'削除結果を確認してください',details:[completion.message],tone:'danger',acceptLabel:'閉じる'},authorized);
   }
  }finally{
   pendingDeletion.clear();deletionAuthorization=undefined;deletingRecordIds.clear();
  }
- if(authorized())await refreshDashboard(true,completion);
+ if(authorized()){
+  if(completion.kind==='success')recordNotification('delete-saved','success');
+  await refreshDashboard(true,completion);
+ }
 });
 const sideZipButton = required<HTMLButtonElement>('#download-side-zip');
 let exportingSideZip = false;
@@ -162,7 +167,8 @@ sideZipButton.addEventListener('click', async () => {
   if (!side.length) return;
   exportingSideZip = true;
   renderPendingDeletion();
-  appStatus.loading('副業PDFをまとめています…');
+  const noticeScope=appStatus.begin('pdf-zip'),authorized=captureOperationAuthorization();
+  appStatus.show('loading','副業PDFをまとめています…',false,{scope:noticeScope});
   sideZipButton.disabled = true;
   try {
     // 表示には索引しか持たないため、ZIP作成の際にだけ対象PDF原本を取得する。
@@ -182,7 +188,7 @@ sideZipButton.addEventListener('click', async () => {
           const pdf=await getOriginalForBatchExport(item.id,recordSignature(item));
           originals[index]={...item,pdf};
           completed++;
-          appStatus.loading(`PDF原本を取得中 ${completed}/${side.length}件`);
+          if(authorized())appStatus.show('loading',`PDF原本を取得中 ${completed}/${side.length}件`,false,{scope:noticeScope});
         }catch(error){if(firstFailure===null)firstFailure=error;}
       }
     };
@@ -200,9 +206,9 @@ sideZipButton.addEventListener('click', async () => {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    appStatus.success(`副業PDF ${side.length}件のZIPを作成しました`);
+    if(authorized())appStatus.show('success',`副業PDF ${side.length}件のZIPを作成しました`,false,{scope:noticeScope});
   } catch (error) {
-    appStatus.error(`副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`);
+    if(authorized())appStatus.show('error',`副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`,false,{scope:noticeScope});
   } finally {
     exportingSideZip = false;
     renderPendingDeletion();
@@ -233,7 +239,7 @@ function updateYearOptions(): void {
   yearSelect.setAttribute('aria-label', yearLabel.textContent);
   forecastLabel.textContent = periodMode === 'fiscal' ? '3月まで見込み' : '12月まで見込み';
   forecastToggle.title = periodMode === 'fiscal'
-    ? '対象月基準で3月までの未登録給与と本業賞与を概算します。'
+    ? '対象月基準で3月までの未登録給与と設定された賞与を概算します。'
     : '支給日基準で、最後の実績支給月の翌月と当月の遅い方から12月まで概算します。過去月の未登録給与は補完しません。';
   forecastToggle.closest('label')?.setAttribute('title', forecastToggle.title);
   fiscalModeButton.setAttribute('aria-pressed', String(periodMode === 'fiscal'));
@@ -243,14 +249,14 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   forecastPanel.hidden = false;
   forecastDetails.replaceChildren();
   const salaryCount = plan.jobs.main.estimates.length + plan.jobs.side.estimates.length;
-  const bonusCount = plan.jobs.main.bonusEstimates.length;
+  const bonusCount = plan.jobs.main.bonusEstimates.length + plan.jobs.side.bonusEstimates.length;
   const estimatedCount = plan.estimates.length;
-  forecastStatus.textContent = estimatedCount ? `実績＋給与${salaryCount}か月分・本業賞与${bonusCount}回分の見込み` : '実績のみ（見込み対象なし）';
+  forecastStatus.textContent = estimatedCount ? `実績＋給与${salaryCount}か月分・賞与${bonusCount}回分の見込み` : '実績のみ（見込み対象なし）';
   const explanation = document.createElement('p');
   explanation.className = 'forecast-note';
   explanation.textContent = periodMode === 'fiscal'
-    ? '通常給与は未登録対象月を直近最大3件の中央値で推計。立替経費は翌月以降に繰り越しません。本業の未登録賞与（8月・翌2月）は最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含みません。副業賞与の見込みは加算しません。'
-    : '通常給与は、勤務先ごとに最後の実績支給月の翌月と現在月のうち遅い方から12月までを直近最大3件の中央値で推計します。現在月より前の未登録給与月は補完しません。立替経費・年末調整の還付や追徴を繰り越しません。本業の未登録賞与（2月・8月）は最新の通常給与1件から交通費・立替経費を除いて推計します。業績給は見込みに含めず、副業賞与の見込みは加算しません。';
+    ? '通常給与は支給時期を考慮した未登録対象月を、勤務先ごとに設定した方法で推計します。直近6か月の支給済み通常給与を参照し、立替経費は繰り返し計上しません。賞与は支給予定月に、最新の通常給与1件から交通費・立替経費を除いた参考額を加算します。業績給は含めません。'
+    : '通常給与は最後の実績支給月の翌月と現在月の遅い方から12月まで、勤務先ごとに設定した方法で推計します。現在月より前の未登録給与月は補完しません。立替経費は繰り返し計上しません。賞与は支給予定月に、最新の通常給与1件から交通費・立替経費を除いた参考額を加算します。業績給は含めません。';
   const methodology = document.createElement('details');
   methodology.className = 'forecast-methodology';
   const methodologyTitle = document.createElement('summary');
@@ -279,26 +285,26 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
     title.textContent = `${job === 'main' ? '本業' : '副業'}${item.employerName?`（${item.employerName}）`:''}`;
     const detail = document.createElement('span');
     if (item.reason) {
-      detail.textContent = item.reason;
+      detail.textContent = `${SALARY_FORECAST_LABELS[item.salaryMethod]}｜${item.reason}`;
     } else {
       const first = item.estimates[0];
       const total = item.estimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
       const sample = item.sampleMonths.map(month => month.replace('-', '/')).join('・');
       const months = item.pendingMonths.map(month => month.replace('-', '/')).join('、');
-      detail.textContent = `${item.estimates.length}か月分の推計（${months}）｜月額総支給額 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
+      detail.textContent = `${SALARY_FORECAST_LABELS[item.salaryMethod]}｜${item.estimates.length}か月分の推計（${months}）｜月額総支給額 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
     }
     line.append(title, detail);
     forecastDetails.append(line);
-    if (job === 'main' && bonusToggle.checked) {
+    if (bonusToggle.checked) {
       const bonusLine = document.createElement('div');
       bonusLine.className = 'forecast-job-row';
       const bonusTitle = document.createElement('strong');
-      bonusTitle.textContent = '本業賞与';
+      bonusTitle.textContent = `${job==='main'?'本業':'副業'}賞与`;
       const bonusDetail = document.createElement('span');
       if (item.bonusReason) {
         bonusDetail.textContent = item.bonusReason;
       } else if (!item.bonusEstimates.length) {
-        bonusDetail.textContent = '8月・2月の見込み対象はありません（登録済み、または対象期間外）。';
+        bonusDetail.textContent = '見込み対象はありません（登録済み、または対象期間外）。';
       } else {
         const months = item.bonusEstimates.map(e => e.month.replace('-', '/')).join('、');
         const total = item.bonusEstimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
@@ -306,6 +312,7 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
         const sample = item.bonusSampleMonth ? item.bonusSampleMonth.replace('-', '/') : '不明';
         bonusDetail.textContent = `${item.bonusEstimates.length}回（${months}）｜額面合計 ${yen(total)}｜1回あたり額面 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}・手取り ${first.values.net === null ? '算出不可' : yen(first.values.net)}｜参照：最新の通常給与 ${sample}（交通費・経費除外）`;
       }
+      if(item.bonusMonths.length)bonusDetail.textContent=`予定：${item.bonusMonths.map(m=>`${m}月`).join('・')}｜${bonusDetail.textContent}`;
       bonusLine.append(bonusTitle, bonusDetail);
       forecastDetails.append(bonusLine);
     }
@@ -419,7 +426,8 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
     download.addEventListener('click', async () => {
       if (download.disabled) return;
       download.disabled = true;
-      appStatus.loading('PDF原本を取得しています…');
+      const noticeScope=appStatus.begin('pdf-download',record),authorized=captureOperationAuthorization();
+      appStatus.show('loading','PDF原本を取得しています…',false,{scope:noticeScope});
       try {
         // Revalidate the complete annual inventory and the displayed signature
         // both before and after fetching the hash-verified original PDF.
@@ -432,9 +440,9 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
         anchor.click();
         anchor.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-        appStatus.success('PDFのダウンロードを開始しました');
+        if(authorized())appStatus.show('success','PDFのダウンロードを開始しました',false,{scope:noticeScope});
       } catch (error) {
-        appStatus.error(`PDFのダウンロードに失敗しました：${error instanceof Error ? error.message : String(error)}`);
+        if(authorized())appStatus.show('error',`PDFのダウンロードに失敗しました：${error instanceof Error ? error.message : String(error)}`,false,{scope:noticeScope});
       } finally { download.disabled = false; }
     });
     const edit = document.createElement('a');
@@ -582,7 +590,7 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
   dashboardLoading=true;
   if(!hadView){registrationPanel.hidden = true;renderList('main',[],'読み込み中…');renderList('side',[],'読み込み中…');}
   // Routine reads must not erase an unresolved partial operation notice.
-  if(appStatus.element.dataset.state!=='partial')appStatus.clear();
+  appStatus.clear();
   const indicator=document.getElementById('payroll-data-freshness');
   const freshness=hadView?'rechecking':'checking';
   if(indicator){indicator.textContent=dashboardFreshnessLabel(freshness);indicator.dataset.freshness=freshness;}
@@ -619,8 +627,9 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
     const freshState=cache.cached?'snapshot':'verified';
     if(indicator){indicator.textContent=dashboardFreshnessLabel(freshState);indicator.dataset.freshness=freshState;}
     const notice=takeNavigationNotice(authEpoch());
-    const outcome=completion??(notice?navigationFeedback(notice):null);
-    if(outcome)appStatus.show(outcome.kind,outcome.message);
+    const outcome=notice?navigationFeedback(notice):null;
+    if(outcome)appStatus.show(outcome.kind,outcome.message,false,{record:false});
+    else if(completion?.kind==='success')appStatus.show(completion.kind,completion.message,false,{record:false});
   } catch (error) {
     console.error('保存済み明細を読み込めませんでした。');
     appStatus.error(`${completion?completion.message+'\n':''}明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);

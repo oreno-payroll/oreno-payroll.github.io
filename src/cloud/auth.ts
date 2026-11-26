@@ -7,6 +7,7 @@ import {clearNavigationSnapshot,invalidateNavigationSnapshot,invalidateAuthSessi
 import {createTabLockCoordinator} from './tabLock';
 import {signOutLocallyFirst} from './signOutFlow';
 import {readRememberedBrowserKey,saveRememberedBrowserKey,forgetRememberedBrowserKey,forgetAllRememberedBrowserKeys} from './rememberedBrowser';
+import {activateNotificationHistory,resetNotificationHistory} from '../ui/notificationHistory';
 import {createAppStatus} from '../ui/appStatus';
 import {bindPayrollGraphIdentity,rememberedAccountKey,pickPayrollAccount,selectPayrollAccountAfterRedirect,needsMicrosoftInteraction,microsoftSilentTemporaryError,microsoftDiagnostic,MicrosoftSignInRequiredError,MicrosoftTemporaryError,type MicrosoftConnectionStatus,type PayrollRedirectIntent} from './msalPolicy.ts';
 const CLIENT_KEY='finance-onedrive-public-client-id-v1';
@@ -126,7 +127,11 @@ async function getMsal():Promise<Msal> {
   const intent=consumeRedirectIntent(id);
   const selected=selectPayrollAccountAfterRedirect(app.getAllAccounts(),previousAccountId(id),app.getActiveAccount(),result?.account??null,intent);
   if(clientId()!==id||authEpoch()!==startAuthEpoch)throw new MicrosoftSignInRequiredError('Microsoftの接続設定が変更されました。再接続してください。');
-  if(selected){app.setActiveAccount(selected);pinAccount(id,selected);}
+  if(selected){
+   // A missing or changed pin cannot prove that a restored tab belongs to the same user.
+   if(previousAccountId(id)!==selected.homeAccountId)resetNotificationHistory();
+   app.setActiveAccount(selected);pinAccount(id,selected);
+  }
   msalClientId=id;
   return (msal=app);
  })();
@@ -491,6 +496,8 @@ async function beginUnlock():Promise<PayrollVault> {
 }
 /** A lock action is available on the home page without adding clutter to each subpage. */
 function installHomeLock(scope:string):void {
+ const authorized=captureOperationAuthorization();
+ activateNotificationHistory(()=>authorized()&&Boolean(vault?.isUnlocked()&&msal&&account(msal)&&sessionScope(clientId(),account(msal)!)===scope));
  const footerActions=document.querySelector<HTMLElement>('.site-footer__actions');
  if(!footerActions||footerActions.querySelector('#payroll-cloud-lock'))return;
  const button=document.createElement('button');button.id='payroll-cloud-lock';
@@ -673,6 +680,7 @@ export async function refreshSessionAfterKeyRotation():Promise<'updated'|'not-re
  if(vault!==opened||clientId()!==id||authEpoch()!==startAuth||account(app)?.homeAccountId!==user.homeAccountId)throw new MicrosoftSignInRequiredError();
  tabLocks.broadcast(true);
  const rotationEpoch=tabLocks.epoch();
+ resetNotificationHistory();
  clearTabUnlock();clearNavigationSnapshot();
  opened.lock();vault=undefined;unlocking=undefined;backgroundUnlocking=undefined;
  await clearAllKeys();
@@ -701,6 +709,7 @@ export async function refreshSessionAfterKeyRotation():Promise<'updated'|'not-re
    try{await forgetRememberedBrowserKey(scope);}catch{}
   }
  }
+ installHomeLock(scope);
  return storageFailure?'storage-warning':existed?'updated':'not-registered';
 }
 

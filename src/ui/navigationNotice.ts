@@ -1,3 +1,4 @@
+import {recordNotification} from './notificationHistory.ts';
 /** One-time, tab-local outcome handoff. Never store arbitrary messages or statement fields. */
 export type NavigationNotice =
  | {operation:'upload-saved';count:number}
@@ -5,6 +6,7 @@ export type NavigationNotice =
 export type NavigationFeedback = {kind:'success'|'partial';message:string};
 const KEY='payroll-navigation-notice-v1';
 const TTL=120_000;
+const lockEpoch=()=>{try{return localStorage.getItem('payroll-global-vault-lock-epoch-v1')??'';}catch{return '';}};
 function valid(value:unknown):value is NavigationNotice {
  if(!value||typeof value!=='object')return false;
  const item=value as Record<string,unknown>;
@@ -12,18 +14,19 @@ function valid(value:unknown):value is NavigationNotice {
  return Object.keys(item).length===1&&['edit-saved','delete-saved','edit-income-partial','edit-cleanup-partial','edit-year-partial','delete-income-partial','delete-original-partial'].some(op=>item.operation===op);
 }
 export function clearNavigationNotice():void {try{sessionStorage.removeItem(KEY);}catch{}}
-export function rememberNavigationNotice(notice:NavigationNotice,epoch:string):void {
+export function rememberNavigationNotice(notice:NavigationNotice,epoch:string,alreadyRecorded=false):void {
  clearNavigationNotice();
  if(!valid(notice))return;
- try{sessionStorage.setItem(KEY,JSON.stringify({notice,epoch,created:Date.now()}));}catch{/* Navigation still works when storage is unavailable. */}
+ if(!alreadyRecorded)recordNotification(notice.operation,navigationFeedback(notice).kind);
+ try{sessionStorage.setItem(KEY,JSON.stringify({notice,epoch,lock:lockEpoch(),created:Date.now()}));}catch{/* Navigation still works when storage is unavailable. */}
 }
 export function takeNavigationNotice(epoch:string):NavigationNotice|null {
  try{
   const raw=sessionStorage.getItem(KEY);
   sessionStorage.removeItem(KEY); // consume before parsing, including malformed entries
   if(!raw||raw.length>512)return null;
-  const value=JSON.parse(raw) as {notice:unknown;epoch:unknown;created:unknown};
-  if(!value||value.epoch!==epoch||typeof value.created!=='number'||!Number.isFinite(value.created)||value.created>Date.now()||Date.now()-value.created>TTL||!valid(value.notice))return null;
+  const value=JSON.parse(raw) as {notice:unknown;epoch:unknown;lock:unknown;created:unknown};
+  if(!value||value.epoch!==epoch||value.lock!==lockEpoch()||typeof value.created!=='number'||!Number.isFinite(value.created)||value.created>Date.now()||Date.now()-value.created>TTL||!valid(value.notice))return null;
   return value.notice;
  }catch{return null;}
 }

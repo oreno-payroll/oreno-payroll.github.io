@@ -50,7 +50,7 @@ export async function auditDist({root=project,requirePrivateTerms=false,verifyBu
   const tracked=verifyBundles?new Set(execFileSync('git',['ls-files','-z','--','public'],{cwd:root})
     .toString('utf8').split('\0').filter(Boolean)):new Set(requiredPublic.map(rel=>'public/'+rel));
   const approvedPublic=rel=>/^(?:[^/]+\/)*[^/]+\.(?:html|css)$/.test(rel)||
-    ['favicon.ico','apple-touch-icon.png','view/pdf-sw.js','payroll-cloud-session.js','frame-guard.js'].includes(rel);
+    ['release-notes.json','favicon.ico','apple-touch-icon.png','view/pdf-sw.js','payroll-cloud-session.js','frame-guard.js'].includes(rel);
   for(const rel of requiredPublic){
     if(!tracked.has('public/'+rel)||!approvedPublic(rel)){
       throw new Error(`未追跡または不許可の公開元ファイル: public/${rel}`);
@@ -119,9 +119,9 @@ export async function auditDist({root=project,requirePrivateTerms=false,verifyBu
     }
     const buildLabel=utf8(readFileSync(path.join(dist,'build-info.js')));
     const version=JSON.parse(readFileSync(path.join(root,'package.json'),'utf8')).version;
-    // Unlike the old substring check, accept exactly the one statement emitted
-    // by build.mjs. A valid version substring cannot conceal extra JavaScript.
-    const prefix="document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ";
+    // Require the exact two statements emitted by build.mjs, not a substring.
+    const prefix=`document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ${JSON.stringify(`v${version}`)}; });\n`+
+      "document.querySelectorAll('[data-build-details]').forEach(el => { el.textContent = ";
     const suffix="; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n";
     let approved=false;
     if(buildLabel.startsWith(prefix)&&buildLabel.endsWith(suffix)&&buildLabel.length<=1024){
@@ -129,8 +129,7 @@ export async function auditDist({root=project,requirePrivateTerms=false,verifyBu
       try{
         const label=JSON.parse(literal);
         if(typeof label==='string' && literal===JSON.stringify(label) &&
-          /^v[^\n]+ · \d{4}[/.-]\d{1,2}[/.-]\d{1,2} \d{1,2}:\d{2}:\d{2} · (?:local|[0-9a-f]{7,40})$/.test(label) &&
-          label.startsWith(`v${version} · `)){
+          /^\d{4}[/.-]\d{1,2}[/.-]\d{1,2} \d{1,2}:\d{2}:\d{2} · (?:local|[0-9a-f]{7,40})$/.test(label)){
           let head='local';
           try{head=execFileSync('git',['rev-parse','--short','HEAD'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{}
           approved=label.endsWith(` · ${head}`) &&

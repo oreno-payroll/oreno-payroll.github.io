@@ -1,5 +1,5 @@
 import {createSalt,deriveKey,encryptBytes,decryptBytes,encryptJson,decryptJson,envelopeSalt,parseEnvelope} from './crypto';
-import {PayrollGraph,isCollision,type RemoteFile,type CloudFolderItem,type PayrollWriteState} from './graph';
+import {PayrollGraph,GraphWriteRejectedError,isCollision,type RemoteFile,type CloudFolderItem,type PayrollWriteState} from './graph';
 import type {SavedPayrollRecord,SavedPayrollSummary} from '../storage/payrollStore';
 import {fiscalYearOfTargetMonth} from '../forecast/payrollCalendar';
 import {payrollPeriodsConflict} from '../storage/payrollValidation';
@@ -958,7 +958,7 @@ export class PayrollVault {
    }
   }
   const completed:CloudRecord[]=new Array(records.length);
-  let next=0,originalsDone=0,firstFailure:unknown=null;
+  let next=0,originalsDone=0,firstFailure:unknown=null,onlyRejectedWrites=true;
   // 独立したPDFのみ少数並列。失敗したら新規投入を止め、処理中は終わるまで待つ。
   const uploadWorker=async():Promise<void>=>{
    while(firstFailure===null) {
@@ -973,11 +973,18 @@ export class PayrollVault {
      completed[i]={...summary,pdfSize:pdf.size,pdfType:pdf.type,originalId,originalMonth:month};
      originalsDone++;
      emit(1,'PDF原本の保存・照合',`${originalsDone} / ${records.length}件 · `);
-    }catch(error){if(firstFailure===null)firstFailure=error;}
+    }catch(error){
+     if(!(error instanceof GraphWriteRejectedError))onlyRejectedWrites=false;
+     if(firstFailure===null)firstFailure=error;
+    }
    }
   };
   await Promise.all(Array.from({length:Math.min(2,records.length)},()=>uploadWorker()));
   if(firstFailure!==null) {
+   // All workers have settled. No annual write has begun; verified originals
+   // remain detached. A rejected mutation is not a failed readback or lost reply.
+   // The Graph checkpoint itself refuses to advance while any write is uncertain.
+   if(state&&originalsDone>0&&onlyRejectedWrites&&authorized())this.graph.markUploadCheckpoint();
    if(state&&originalsDone===0&&firstFailure instanceof Error)throw firstFailure;
    const msg=firstFailure instanceof Error?firstFailure.message:String(firstFailure);
    throw new Error(`PDF原本 ${originalsDone}/${records.length}件の保存・照合後に失敗しました。解析明細は未確定ですが、暗号化原本が一部OneDriveに残っている可能性があります。原因: ${msg}`,{cause:firstFailure});

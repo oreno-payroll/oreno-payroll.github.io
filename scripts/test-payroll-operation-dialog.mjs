@@ -76,7 +76,7 @@ async function restoreScenario(change,approve=true){
  const context={busy:false,preview:{records:[{id:1}]},ack:{checked:true},initialSnapshot:{physical:'synthetic-record',directory:'[]',count:1,bytes:1},currentCount:1,
   restoreButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
-  updateButtons(){},info(){},finishOperation(){},replaceAllRecords:async()=>{writes++;},window:{location:{assign(){nav++;}}},
+  updateButtons(){},info(){},finishOperation(){},recordNotification(){},replaceAllRecords:async()=>{writes++;},window:{location:{assign(){nav++;}}},
   resetPreview(){},restorePreview:{},refreshCount:async()=>{},};
  runInNewContext(stripTypeScriptTypes(helper+'\n'+restore,{mode:'strip'}),context);
  const pending=click();assert.equal(writes,0);assert.equal(request.tone,'danger');assert.equal(request.acceptLabel,'置き換えて復元');

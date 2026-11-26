@@ -65,7 +65,7 @@ const doc={format:'payroll-annual-v1',records:[rec],deleted:[]};
 {
  const source=read('src/view.ts'),start=source.indexOf('const locks=createTabLockCoordinator('),end=source.indexOf('function assertUnlocked',start);assert.ok(start>=0&&end>start);
  let cb,removed=false,revoked=false;const document={title:'fixture.pdf'},reader={title:'fixture.pdf',hidden:false,removeAttribute(n){assert.equal(n,'src');removed=true;}};
- runInNewContext(source.slice(start,end),{document,reader,locked:false,fallbackUrl:'blob:fixture',URL:{revokeObjectURL(){revoked=true;}},appStatus:{error(){}},createTabLockCoordinator(fn){cb=fn;return {};}});cb();
+ runInNewContext(source.slice(start,end),{document,reader,locked:false,fallbackUrl:'blob:fixture',URL:{revokeObjectURL(){revoked=true;}},resetNotificationHistory(){},appStatus:{locked(){}},createTabLockCoordinator(fn){cb=fn;return {};}});cb();
  assert.equal(document.title,'Payroll | PDF原本');assert.equal(reader.title,'PDF原本');assert.equal(reader.hidden,true);assert.equal(removed,true);assert.equal(revoked,true);
  assert.doesNotMatch(read('src/main.ts'),/console\.error\([^\n]*,\s*error\s*\)/);
 }

@@ -1,3 +1,4 @@
+import type {EmployerEntry} from '../storage/employerDirectory.ts';
 /** Keep historical actuals intact, but never mix independent employer IDs in forecast samples.
  * Legacy records without an ID remain their own unidentified cohort.
  */
@@ -11,7 +12,7 @@ export function activeEmployerSalaries<T extends EmployerForecastSource>(
  return paid.filter(item=>item.employerId===latest.employerId);
 }
 
-export interface ForecastEmployerSetting {id:string;role:'main'|'side';current:boolean;name:string}
+export type ForecastEmployerSetting=EmployerEntry;
 /** A registered current employer takes precedence over the last paid statement.
  * Old role-only data remains readable. An explicitly retired role is not projected.
  */

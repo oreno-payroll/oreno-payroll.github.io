@@ -5,7 +5,7 @@
   <script src="../frame-guard.js"></script>
 <script src="../theme.js"></script><title>設定 | Payroll</title>
   <link rel="icon" type="image/x-icon" href="../favicon.ico">
-  <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png"><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/vault.css?v=20261122-ui-consistency-v1"><script type="module" src="../backup.js"></script>
+  <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png"><link rel="stylesheet" href="../styles/ress.css"><link rel="stylesheet" href="../styles/style.css"><link rel="stylesheet" href="../styles/vault.css?v=20261122-ui-consistency-v1"><script type="module" src="../backup.js"></script><script type="module" src="../release-history.js"></script>
   <link rel="stylesheet" href="../styles/cloud.css"><link rel="stylesheet" href="../styles/theme.css"></head><body>
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 <symbol id="icon-ledger" viewBox="0 0 24 24"><rect x="5" y="3" width="15" height="18" rx="2"/><path d="M9 3v18M12 8h5M12 12h5M12 16h4"/></symbol>
@@ -21,8 +21,9 @@
     <button type="button" class="settings-menu__item" data-settings-open="employers" aria-controls="settings-employers-panel" disabled><span><strong>勤務先管理</strong></span></button>
     <button type="button" class="settings-menu__item" data-settings-open="backup" aria-controls="settings-backup-panel" disabled><span><strong>バックアップ</strong></span></button>
     <button type="button" class="settings-menu__item" data-settings-open="maintenance" aria-controls="settings-details-panel" disabled><span><strong>メンテナンス</strong></span></button>
+    <button type="button" class="settings-menu__item" data-settings-open="notifications" aria-controls="settings-notifications-panel" disabled><span><strong>通知履歴</strong></span><span id="notification-unread" class="notification-unread" hidden></span></button>
   </nav>
-  <div id="settings-version" class="build-info" aria-label="Payrollバージョン">Payroll <span data-build-version>ビルド情報を読み込み中</span></div>
+  <div class="build-info"><button type="button" id="settings-version" aria-haspopup="dialog" title="アップデート履歴を開く">Payroll <span data-build-version>バージョン確認中</span></button><span data-build-details></span></div>
   </aside>
 
   <noscript><p class="vault-alert">設定を利用するにはJavaScriptを有効にしてください。</p></noscript>
@@ -42,6 +43,37 @@
         <label class="employer-settings__field" for="employer-directory-role">勤務区分
         <select id="employer-directory-role" class="input"><option value="" disabled>勤務区分を選択</option><option value="main">本業</option><option value="side">副業</option></select></label></div>
         <label class="vault-check"><input type="checkbox" id="employer-directory-current">現在の勤務先に設定する</label>
+        <fieldset id="employer-forecast-settings" class="employer-forecast-settings">
+          <legend>給与・賞与の見込み設定</legend>
+          <fieldset class="employer-forecast-group">
+            <legend>給与見込みの計算方法</legend>
+            <div class="employer-forecast-methods">
+              <label class="vault-check"><input type="radio" name="employer-salary-method" value="latest">最新の通常給与</label>
+              <label class="vault-check"><input type="radio" name="employer-salary-method" value="median" checked>直近最大3件の中央値</label>
+              <label class="vault-check"><input type="radio" name="employer-salary-method" value="average">直近最大3件の平均値</label>
+              <label class="vault-check"><input type="radio" name="employer-salary-method" value="none">算出しない</label>
+            </div>
+          </fieldset>
+          <label class="vault-check"><input type="checkbox" id="employer-bonus-enabled" aria-controls="employer-bonus-schedule">賞与見込みを算出する</label>
+          <fieldset id="employer-bonus-schedule" class="employer-forecast-group" hidden disabled>
+            <legend>賞与支給予定月（複数選択可）</legend>
+            <div class="employer-bonus-months">
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="1">1月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="2">2月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="3">3月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="4">4月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="5">5月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="6">6月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="7">7月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="8">8月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="9">9月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="10">10月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="11">11月</label>
+              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="12">12月</label>
+            </div>
+            <p class="vault-info" id="employer-bonus-month-hint">1か月以上選択してください。最新の通常給与1件から交通費・立替経費を除いた参考額を使用します。</p>
+          </fieldset>
+        </fieldset>
         <p class="vault-info">既存の明細にある未登録の勤務先も名称を設定できます。ID未設定の明細には自動で割り当てません。</p>
         <div class="settings-action-row"><button type="button" id="employer-directory-cancel" class="btn btn--secondary">キャンセル</button><button type="submit" id="employer-directory-save" class="btn btn--primary" disabled>勤務先を保存</button></div>
       </form>
@@ -202,6 +234,15 @@
   </section>
 
 
+  <section class="settings-group" id="settings-notifications-panel" aria-labelledby="settings-notifications-title" hidden>
+    <section class="card vault-section" aria-labelledby="settings-notifications-title">
+      <div class="notification-history__head"><div class="vault-section__head"><h2 id="settings-notifications-title">通知履歴</h2><p class="vault-info">このタブの操作結果を表示します。確認済みは復旧完了を意味しません。</p></div><button type="button" id="notification-confirm-all" class="btn btn--secondary btn--small" disabled>すべて確認済みにする</button></div>
+      <p id="notification-empty" class="vault-info">通知はありません</p>
+      <p id="notification-omitted" class="vault-info" hidden></p>
+      <ol id="notification-list" class="notification-history__list" aria-label="操作結果"></ol>
+    </section>
+  </section>
+
   <section class="settings-group settings-details" id="settings-details-panel" aria-labelledby="settings-details-title" hidden>
     <div class="sr-only"><h2 id="settings-details-title">メンテナンス</h2></div>
     <div class="card settings-details-grid">
@@ -257,4 +298,9 @@
       </section>
     </div>
   </section>
-</main></div><script defer src="../build-info.js"></script></body></html>
+</main></div>
+<dialog id="release-history-dialog" class="operation-dialog release-history" aria-labelledby="release-history-title">
+  <h2 id="release-history-title">アップデート履歴</h2>
+  <div id="release-history-content" class="release-history__content" aria-live="polite"></div>
+  <div class="operation-dialog__actions"><button type="button" class="btn btn--primary" id="release-history-close" autofocus>閉じる</button></div>
+</dialog><script defer src="../build-info.js"></script></body></html>

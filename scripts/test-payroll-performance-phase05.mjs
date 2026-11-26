@@ -59,7 +59,7 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
   deletionBusy:()=>false,renderPendingDeletion(){},renderList(){},initialYear:2026,currentPeriodYear:()=>2026,
   saved:[],employerDirectory:[],legacyDirectory:[],legacyEmployers:()=>[],employerFilter:{disabled:true},mutatingSnapshot:null,
   document:{getElementById:()=>indicator,querySelector:()=>refresh,querySelectorAll:selector=>selector.includes("statement-kind")?radios:[button]},
-  appStatus:{element:toastElement,clear(){delete toastElement.dataset.state;notifications.push(['clear']);},loading(m){toastElement.dataset.state='loading';notifications.push(['loading',m]);},success(m){toastElement.dataset.state='success';notifications.push(['success',m]);},error(m){toastElement.dataset.state='error';notifications.push(['error',m]);},show(k,m){toastElement.dataset.state=k;notifications.push([k,m]);}},
+  appStatus:{element:toastElement,clear(){if(['partial','error'].includes(toastElement.dataset.state))return;delete toastElement.dataset.state;notifications.push(['clear']);},dismiss(){delete toastElement.dataset.state;},loading(m){toastElement.dataset.state='loading';notifications.push(['loading',m]);},success(m){toastElement.dataset.state='success';notifications.push(['success',m]);},error(m){toastElement.dataset.state='error';notifications.push(['error',m]);},show(k,m){toastElement.dataset.state=k;notifications.push([k,m]);}},
   authEpoch:()=> 'fixture-epoch',takeNavigationNotice:()=>{const n=nextNotice;nextNotice=null;return n;},navigationFeedback,
   loadRecordSummaries:async opts=>{
    if(failInitial)throw new Error('synthetic initial failure');
@@ -76,6 +76,7 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  await ctx.phase5Refresh();
  assert.equal(ctx.phase5State().dashboardHasView,false);assert.equal(renders,0,'unavailable records must never be aggregated');
  assert.ok(periodControls.every(x=>x.disabled));assert.equal(sideZipButton.disabled,true);assert.equal(indicator.dataset.freshness,'unavailable');assert.equal(refresh.disabled,false);
+ ctx.appStatus.dismiss();
  failInitial=false;
  await ctx.phase5Refresh();
  assert.ok(periodControls.every(x=>!x.disabled));
@@ -93,6 +94,8 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  assert.equal(button.disabled,true,'a failed recheck disables deletion');
  assert.equal(sideZipButton.disabled,true,'a failed recheck disables bulk PDF ZIP');
  assert.equal(yearSelect.disabled,false,'local year filtering remains available');
+ ctx.appStatus.dismiss();
+ ctx.appStatus.show('partial','削除完了・連携未同期');
  await ctx.phase5Refresh(true,{kind:'partial',message:'削除完了・連携未同期'});
  assert.deepEqual(notifications.at(-1),['partial','削除完了・連携未同期'],'refresh cannot overwrite operation outcome');
  assert.equal(ctx.phase5State().dashboardStale,false);assert.equal(ctx.employerDirectory[0].name,'Synthetic new');
@@ -101,7 +104,7 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  assert.equal(indicator.textContent,'最新データ確認済み');
  await ctx.phase5Refresh(true);
  assert.deepEqual(notifications.at(-1),['partial','削除完了・連携未同期'],'ordinary read must preserve unresolved partial notice');
- ctx.appStatus.clear();
+ ctx.appStatus.dismiss();
  await ctx.phase5Refresh(true);
  assert.deepEqual(notifications.at(-1),['clear'],'ordinary read completion must not show a success toast');
  assert.ok(!notifications.some(([kind])=>kind==='loading'),'dashboard progress must stay inline');

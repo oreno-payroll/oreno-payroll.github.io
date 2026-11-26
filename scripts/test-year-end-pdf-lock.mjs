@@ -54,7 +54,7 @@ const mock={Blob,URL:class extends URL{static createObjectURL(file){assert.equal
  receiveYearEndPdf:async()=>({pdf,fileName:'架空従業員.pdf'}),
  getRecord:async()=>{throw new Error('personal data should not load');},
  console,setTimeout,clearTimeout};
-const app=strip(read('src/ui/navigationParams.ts'))+'\n'+strip(read('src/ui/appStatus.ts'))+'\n'+safePdf+'\n'+strip(read('src/view.ts'));
+const app=strip(read('src/ui/navigationParams.ts'))+'\n'+strip(read('src/ui/notificationHistory.ts'))+'\n'+strip(read('src/ui/appStatus.ts'))+'\n'+safePdf+'\n'+strip(read('src/view.ts'));
 runInNewContext(app,mock,{filename:'year-end-view.ts'});
 for(let i=0;i<20&&!reader.src;i++)await new Promise(resolve=>setTimeout(resolve,5));
 assert.equal(reader.src,'blob:private');

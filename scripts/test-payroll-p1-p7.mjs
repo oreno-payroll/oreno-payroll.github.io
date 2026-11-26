@@ -799,3 +799,81 @@ for(const operation of ['edit','move','remove','batch']){
  }
  console.log('PASS verified payroll lock release and uncertain write protection: '+operation);
 }
+
+// Partial original uploads: exercise the real Vault/saveRecordsSkippingDuplicates
+// and Graph.write/request/lock protocol against synthetic encrypted storage.
+for(const fault of ['reject-after','reject-first','lost-reply','readback-429','mixed']){
+ const ctx=await setup(),g=ctx.graph;
+ const inputs=[await sample(901,A,'2026-10'),await sample(902,A,'2026-11')];
+ if(fault==='mixed')inputs.push(await sample(903,A,'2026-12'));
+ const rawWrite=g.write.bind(g),rawRead=g.read.bind(g);
+ let lock=null,serial=0,activeFault=fault,readbackName='',annualWrites=0,releases=0;
+ let storedA,releaseA,startedC;
+ const aStored=new Promise(resolve=>{storedA=resolve;});
+ const aGate=new Promise(resolve=>{releaseA=resolve;});
+ const cStarted=new Promise(resolve=>{startedC=resolve;});
+ const real=new PayrollGraph('synthetic-token',async(url,init)=>{
+  const path=new URL(url).pathname;
+  if(init.method==='PUT'&&path.endsWith('/payroll-write-lock-v1.bin:/content')){
+   assert.equal(lock,null);lock={id:'lock-'+(++serial),etag:'lock-etag-'+serial,text:new TextDecoder().decode(init.body),size:64};
+   return Response.json({id:lock.id,eTag:lock.etag,name:'payroll-write-lock-v1.bin',size:64},{status:201});
+  }
+  if(init.method==='DELETE'){
+   assert.ok(lock);assert.ok(path.endsWith('/'+lock.id));assert.equal(new Headers(init.headers).get('If-Match'),lock.etag);
+   lock=null;releases++;return new Response(null,{status:204});
+  }
+  assert.ok(lock);
+  if(init.method==='PUT'){
+   const match=/\/items\/([^:]+):\/([^:]+):\/content$/.exec(path);assert.ok(match);
+   const parent=decodeURIComponent(match[1]),name=decodeURIComponent(match[2]),parts=parent.split('/'),month=parts.at(-1);
+   assert.ok(parts.includes('originals'));
+   if(activeFault==='reject-first'&&month==='10')await aGate;
+   if(activeFault&&month==='11'){
+    if(activeFault==='reject-first')setTimeout(releaseA,0);else await aStored;
+    if(activeFault==='mixed')await cStarted;
+    if(['reject-after','reject-first','mixed'].includes(activeFault))return new Response(null,{status:429});
+    if(activeFault==='lost-reply')throw Error('synthetic lost original reply');
+   }
+   if(activeFault==='mixed'&&month==='12'){startedC();throw Error('synthetic second worker lost reply');}
+   const text=new TextDecoder().decode(init.body),row=await rawWrite(parts,name,text,null,1000000);
+   if(month==='10')storedA();
+   if(activeFault==='readback-429'&&month==='11'){readbackName=name;return Response.json({id:row.id,size:row.size},{status:201});}
+   return Response.json({id:row.id,eTag:row.etag,name,size:row.size,parentReference:{id:parent}},{status:201});
+  }
+  assert.equal(init.method,'POST');return Response.json({});
+ });
+ real.root=async()=> 'synthetic-root';real.folder=async(parts)=>parts.join('/')||'synthetic-root';
+ real.read=async(parts,name)=>name==='payroll-write-lock-v1.bin'?(lock?{...lock}:null):rawRead(parts,name);
+ real.metadata=async()=>lock?{id:lock.id,etag:lock.etag,size:lock.size}:null;
+ g.withWriteLock=real.withWriteLock.bind(real);g.markUploadCheckpoint=real.markUploadCheckpoint.bind(real);
+ g.write=async(parts,name,text,prior,limit,progress)=>{
+  if(parts.includes('originals'))return real.write(parts,name,text,prior,limit,progress);
+  if(parts.includes('statements'))annualWrites++;
+  await real.request('/synthetic-write',{method:'POST'});return rawWrite(parts,name,text,prior,limit);
+ };
+ g.read=async(parts,name)=>{
+  if(activeFault==='readback-429'&&name===readbackName)throw new GraphError(429,'synthetic-read-rejected');
+  return rawRead(parts,name);
+ };
+ const state={attempted:false,uncertain:false,completed:false,lock:'none'};
+ const safe=fault==='reject-after'||fault==='reject-first';
+ await assert.rejects(saveRecordsSkippingDuplicates(inputs,undefined,state),error=>{
+  assert.equal(/ロックが残っている可能性/.test(error.message),!safe);return true;
+ });
+ assert.equal(state.completed,false);assert.notEqual(state.payrollSaved,true);assert.equal(state.attempted,true);
+ assert.equal(state.uncertain,fault==='lost-reply'||fault==='mixed');
+ assert.equal(Boolean(lock),!safe);assert.equal(releases,Number(safe));assert.equal(annualWrites,0);assert.equal(ctx.vault.records().length,0);
+ if(safe){
+  assert.equal(state.lock,'released');
+  const originals=()=>[...g.files.keys()].filter(p=>p.includes('/originals/'));
+  assert.equal(originals().length,1);const preserved=originals()[0],ciphertext=g.files.get(preserved).text;
+  activeFault='';await ctx.reopen();
+  const retryState={attempted:false,uncertain:false,completed:false,lock:'none'};
+  assert.equal((await saveRecordsSkippingDuplicates(inputs,undefined,retryState)).saved,2);
+  assert.equal(retryState.completed,true);assert.equal(retryState.lock,'released');assert.equal(lock,null);
+  assert.equal(originals().length,2);assert.equal(g.files.get(preserved).text,ciphertext);
+  assert.equal(g.writes.filter(p=>p===preserved).length,1);
+  assert.equal(ctx.vault.records().length,2);assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+ }else assert.equal(state.lock,'held');
+ console.log('PASS partial-original write boundary: '+fault);
+}

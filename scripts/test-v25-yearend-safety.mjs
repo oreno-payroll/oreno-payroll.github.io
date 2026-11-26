@@ -105,7 +105,7 @@ const workspace=(remote,authorization=true)=>{
   repo:{async recoverDocumentsBatch(id,year,state,files){assert.equal(id,'synthetic');assert.equal(year,2026);assert.equal(state,writeState);assert.deepEqual([...files],[file,pendingFile]);return {data:remote,confirmed:verified,yearFiles:{2026:'synthetic-year'}};}},
   captureForecastInput:()=>({value:'unsaved forecast'}),captureBonusInput:()=>({value:'unsaved bonus'}),
   restoreForecastInput(v){ctx.forecastRestored=v.value;},restoreBonusInput(v){ctx.bonusRestored=v.value;},
-  renderYear(){ctx.rendered=true;},resetSaveRecoveryStateAfterSuccess(){ctx.saveRecoveryRequired=null;},say(){},updateYearControls(){},updateSaveState(){},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){}};
+  recoveryNoticeTarget:{},appStatus:{begin:()=>({}),show(){}},renderYear(){ctx.rendered=true;},resetSaveRecoveryStateAfterSuccess(){ctx.saveRecoveryRequired=null;},say(){},updateYearControls(){},updateSaveState(){},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){}};
  return {ctx,run:runInNewContext(stripTypeScriptTypes(recoverSource,{mode:'strip'})+'\nrecoverDocuments',ctx)};
 };
 const good=workspace(latest);await good.run();assert.equal(good.ctx.busy,false);assert.equal(good.ctx.saveRecoveryRequired,null);assert.equal(good.ctx.data,latest);

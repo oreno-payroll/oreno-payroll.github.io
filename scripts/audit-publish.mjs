@@ -37,11 +37,12 @@ const required = [
   '.githooks/pre-push',
 ];
 const allowed = (file) => [
-  '.gitignore', '.gitleaksignore', 'README.md', 'package.json', 'package-lock.json', 'tsconfig.json',
+  '.gitignore', '.gitleaksignore', 'README.md', 'CHANGELOG.md', 'AGENTS.md', 'package.json', 'package-lock.json', 'tsconfig.json',
   '.github/workflows/deploy.yml', '.githooks/pre-commit', '.githooks/pre-push',
 ].includes(file)
   || /^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.tsx?$/.test(file)
   || /^public\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.(?:html|css)$/.test(file)
+  || file === 'public/release-notes.json'
   || file === 'public/favicon.ico'
   || file === 'public/apple-touch-icon.png'
   || file === 'public/view/pdf-sw.js'

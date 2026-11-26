@@ -13,16 +13,17 @@ assert.match(main,/id="download-side-zip"/);
 // Phase 6-C/D: build identification belongs to the settings overview only.
 // Check the deployed HTML (not just source) and verify the generated label payload.
 assert.equal((backup.match(/\bdata-build-version\b/g)??[]).length,1);
-assert.match(backup,/<div\b[^>]*\bid="settings-version"[^>]*>\s*Payroll\s*<span\s+data-build-version>/);
+assert.equal((backup.match(/\bdata-build-details\b/g)??[]).length,1);
+assert.match(backup,/<button\b(?=[^>]*\btype="button")(?=[^>]*\bid="settings-version")(?=[^>]*\baria-haspopup="dialog")[^>]*>\s*Payroll\s*<span\s+data-build-version>[^<]*<\/span>\s*<\/button>\s*<span\s+data-build-details><\/span>/);
 assert.equal((backup.match(/<script\b[^>]*\bsrc="\.\.\/build-info\.js"[^>]*>/g)??[]).length,1);
-const prefix="document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ";
+const prefix=`document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ${JSON.stringify(`v${version}`)}; });\n`+
+  "document.querySelectorAll('[data-build-details]').forEach(el => { el.textContent = ";
 const suffix="; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n";
 assert.ok(info.startsWith(prefix)&&info.endsWith(suffix),'build-info script must populate the expected marker');
 const label=JSON.parse(info.slice(prefix.length,-suffix.length));
-assert.ok(label.startsWith(`v${version} · `),'build-info version must match package.json');
 const parts=label.split(' · ');
-assert.equal(parts.length,3);
-const [,stamp,revision]=parts;
+assert.equal(parts.length,2);
+const [stamp,revision]=parts;
 assert.ok(stamp.trim(),'build-info must include the build timestamp');
 assert.match(revision,/^(?:[a-f0-9]{4,64}|local)$/,'build-info must include the build revision');
 // Keep the old pages mandatory and check every other distributed HTML too.
@@ -32,7 +33,7 @@ function checkOtherPages(dir){
   const file=path.posix.join(dir,entry.name);
   if(entry.isDirectory())checkOtherPages(file);
   else if(entry.isFile()&&entry.name.endsWith('.html')&&file!=='dist/backup/index.html'){
-   assert.doesNotMatch(read(file),/\bdata-build-version\b|\bid="settings-version"|\bclass="[^"\n]*\bbuild-info\b|\bsrc="[^"\n]*build-info\.js"/,`${file}: build label must be settings-only`);
+   assert.doesNotMatch(read(file),/\bdata-build-(?:version|details)\b|\bid="settings-version"|\bclass="[^"\n]*\bbuild-info\b|\bsrc="[^"\n]*build-info\.js"/,`${file}: build label must be settings-only`);
   }
  }
 }

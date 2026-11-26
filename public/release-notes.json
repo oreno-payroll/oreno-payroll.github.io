@@ -1,0 +1,350 @@
+[
+  {
+    "version": "1.3.0",
+    "title": "勤務先別の見込み設定・通知履歴・アップデート履歴",
+    "summary": "勤務先ごとに給与・賞与の見込みを設定でき、設定画面から操作結果やPayrollの改善履歴を振り返れるようになりました。",
+    "sections": {
+      "features": [
+        "設定のバージョン表示からアップデート履歴を閲覧できます。Microsoft接続や保管庫の解除は不要です。",
+        "給与見込みを最新の通常給与・中央値・平均値・算出なしから勤務先ごとに設定できます。",
+        "本業・副業それぞれの賞与予定月と見込みの有無を設定できます。年度・暦年の集計に反映します。",
+        "設定の通知履歴から、このタブの操作結果と未確認の警告・エラーを確認できます。"
+      ],
+      "internal": [
+        "リリース情報を一元管理し、ビルド時にCHANGELOGを自動生成します。"
+      ],
+      "ux": [
+        "計算根拠に勤務先ごとの推計方法、参照月、賞与予定月を表示します。",
+        "アップデート履歴の入口をバージョン番号だけに絞り、閉じる操作を共通モーダルの配置に統一しました。"
+      ],
+      "fixes": [
+        "重要な通知を無関係な後続通知で消さず、閉じた通知も履歴から確認できるようにしました。",
+        "PDF一括保存中に一部が明確な書き込み拒否で失敗した場合、結果が確定していれば安全にロックを解除し、保存済み原本を再利用して再試行できるようにしました。"
+      ],
+      "security": [
+        "通知履歴には固定の操作コードと結果・時刻だけを保持し、認証やロックの変更時に消去または無効化します。"
+      ]
+    }
+  },
+  {
+    "version": "1.2.0",
+    "title": "ロック復旧・原本保存の高速化とUI改善",
+    "summary": "保存時の通信と操作の負担を減らし、通信障害からの復旧を改善しました。",
+    "sections": {
+      "ux": [
+        "PDF読み取り・入力欄・通知・削除待ち一覧を整理。",
+        "Microsoft接続確認中の不要な操作を削減。"
+      ],
+      "fixes": [
+        "明確な書き込み拒否と結果不明を区別し、安全に確認できる残留ロックを復旧。"
+      ],
+      "internal": [
+        "通常保存では対象月の原本を検査し、正常な新規保存の応答が確認できる場合は原本の読み戻しを省略。"
+      ]
+    },
+    "date": "2026-11-26",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/17",
+    "stats": {
+      "files": 31,
+      "additions": 505,
+      "deletions": 167
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "給与保存とFinance連携の正常化",
+    "summary": "保存・復旧の手順を整理し、重複通信を削減しました。",
+    "sections": {
+      "ux": [
+        "保存進捗、勤務先一括設定、年末調整の操作を改善。"
+      ],
+      "fixes": [
+        "給与明細の保存とFinance連携の失敗を区別し、部分成功時の復旧を改善。"
+      ],
+      "internal": [
+        "年度取得、PDF原本の検査、Finance同期、公開前検証の重複を削減。"
+      ]
+    },
+    "date": "2026-11-25",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/16",
+    "stats": {
+      "files": 66,
+      "additions": 2485,
+      "deletions": 1243
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "端末間の排他制御と原本保全",
+    "summary": "複数の端末から操作する場合の保存の安全性を強化しました。",
+    "sections": {
+      "security": [
+        "共通書き込みロックを導入し、競合や不明な書き込み結果を保護。",
+        "明細削除や差し替え時のPDF原本を保持し、原本のSHA-256を検証。"
+      ]
+    },
+    "date": "2026-11-25",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/15",
+    "stats": {
+      "files": 57,
+      "additions": 508,
+      "deletions": 185
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "PDF閲覧のプライバシー保護",
+    "summary": "原本閲覧時に最新の明細と参照先を確認します。",
+    "sections": {
+      "security": [
+        "URLや閲覧タイトルの情報を削減し、取得前後で明細の最新性を照合。"
+      ]
+    },
+    "date": "2026-11-24",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/14",
+    "stats": {
+      "files": 21,
+      "additions": 233,
+      "deletions": 78
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "公開前の個人情報保護",
+    "summary": "公開工程で秘密情報や非公開データを扱う範囲を限定しました。",
+    "sections": {
+      "security": [
+        "非公開監査をmain専用環境に分離し、中間成果物を暗号化。",
+        "Git履歴と配信成果物の監査を強化。"
+      ]
+    },
+    "date": "2026-11-24",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/13",
+    "stats": {
+      "files": 14,
+      "additions": 431,
+      "deletions": 73
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "給与管理の総合改善",
+    "summary": "ホーム・設定・年末調整を整理し、登録・編集・削除を改善しました。",
+    "sections": {
+      "ux": [
+        "共通UI、通知、スマートフォン表示を統一。"
+      ],
+      "security": [
+        "認証、鍵管理、データ整合性を強化。"
+      ],
+      "internal": [
+        "OneDrive通信と暗号化キャッシュを最適化。"
+      ]
+    },
+    "date": "2026-11-24",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/12",
+    "stats": {
+      "files": 106,
+      "additions": 5183,
+      "deletions": 1254
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "Microsoft再接続と保存復旧",
+    "summary": "通信や認証で問題が発生した場合に、操作結果を確認しやすくしました。",
+    "sections": {
+      "ux": [
+        "接続確認・通知・PDF操作の案内を改善。"
+      ],
+      "fixes": [
+        "認証復旧とアカウント照合、保存失敗後の確認を改善。"
+      ]
+    },
+    "date": "2026-11-24",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/11",
+    "stats": {
+      "files": 20,
+      "additions": 638,
+      "deletions": 84
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "勤務先IDと給与見込み",
+    "summary": "勤務区分とは独立した勤務先単位で明細を管理できるようにしました。",
+    "sections": {
+      "features": [
+        "勤務先IDの独立管理。"
+      ],
+      "fixes": [
+        "勤務先単位の給与見込み、保存・同期・復元の整合性を改善。"
+      ]
+    },
+    "date": "2026-11-24",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/10",
+    "stats": {
+      "files": 24,
+      "additions": 255,
+      "deletions": 40
+    }
+  },
+  {
+    "version": "1.1.1",
+    "title": "一括保存・金額確認の改善",
+    "summary": "複数の明細を扱う処理と、年末調整の読み取りを改善しました。",
+    "sections": {
+      "ux": [
+        "未取得の給与項目を0円にする場合の明示確認を追加。"
+      ],
+      "fixes": [
+        "保存時の競合と読み取りキャッシュ、年末調整の最新性を改善。"
+      ],
+      "internal": [
+        "クラウド操作、一括保存、年末調整の読み取りを最適化。"
+      ]
+    },
+    "date": "2026-11-23",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/9"
+  },
+  {
+    "version": "1.1.1",
+    "title": "PDF閲覧と公開検証の強化",
+    "summary": "PDFを安全に閲覧できるようにし、公開前の自動検証を整備しました。",
+    "sections": {
+      "security": [
+        "PDFのMIMEタイプを固定し、原本閲覧と見込み保存の保護を強化。",
+        "PRの必須検証、CodeQL、Playwrightによる自動検証を整備。"
+      ],
+      "ux": [
+        "給与ダッシュボードと認証・年末調整の操作性を改善。"
+      ]
+    },
+    "date": "2026-11-22",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/4"
+  },
+  {
+    "version": "1.1.1",
+    "title": "ブラウザ記憶と年末調整の改善",
+    "summary": "保管庫の開き方と年末調整の保存・復元を改善しました。",
+    "sections": {
+      "features": [
+        "利用者が選択した場合にブラウザへ非抽出の鍵を記憶する機能を追加。",
+        "年度・暦年の切替表示と、Finance連携用の収入データ項目を整備。"
+      ],
+      "fixes": [
+        "年末調整の一括保存、復元、年間集計を改善。"
+      ],
+      "security": [
+        "従来のタブでの鍵保持を廃止し、認証・保管庫の安全性を強化。"
+      ]
+    },
+    "date": "2026-11-22",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/commit/f4fa2115846a8bdcea2cfeaac02757c051da7e8b"
+  },
+  {
+    "version": "1.1.1",
+    "title": "年末調整とダークモード",
+    "summary": "本人の給与明細とは独立した年末調整サポートを整備しました。",
+    "sections": {
+      "features": [
+        "従業員別の年末調整サポートとダークモード。",
+        "年末調整の暗号化バックアップ・復元。"
+      ],
+      "fixes": [
+        "復元中断後の再開を改善。"
+      ],
+      "security": [
+        "PDF閲覧とタブ間の保管庫ロックを強化。"
+      ]
+    },
+    "date": "2026-11-21",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/commit/a9dc009564e514ddbd2415af230a168d1b9999d8"
+  },
+  {
+    "version": "1.1.1",
+    "title": "クラウド保管と原本閲覧の改善",
+    "summary": "暗号化保管庫の保全と日常操作を改善しました。",
+    "sections": {
+      "ux": [
+        "スマートフォンの表示、アップロード画面、PDF閲覧時の操作を改善。"
+      ],
+      "security": [
+        "暗号鍵変更と原本整理の保全、鍵保持時間とCSPを見直し。"
+      ],
+      "fixes": [
+        "OneDriveの整合性と異常時の復旧を改善。"
+      ]
+    },
+    "date": "2026-11-18",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/commit/c515d94ac7b438a80ff72480d1aedb3a5a23a633"
+  },
+  {
+    "version": "1.1.1",
+    "title": "暗号化OneDrive保存への移行",
+    "summary": "給与明細とPDF原本を複数端末から利用できる保管庫へ移行しました。",
+    "sections": {
+      "features": [
+        "Microsoft認証とOneDriveへの暗号化保存、Finance連携用収入データ。",
+        "旧IndexedDBの移行・整理。"
+      ],
+      "security": [
+        "給与の平文PDF・平文JSONをOneDriveへ送らない方式に変更。"
+      ]
+    },
+    "date": "2026-11-17",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/commit/cd9c1c1b03a208913b53a31a0806270e75a440f7"
+  },
+  {
+    "version": "1.1.0",
+    "title": "給与管理の信頼性と原本処理の改善",
+    "summary": "PDF処理や給与管理の信頼性を改善しました。",
+    "sections": {
+      "fixes": [
+        "給与明細とPDF処理の安定性を改善。"
+      ],
+      "security": [
+        "保存・バックアップの安全性を強化。"
+      ]
+    },
+    "date": "2026-11-15",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/commit/d4705aab7405b42b69a4f2ef845dd39397ccab6d",
+    "stats": {
+      "files": 52,
+      "additions": 2441,
+      "deletions": 272
+    }
+  },
+  {
+    "version": "1.0.0",
+    "title": "Payroll 初期公開",
+    "summary": "本業・副業の給与と賞与をPDFから管理するアプリとして公開しました。",
+    "sections": {
+      "features": [
+        "PDF読み取り、一括登録、原本閲覧、給与・賞与集計と年度見込み。",
+        "ブラウザ内保存と暗号化バックアップ・復元。"
+      ],
+      "fixes": [
+        "初期公開日に賞与計算を改善。"
+      ]
+    },
+    "date": "2026-11-12",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/commit/088b5345299cc55f1995628c2626098b84b2cb50"
+  }
+]

@@ -78,7 +78,7 @@ console.log('PASS: legacy snapshot without ETags falls back to full authenticate
  const store=new Map();
  const env={crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,ArrayBuffer,Date,Map,Set,Promise,Error,JSON,btoa,atob,
   sessionStorage:{getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,String(v)),removeItem:k=>store.delete(k)},
-  clearNavigationNotice(){},dismissOperationDialog(){},dismissRecordDiagnostic(){}};
+  clearNavigationNotice(){},resetNotificationHistory(){},dismissOperationDialog(){},dismissRecordDiagnostic(){}};
  const actual=runInNewContext(strip(src('src/cloud/crypto.ts'))+'\n'+strip(src('src/cloud/snapshot.ts'))+'\n({rememberNavigationSnapshot,restoredNavigationSnapshot,invalidateNavigationSnapshot,invalidateAuthSession,mutationEpoch,SNAPSHOT_TTL_MS})',env);
  const k=await webcrypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
  const scope='synthetic-scope',s='synthetic-salt';

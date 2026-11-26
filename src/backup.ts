@@ -1,3 +1,5 @@
+import {mountNotificationHistory} from './ui/notificationHistoryView';
+import {noticeCode,recordNotification} from './ui/notificationHistory';
 import {confirmOperation,type OperationDialogRequest} from './ui/operationDialog';
 import {mountSettingsNavigation} from './ui/settingsNavigation';
 import { createAppStatus } from './ui/appStatus';
@@ -7,6 +9,7 @@ import {operationFeedback,type OperationResult} from './ui/operationOutcome';
 import type {OrphanAnnualYear,DetachedOriginalReport,DetachedOriginal} from './cloud/vault';
 import {migrateFromLegacyIndexedDb, inspectLegacyIndexedDb, verifyLegacyIndexedDbCloudBeforeDelete, deleteLegacyIndexedDb, loadRecords, inspectReplacementRestoreBaseline, type ReplacementRestoreBaseline, replaceAllRecords,inspectAdditiveRestore,restoreAdditiveRecords,type AdditiveRestorePreview, inspectEmployerAssignment, assignEmployers, recordSignature, type SavedPayrollSummary } from './storage/payrollStore';
 import {employerDirectorySignature,upsertEmployer,type EmployerEntry} from './storage/employerDirectory';
+import {defaultEmployerForecast,validateEmployerForecast,type EmployerForecastPreferences} from './storage/employerForecast';
 import {PayrollPartialSuccessError} from './storage/operationError';
 import {createEmployerId} from './storage/employerIdentity';
 import {legacyEmployers,employerDisplayName,type LegacyEmployer} from './ui/employerSelection';
@@ -85,6 +88,22 @@ const employerDirectoryTarget=$<HTMLSelectElement>('employer-directory-target');
 const employerDirectoryName=$<HTMLInputElement>('employer-directory-name');
 const employerDirectoryRole=$<HTMLSelectElement>('employer-directory-role');
 const employerDirectoryCurrent=$<HTMLInputElement>('employer-directory-current');
+const employerForecastSettings=$<HTMLFieldSetElement>('employer-forecast-settings');
+const employerSalaryMethods=Array.from(employerForecastSettings.querySelectorAll<HTMLInputElement>('input[name="employer-salary-method"]'));
+const employerBonusEnabled=$<HTMLInputElement>('employer-bonus-enabled');
+const employerBonusSchedule=$<HTMLFieldSetElement>('employer-bonus-schedule');
+const employerBonusMonths=Array.from(employerBonusSchedule.querySelectorAll<HTMLInputElement>('input[name="employer-bonus-month"]'));
+function fillEmployerForecast(preferences:EmployerForecastPreferences):void{
+ for(const input of employerSalaryMethods)input.checked=input.value===preferences.salaryMethod;
+ employerBonusEnabled.checked=preferences.bonusMonths.length>0;
+ for(const input of employerBonusMonths)input.checked=preferences.bonusMonths.includes(Number(input.value));
+}
+function draftEmployerForecast():EmployerForecastPreferences {
+ const bonusMonths=employerBonusEnabled.checked?employerBonusMonths.filter(input=>input.checked).map(input=>Number(input.value)):[];
+ if(employerBonusEnabled.checked&&!bonusMonths.length)throw new Error('賞与の支給予定月を選択してください。');
+ return validateEmployerForecast({salaryMethod:employerSalaryMethods.find(input=>input.checked)?.value,bonusMonths});
+}
+
 const employerDirectorySave=$<HTMLButtonElement>('employer-directory-save');
 const employerDirectoryAdd=$<HTMLButtonElement>('employer-directory-add');
 const employerDirectoryCancel=$<HTMLButtonElement>('employer-directory-cancel');
@@ -142,7 +161,12 @@ function updateEmployerButtons():void{
  const legacy=legacyDirectory.find(x=>x.id===employerDirectoryTarget.value);
  employerDirectoryRole.disabled=busy||!employers||Boolean(entry)||legacy?.roles.length===1;
  employerDirectoryCurrent.disabled=busy||!employers;
- employerDirectorySave.disabled=busy||!employers||!employerDirectoryName.value.trim()||!['main','side'].includes(employerDirectoryRole.value);
+ const roleValid=['main','side'].includes(employerDirectoryRole.value);
+ employerForecastSettings.disabled=busy||!employers||!roleValid;
+ employerBonusSchedule.hidden=!employerBonusEnabled.checked;
+ employerBonusSchedule.disabled=employerForecastSettings.disabled||!employerBonusEnabled.checked;
+ const forecastValid=employerSalaryMethods.some(input=>input.checked)&&(!employerBonusEnabled.checked||employerBonusMonths.some(input=>input.checked));
+ employerDirectorySave.disabled=busy||!employers||!employerDirectoryName.value.trim()||!roleValid||!forecastValid;
 }
 function fillEmployerDraft():void{
  const entry=employers?.find(x=>x.id===employerDirectoryTarget.value);
@@ -150,6 +174,7 @@ function fillEmployerDraft():void{
  employerDirectoryName.value=entry?.name??'';
  employerDirectoryRole.value=entry?.role??(legacy?(legacy.roles.length===1?legacy.roles[0]:''):'main');
  employerDirectoryCurrent.checked=entry?.current??false;
+ fillEmployerForecast(entry?.forecast??defaultEmployerForecast(employerDirectoryRole.value==='side'?'side':'main'));
  updateEmployerButtons();
 }
 function renderEmployerDirectory():void{
@@ -183,7 +208,7 @@ async function approveSettings(request:OperationDialogRequest,current:()=>boolea
 }
 let loadedDb = false;
 let encryptedFile = false;
-const appStatus=createAppStatus();
+const appStatus=createAppStatus(undefined,'settings');
 type Operation = {label:string;result:string};
 let operationResult:OperationResult|null=null;
 let operationCancelled=false;
@@ -191,6 +216,7 @@ function finishOperation(status:OperationResult['status'],message?:string):void{
 function cancelOperation():void{operationCancelled=true;}
 let currentOperation: Operation|null=null;
 let wasBusy=false;
+let notificationScope:ReturnType<typeof appStatus.begin>|undefined;
 const operations: Record<string,Operation>={
  'employer-directory-load':{label:'勤務先一覧を確認',result:'employer-directory-status'},
  'employer-directory-save':{label:'勤務先を保存',result:'employer-directory-status'},
@@ -223,16 +249,20 @@ document.addEventListener('click',event=>{
  if(button&&!button.disabled&&operations[button.id]){currentOperation=operations[button.id];operationResult=null;operationCancelled=false;}
 },true);
 function reportStatusTransition(){
- if(busy&&!wasBusy)appStatus.loading(`${currentOperation?.label??'設定を処理'}しています…`);
+ if(busy&&!wasBusy){
+  const code=noticeCode(Object.keys(operations).find(key=>operations[key]===currentOperation)??'settings');
+  notificationScope=appStatus.begin(code,code==='payroll-income-publish'?code:undefined);
+  appStatus.show('loading',`${currentOperation?.label??'設定を処理'}しています…`,false,{scope:notificationScope});
+ }
  if(!busy&&wasBusy){
   const operation=currentOperation;
   // The operation sets its result explicitly; UI wording never decides success/failure.
-  if(operationCancelled||!operation)appStatus.clear();
+  if(operationCancelled||!operation)appStatus.clear(notificationScope);
   else {
    const notification=operationFeedback(operation.label,operationResult);
-   appStatus.show(notification.kind,notification.message);
+   appStatus.show(notification.kind,notification.message,false,{scope:notificationScope});
   }
-  currentOperation=null;operationResult=null;operationCancelled=false;
+  currentOperation=null;operationResult=null;operationCancelled=false;notificationScope=undefined;
  }
  wasBusy=busy;
 }
@@ -318,8 +348,8 @@ function updateButtons(): void {
 function info(message: string, isError = false, detail = false): void {
   status.textContent = isError||detail ? message : "";
   status.style.color = isError ? 'var(--color-danger)' : 'var(--color-success)';
-  if(isError){if(busy)finishOperation('error');appStatus.error(message);}
-  else if(busy&&!detail)appStatus.loading(message);
+  if(isError){if(busy&&currentOperation)finishOperation('error',message);else appStatus.error(message);}
+  else if(busy&&!detail)appStatus.show('loading',message,false,{scope:notificationScope});
   else if(!busy&&message&&!detail)appStatus.success(message);
 }
 function resetPreview(): void {
@@ -431,6 +461,7 @@ restoreButton.addEventListener('click', async () => {
   busy = true; updateButtons(); info('全件復元中です。操作完了を確認してください…');
   try {
     await replaceAllRecords(data.records, snapshot,data.employers,authorized);finishOperation('success');
+    if(authorized())recordNotification('restore-button','success');
     window.location.assign('../index.html');
   } catch (error) {
     // 別タブで変更されていた場合も、古い復元確認を再利用できないようにする。
@@ -702,7 +733,7 @@ changeButton.addEventListener('click',()=>{void(async()=>{
   // 移行はこの時点でOneDriveに確定済み。旧タブ鍵を消し、メモリ鍵を更新する。
   changeCurrent.value='';changeNew.value='';changeConfirm.value='';changeAck.checked=false;
   let remembered:'updated'|'not-registered'|'storage-warning';
-  try{remembered=await refreshSessionAfterKeyRotation();}
+  try{remembered=await refreshSessionAfterKeyRotation();notificationScope=appStatus.begin('change-passphrase-button');}
   catch{changeStatus.textContent='OneDriveの変更は完了しました。セッションの引継ぎに失敗したため、次回は新しいパスフレーズで解除してください。';finishOperation('partial');return;}
   changeStatus.textContent=remembered==='updated'?'パスフレーズを変更し、このブラウザの記憶鍵も更新しました。':
    remembered==='storage-warning'?'パスフレーズの変更は完了しましたが、ブラウザ記憶の更新・削除を確認できませんでした。設定から確認してください。':
@@ -966,7 +997,11 @@ employerDirectoryTarget.addEventListener('change',fillEmployerDraft);
 employerDirectoryAdd.addEventListener('click',()=>{if(busy||!employers)return;employerDirectoryTarget.value='';fillEmployerDraft();employerDirectoryForm.hidden=false;employerDirectoryName.focus();});
 employerDirectoryCancel.addEventListener('click',()=>{if(busy)return;employerDirectoryForm.hidden=true;employerDirectoryTarget.value='';fillEmployerDraft();employerDirectoryAdd.focus();});
 employerDirectoryName.addEventListener('input',updateEmployerButtons);
-employerDirectoryRole.addEventListener('change',updateEmployerButtons);
+employerDirectoryRole.addEventListener('change',()=>{
+ fillEmployerForecast(defaultEmployerForecast(employerDirectoryRole.value==='side'?'side':'main'));
+ updateEmployerButtons();
+});
+employerForecastSettings.addEventListener('change',updateEmployerButtons);
 // Use the directory from the same authenticated index as the annual records.
 async function readEmployerSnapshot(vault:Awaited<ReturnType<typeof cloudVault>>,authorized:()=>boolean){
  let list:EmployerEntry[]|undefined;
@@ -1022,8 +1057,13 @@ employerDirectoryForm.addEventListener('submit',async event=>{
  const role=employerDirectoryRole.value;
  if((role!=='main'&&role!=='side')||(existing&&existing.role!==role)||(legacy&&!legacy.roles.includes(role)))return;
  let next:EmployerEntry[];
- try{next=upsertEmployer(expected,{id:selected||createEmployerId(),name:employerDirectoryName.value.trim(),role,current:employerDirectoryCurrent.checked});}
- catch{employerDirectoryStatus.textContent='表示名または勤務先の件数を確認してください。';appStatus.warning(employerDirectoryStatus.textContent);return;}
+ try{
+  const forecast=draftEmployerForecast();
+  // Keep untouched defaults in the old four-field format. Explicit choices travel with the employer.
+  const custom=!!existing?.forecast||JSON.stringify(forecast)!==JSON.stringify(defaultEmployerForecast(role));
+  next=upsertEmployer(expected,{id:selected||createEmployerId(),name:employerDirectoryName.value.trim(),role,current:employerDirectoryCurrent.checked,...(custom?{forecast}:{})});
+ }
+ catch{employerDirectoryStatus.textContent='表示名・見込み設定・勤務先の件数を確認してください。';appStatus.warning(employerDirectoryStatus.textContent);return;}
  const authorized=captureOperationAuthorization();
  busy=true;updateButtons();
  try{
@@ -1072,3 +1112,4 @@ settingsNavigation=mountSettingsNavigation($<HTMLElement>('settings-menu').close
  if(view==='employers'&&!employers)void loadEmployerDirectory(false);
 });
 settingsNavigation.setBusy(busy);
+mountNotificationHistory();

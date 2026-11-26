@@ -47,7 +47,7 @@ let writes=0,controlUpdates=0;const calls=[];
 const ctx={captureOperationAuthorization:()=>()=>true,setTimeout,clearTimeout,requestAnimationFrame:f=>setTimeout(f,0),busy:false,savingDocuments:false,saveAll:{disabled:false},selected:'synthetic',activeYear:2026,data:{documents:records},savedEdits:drafts,pendingDeletions:new Map(),fileQueue:[],isChanged:()=>true,validateSavedEdit:()=>null,validateQueueItem:()=>null,
  requiresAmountApproval:d=>documentAmountWarnings(d).length>0&&!consent.has(d),documentAmountWarnings,structuredClone,say:m=>calls.push(m),saveResult:{replaceChildren(){}},uploadAccordion:{},showBusy(){},updateYearControls(){controlUpdates++;assert.equal(ctx.busy,true);},updateSaveState(){},
  repo:{saveDocumentsBatch:async(...args)=>{writes++;assert.equal(args[4],true);assert.notEqual(args[2][0].draft,d1);const approved=args[2][0].draft.taxable;d1.taxable++;await Promise.resolve();assert.equal(args[2][0].draft.taxable,approved,'in-flight edits cannot change the approved payload');throw new Error('synthetic stop at remote boundary');}},
- appStatus:{error(){},partial(){}},saveRecoveryRequired:null,saveRecovery:{},saveRecoveryStatus:{},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){},
+ appStatus:{error(){},partial(){},begin(){return {};},show(){}},recoveryNoticeTarget:undefined,saveRecoveryRequired:null,saveRecovery:{},saveRecoveryStatus:{},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){},
 };
 // Isolate the save path through the awaited repository call, without executing unrelated rendering/error handlers.
 const boundary=source.indexOf('  if(selected!==id||activeYear!==year||!authorized())');assert.ok(boundary>0);

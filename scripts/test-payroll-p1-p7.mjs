@@ -51,6 +51,7 @@ async function edit(ctx,id,changes){const current=await getRecordSummary(id);awa
 const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttempt(record)],recordSignature);
 {
  const ctx=await setup(),base=await sample(1,undefined);Object.assign(base,prepareOptionalZeros(base.form,{},true));
+ await ctx.vault.writeEmployerDirectory([],[{id:A,name:'Synthetic main',role:'main',current:true},{id:B,name:'Synthetic past',role:'main',current:false}]);
  assert.equal((await saveRecordsSkippingDuplicates([base])).saved,1);await ctx.reopen();const initial=ctx.vault.records()[0],id=initial.id,originalWrites=ctx.graph.writes.filter(x=>x.includes('/originals/')).length;
  let next=await edit(ctx,id,()=>({employerId:A}));assert.equal(next.employerId,A);assert.equal(next.revision,2);
  next=await edit(ctx,id,r=>{const form={...r.form,transportation:'5000'};return {employerId:B,form,zeroResolution:reconcilePayrollZeroResolution(r.zeroResolution,form)};});
@@ -133,7 +134,7 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  console.log('PASS Finance read outage does not prevent payroll commit; retry only syncs income');
 }
 {
- const ctx=await setup(),a=await sample(9,A);await saveRecordsSkippingDuplicates([a]);const old=await getRecordSummary(ctx.vault.records()[0].id);
+ const ctx=await setup(),a=await sample(9,A);await ctx.vault.writeEmployerDirectory([],[{id:A,name:'Synthetic main',role:'main',current:true},{id:B,name:'Synthetic past',role:'main',current:false}]);await saveRecordsSkippingDuplicates([a]);const old=await getRecordSummary(ctx.vault.records()[0].id);
  ctx.graph.discard=(p,prior)=>Boolean(prior&&p.includes('/statements/'));await assert.rejects(updateRecordMetadata({...old,employerId:B},[],recordSignature(old)),/保存結果が一致/);await ctx.reopen();assert.equal((await getRecordSummary(old.id)).employerId,A);
  await assert.rejects(ctx.vault.remove(old.id),/保存結果が一致/);await ctx.reopen();assert.equal(ctx.vault.records().length,1);
  console.log('PASS P6: read-back containing old data or undeleted ID cannot be reported successful');
@@ -426,6 +427,7 @@ async function replacementFixture(){
 // Phase 5-A2: same safety path for duplicate cleanup and full replacement.
 {
  const {ctx,keep,drop}=await replacementFixture();
+ await ctx.vault.writeEmployerDirectory([],[{id:A,name:'Synthetic main',role:'main',current:true},{id:B,name:'Synthetic past',role:'main',current:false}]);
  const changed={...keep,form:{...keep.form,targetMonth:drop.form.targetMonth,paymentDate:drop.form.paymentDate},employerId:drop.employerId};
  await updateRecordMetadata(changed,[{id:drop.id,signature:recordSignature(drop)}],recordSignature(keep));await ctx.reopen();
  assert.deepEqual(ctx.vault.records().map(r=>r.id),[keep.id]);assert.equal(ctx.graph.trashed.length,0);assert.ok((await ctx.vault.inspectDetachedOriginals()).originals.some(r=>r.uuid===drop.originalId));
@@ -458,16 +460,17 @@ async function replacementFixture(){
  console.log('PASS: dashboard directory is a detached view; edit role mismatch and stale directory reject without writes; explicit new role persists with Finance sync');
 }
 
-// A directory change between the shared edit preflight and the write lock must
-// still invalidate the approved directory, without another unlocked index GET.
+// An unrelated directory change must not block a monetary-only edit.
 {
  const ctx=await setup(),dir=[{id:A,name:'Synthetic main',role:'main',current:true}];
  await ctx.vault.writeEmployerDirectory([],dir);await saveRecordsSkippingDuplicates([await sample(695,A)]);await ctx.reopen();
  const prior=await getRecordSummary(ctx.vault.records()[0].id),before=ctx.graph.writes.length,save=ctx.vault.save.bind(ctx.vault);
  ctx.vault.save=async(...args)=>{await ctx.vault.writeEmployerDirectory(dir,dir.map(e=>({...e,name:'Synthetic renamed'})));return save(...args);};
- await assert.rejects(updateRecordMetadata({...prior,form:{...prior.form,net:'9000'}},[],recordSignature(prior),undefined,JSON.stringify(dir)),/勤務先一覧/);
- assert.deepEqual(ctx.graph.writes.slice(before),['payroll/index.enc']);
- console.log('PASS: shared edit snapshot still rejects directory drift under the write lock');
+ await updateRecordMetadata({...prior,form:{...prior.form,net:'9000'}},[],recordSignature(prior),undefined,JSON.stringify(dir));
+ await ctx.reopen();assert.equal((await getRecordSummary(prior.id)).form.net,'9000');
+ assert.deepEqual(ctx.graph.writes.slice(before),['payroll/index.enc','payroll/statements/2026.enc','payroll/income/2027.enc']);
+ assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+ console.log('PASS: unrelated directory rename does not block an existing monetary edit');
 }
 // Phase 5-B2: actual encrypted annual writes, metadata-only, no original mutations.
 async function assignmentFixture(){
@@ -777,7 +780,7 @@ for(const operation of ['edit','move','remove','batch']){
   };
   const execute=()=>operation==='batch'?ctx.vault.removeBatch(rows.map(r=>({id:r.id,matches:x=>recordSignature(x)===recordSignature(r)}))):
    operation==='remove'?ctx.vault.remove(target.id,x=>recordSignature(x)===recordSignature(target)):
-   ctx.vault.save({...target,revision:target.revision+1,form:{...target.form,gross:'12000',net:'12000',...(operation==='move'?{targetMonth:'2028-04'}:{})}},undefined,x=>recordSignature(x)===recordSignature(target));
+   updateRecordMetadata({...target,form:{...target.form,gross:'12000',net:'12000',...(operation==='move'?{targetMonth:'2028-04'}:{})}},[],recordSignature(target));
   await assert.rejects(execute(),error=>{
    assert.equal(/ロックが残っている可能性/.test(error.message),fault!=='finance-read');
    if(fault.startsWith('finance-'))assert.match(error.message,/Finance連携/);

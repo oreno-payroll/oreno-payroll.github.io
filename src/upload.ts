@@ -1,6 +1,6 @@
 import {recordNotification} from './ui/notificationHistory';
 import {personalReviewRows,renderReviewConfirmation} from './ui/payrollReview';
-import {confirmOperation} from './ui/operationDialog';
+import {registerDiagnosticClose} from './ui/recordDiagnostic';
 import {rememberNavigationNotice} from './ui/navigationNotice';
 import {authEpoch} from './cloud/snapshot';
 import {beginPerfOperation,type SavePerfPhase} from './cloud/perf';
@@ -25,7 +25,7 @@ import {createPayrollSemantics} from './storage/payrollSemantics';
 import {validEmployerId} from './storage/employerIdentity';
 import {type EmployerEntry} from './storage/employerDirectory';
 import {currentEmployer,renderEmployerSelect} from './ui/employerSelection';
-import {emptyOptionalAmounts,prepareOptionalZeros,ZERO_OPTIONAL_AMOUNT_LABELS} from './storage/payrollZeroResolution';
+import {emptyOptionalAmounts,prepareOptionalZeros} from './storage/payrollZeroResolution';
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
 import { duplicateOwners, pdfFailureMessage, shortFileName } from "./pdf/uploadWorkflow";
@@ -133,9 +133,10 @@ const diagnosticDialog = $<HTMLDialogElement>("diagnostic-dialog");
 const diagnosticClose = $<HTMLButtonElement>("diagnostic-close");
 const diagnosticShared = $<HTMLTextAreaElement>("diagnostic-shared");
 const diagnosticCopy = $<HTMLButtonElement>("diagnostic-copy");
-const diagnosticRedact = $<HTMLButtonElement>("diagnostic-redact");
-const diagnosticViewOriginal = $<HTMLButtonElement>("diagnostic-view-original");
-const diagnosticCopyOriginal = $<HTMLButtonElement>("diagnostic-copy-original");
+const diagnosticModes = $<HTMLFieldSetElement>("diagnostic-modes");
+const diagnosticModeShared = $<HTMLInputElement>("diagnostic-mode-shared");
+const diagnosticModeOriginal = $<HTMLInputElement>("diagnostic-mode-original");
+const diagnosticModeNote = $<HTMLParagraphElement>("diagnostic-mode-note");
 let diagnosticRawText = "";
 const diagnosticState = $<HTMLParagraphElement>("diagnostic-state");
 const analysisIssues = $<HTMLElement>("analysis-issues");
@@ -146,7 +147,6 @@ const saveButtonLabel = $<HTMLSpanElement>("save-all-label");
 const zeroApproval = $<HTMLElement>("zero-approval");
 const zeroCheckbox = $<HTMLInputElement>("zero-missing-amounts");
 const zeroCount = $<HTMLElement>("zero-approval-count");
-const zeroList = $<HTMLUListElement>("zero-approval-list");
 let zeroConsentFingerprint: string | null = null;
 zeroCheckbox.checked=false; // Never restore a sensitive batch-wide approval from browser form history.
 window.addEventListener('pageshow',()=>{
@@ -877,20 +877,14 @@ function updateSaveState(): void {
   if(zeroCheckbox.checked&&(zeroConsentFingerprint!==fingerprint||unreviewed.length>0||Boolean(invalidEntry)||Boolean(badPdf)||pending)){
     zeroCheckbox.checked=false;zeroConsentFingerprint=null;
   }
-  const zeroRows=uploadable.map(entry=>({entry,fields:emptyOptionalAmounts(entry.form)}))
-    .filter(row=>row.fields.length>0);
-  const blankCount=zeroRows.reduce((sum,row)=>sum+row.fields.length,0);
+  const zeroCounts=uploadable.map(entry=>emptyOptionalAmounts(entry.form).length).filter(count=>count>0);
+  const blankCount=zeroCounts.reduce((sum,count)=>sum+count,0);
   zeroApproval.hidden=blankCount===0||saving||uploadSaveRecoveryRequired;
   zeroCheckbox.disabled=saving||pending||Boolean(badPdf)||Boolean(invalidEntry)||unreviewed.length>0;
   const zeroContradictions=zeroCheckbox.checked?uploadable.filter(entry=>zeroIntroducedWarnings(entry).length>0):[];
   zeroCount.textContent=zeroContradictions.length
     ? `${zeroContradictions.length}件で0円補完による検算不一致。該当欄を手動確認するかチェックを外してください。`
-    : `${zeroRows.length}件・${blankCount}項目（未選択時は空欄）`;
-  zeroList.replaceChildren(...zeroRows.map(({entry,fields})=>{
-    const item=document.createElement('li');
-    item.textContent=`${entry.file.name}：${fields.map(field=>ZERO_OPTIONAL_AMOUNT_LABELS[field]).join('・')}`;
-    return item;
-  }));
+    : `${zeroCounts.length}件・${blankCount}項目（未選択時は空欄）`;
   saveButton.disabled = saving || uploadSaveRecoveryRequired || uploadSaveRecoveryChecking || employerLoading || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
   saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
   const isEmpty=entries.length===0;
@@ -1102,94 +1096,87 @@ saveButton.addEventListener("click", async () => {
   }
 });
 
-// PDFの元テキストと座標を抽出し、利用者が伏せ字に編集してからコピーする。
+// The visible mode determines the single copy action. Shared output is always regenerated from raw data.
 let diagnosticGeneration=0;
-diagnosticButton.addEventListener("click", async () => {
-  const entry = selectedEntry();
-  if (!entry) return;
-  diagnosticRawText = "";
-  diagnosticShared.value = "";
-  diagnosticState.textContent = "PDFの文字と座標を解析しています…";
-  diagnosticCopy.disabled = true;
-  diagnosticRedact.disabled = true;
-  diagnosticViewOriginal.disabled = true;
-  diagnosticCopyOriginal.disabled = true;
-  diagnosticButton.disabled = true;
-  diagnosticDialog.showModal();
-  const generation=++diagnosticGeneration,authorized=captureOperationAuthorization();
-  try {
-    const diagnostic = await createCoordinateDiagnostic(entry.file);
-    if(!diagnosticDialog.open||generation!==diagnosticGeneration||!authorized())return;
-    diagnosticRawText = diagnostic.raw;
-    diagnosticShared.value = redactCoordinateDiagnostic(diagnostic.raw);
-    diagnosticState.textContent = `${diagnostic.pageCount}ページのPDFから、${diagnostic.itemCount}件を抽出。共有用の原文はすべてマスク済みです。`;
-    diagnosticCopy.disabled = false;
-    diagnosticRedact.disabled = true;
-    diagnosticViewOriginal.disabled = false;
-    diagnosticCopyOriginal.disabled = false;
-  } catch {
-    if(!diagnosticDialog.open||generation!==diagnosticGeneration||!authorized())return;
-    diagnosticState.textContent = "座標診断に失敗しました。画像だけのPDFや保護されたPDFは解析できない場合があります。";
-  } finally {
-    diagnosticButton.disabled = false;
-  }
-});
-diagnosticRedact.addEventListener("click", () => {
-  if (diagnosticRedact.disabled) return;
-  diagnosticShared.value = redactCoordinateDiagnostic(diagnosticRawText);
-  diagnosticRedact.disabled = true;
-  diagnosticState.textContent = "座標と文字番号を残し、すべての文字を伏せました。内容を確認してからコピーしてください。原文は診断を開き直すと再取得できます。";
-});
-
-diagnosticCopy.addEventListener("click", async () => {
-  if (!diagnosticRawText) return;
-  // A user can edit/reveal the textbox. The SHARE action never trusts that content.
-  const safe = redactCoordinateDiagnostic(diagnosticRawText);
-  try {
-    await navigator.clipboard.writeText(safe);
-    diagnosticState.textContent = "共有用に全文マスク済みの座標診断だけをコピーしました。";
-  } catch {
-    diagnosticShared.value = safe;
-    diagnosticShared.focus();
-    diagnosticShared.select();
-    diagnosticRedact.disabled = true;
-    diagnosticState.textContent = "自動コピーできませんでした。マスク済みテキストを選択しました。";
-  }
-});
-diagnosticViewOriginal.addEventListener("click", async () => {
-  if(!diagnosticRawText||!diagnosticDialog.open)return;
-  const authorized=captureOperationAuthorization(),generation=diagnosticGeneration;
-  const current=()=>authorized()&&diagnosticDialog.open&&generation===diagnosticGeneration&&Boolean(diagnosticRawText);
-  if(!await confirmOperation({title:'PDF診断の原文を表示',details:['原文には氏名・勤務先・給与額・口座情報などが含まれます。','この端末の画面にのみ表示します。共有用コピーは引き続き全マスクです。'],tone:'warning',acceptLabel:'原文を表示'},current)||!current())return;
-  diagnosticShared.value = diagnosticRawText;
-  diagnosticRedact.disabled = false;
-  diagnosticState.textContent = "原文をローカル表示中です。共有用コピーは引き続き自動マスクします。";
-});
-diagnosticCopyOriginal.addEventListener("click", async () => {
-  if(!diagnosticRawText||!diagnosticDialog.open)return;
-  const authorized=captureOperationAuthorization(),generation=diagnosticGeneration;
-  const current=()=>authorized()&&diagnosticDialog.open&&generation===diagnosticGeneration&&Boolean(diagnosticRawText);
-  if(!await confirmOperation({title:'PDF診断の原文をコピー',details:['個人情報を含むPDF診断の原文をクリップボードにコピーします。','貼り付け先に注意してください。共有用にする場合は全マスクのコピーを使用してください。'],tone:'warning',acceptLabel:'原文をコピー'},current)||!current())return;
-  try {
-    await navigator.clipboard.writeText(diagnosticRawText);
-    diagnosticState.textContent = "確認済みの原文をコピーしました。共有先を再確認してください。";
-  } catch {
-    diagnosticState.textContent = "原文の自動コピーに失敗しました。安全のため、原文の自動選択は行いません。";
-  }
-});
-diagnosticClose.addEventListener("click", () => diagnosticDialog.close());
-diagnosticDialog.addEventListener("close", () => {
+let diagnosticAuthorized:(()=>boolean)|undefined;
+let releaseDiagnosticClose:(()=>void)|undefined;
+let diagnosticCopyPending=false;
+function diagnosticCurrent():boolean {
+  return Boolean(diagnosticDialog.open&&diagnosticAuthorized?.());
+}
+function closeDiagnostic():void {
   diagnosticGeneration++;
-  diagnosticRawText = "";
-  diagnosticShared.value = "";
-  diagnosticCopy.disabled = true;
-  diagnosticViewOriginal.disabled = true;
-  diagnosticCopyOriginal.disabled = true;
-  diagnosticRedact.disabled = true;
+  diagnosticAuthorized=undefined;
+  releaseDiagnosticClose?.();releaseDiagnosticClose=undefined;
+  diagnosticRawText="";diagnosticShared.value="";diagnosticState.textContent="";
+  diagnosticModes.disabled=true;diagnosticCopy.disabled=true;diagnosticCopyPending=false;
+  diagnosticModeShared.checked=true;diagnosticModeOriginal.checked=false;
+  diagnosticModeNote.textContent="文字をすべて伏せ、位置だけを残します。";
+  diagnosticModeNote.removeAttribute("data-private");
+  diagnosticCopy.textContent="共有用データをコピー";
+  if(diagnosticDialog.open)diagnosticDialog.close();
+}
+function renderDiagnosticMode():void {
+  if(!diagnosticCurrent()){closeDiagnostic();return;}
+  if(!diagnosticRawText)return;
+  const original=diagnosticModeOriginal.checked;
+  diagnosticShared.value=original?diagnosticRawText:redactCoordinateDiagnostic(diagnosticRawText);
+  diagnosticModeNote.textContent=original?"氏名・勤務先・金額などを含みます。コピーした内容はアプリを閉じても残る場合があります。共有先に注意してください。":"文字をすべて伏せ、位置だけを残します。読み取り不具合の共有に使用できます。";
+  diagnosticModeNote.dataset.private=String(original);
+  diagnosticCopy.textContent=original?"個人情報を含む原文をコピー":"共有用データをコピー";
+  diagnosticState.textContent="";
+}
+diagnosticButton.addEventListener("click", async () => {
+  const entry=selectedEntry();
+  if(!entry||saving||document.querySelector("dialog[open]"))return;
+  closeDiagnostic();
+  const authorized=captureOperationAuthorization(),generation=diagnosticGeneration;
+  diagnosticAuthorized=()=>authorized()&&selectedEntry()===entry;
+  if(!diagnosticAuthorized()){closeDiagnostic();return;}
+  releaseDiagnosticClose=registerDiagnosticClose(closeDiagnostic);
+  diagnosticState.textContent="PDFの文字と位置を読み取っています…";
+  try {
+    diagnosticDialog.showModal();diagnosticClose.focus();
+    const diagnostic=await createCoordinateDiagnostic(entry.file);
+    if(generation!==diagnosticGeneration)return;
+    if(!diagnosticCurrent()){closeDiagnostic();return;}
+    diagnosticRawText=diagnostic.raw;
+    renderDiagnosticMode();
+    diagnosticModes.disabled=false;diagnosticCopy.disabled=false;
+    diagnosticState.textContent=`${diagnostic.pageCount}ページ・${diagnostic.itemCount}件の文字を取得しました。`;
+  } catch {
+    if(generation!==diagnosticGeneration)return;
+    if(!diagnosticCurrent()){closeDiagnostic();return;}
+    diagnosticState.textContent="診断できませんでした。閉じてからもう一度お試しください。";
+  }
 });
-diagnosticDialog.addEventListener("click", event => {
-  if (event.target === diagnosticDialog) diagnosticDialog.close();
+for(const mode of [diagnosticModeShared,diagnosticModeOriginal])mode.addEventListener("change",()=>{
+  if(mode.checked&&!diagnosticModes.disabled)renderDiagnosticMode();
 });
+diagnosticCopy.addEventListener("click", async () => {
+  if(diagnosticCopyPending||diagnosticCopy.disabled||!diagnosticRawText)return;
+  if(!diagnosticCurrent()){closeDiagnostic();return;}
+  const generation=diagnosticGeneration,original=diagnosticModeOriginal.checked;
+  const text=original?diagnosticRawText:redactCoordinateDiagnostic(diagnosticRawText);
+  diagnosticCopyPending=true;diagnosticCopy.disabled=true;diagnosticModes.disabled=true;
+  try {
+    await navigator.clipboard.writeText(text);
+    if(generation!==diagnosticGeneration)return;
+    if(!diagnosticCurrent()){closeDiagnostic();return;}
+    diagnosticState.textContent=original?"個人情報を含む原文をコピーしました。":"共有用データをコピーしました。";
+  } catch {
+    if(generation!==diagnosticGeneration)return;
+    if(!diagnosticCurrent()){closeDiagnostic();return;}
+    if(!original){diagnosticShared.value=text;diagnosticShared.focus();diagnosticShared.select();}
+    diagnosticState.textContent=original?"コピーできませんでした。もう一度お試しください。":"自動コピーできませんでした。共有用データを選択しました。";
+  } finally {
+    if(generation===diagnosticGeneration){diagnosticCopyPending=false;diagnosticCopy.disabled=false;diagnosticModes.disabled=false;}
+  }
+});
+diagnosticClose.addEventListener("click",closeDiagnostic);
+diagnosticDialog.addEventListener("cancel",event=>{event.preventDefault();closeDiagnostic();});
+diagnosticDialog.addEventListener("close",()=>{if(!diagnosticDialog.open)closeDiagnostic();});
+window.addEventListener("pagehide",closeDiagnostic);
 // 一覧にあるPDFは保存前。保存成功時のみ離脱確認を抑止する。
 // beforeunloadの文言はブラウザ標準（任意の文面は表示されない）。
 // 保存中のアプリ内移動は抑止。ページを閉じる操作にもbeforeunloadで警告する。

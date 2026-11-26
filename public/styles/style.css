@@ -265,7 +265,7 @@ h1, h2, h3 { line-height: 1.35; letter-spacing: -.025em; }
 .operation-dialog__actions .btn{white-space:normal;overflow-wrap:anywhere;}
 @media(max-width:480px){.operation-dialog{padding:16px;}.operation-dialog__actions .btn{flex:1 1 120px;}}
 .app-status__message{min-width:0;flex:1;overflow-wrap:anywhere}
-.app-status__dismiss{flex:none;align-self:flex-start;display:grid;place-items:center;min-width:28px;min-height:28px;border:1px solid var(--color-border);border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:20px;line-height:1;cursor:pointer;pointer-events:auto}
+.app-status__dismiss{flex:none;align-self:flex-start;display:grid;place-items:center;min-width:28px;min-height:28px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:20px;line-height:1;cursor:pointer;pointer-events:auto}
 .app-status__dismiss[hidden]{display:none!important}
 
 

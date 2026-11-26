@@ -57,7 +57,15 @@ for(const [id,title] of [['settings-finance-income-title','Finance連携用の�
 }
 assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,5,'employer management, shared backup, auth, maintenance and notifications groups');
 assert.match(html,/<div class="card settings-details-grid">/);
-assert.equal((html.match(/class="settings-details-column/g)??[]).length,4);
+assert.equal((html.match(/class="settings-details-column/g)??[]).length,5);
+const authSection=html.slice(html.indexOf('id="settings-auth-panel"'),html.indexOf('id="settings-notifications-panel"'));
+const maintenance=html.slice(html.indexOf('id="settings-details-panel"'));
+assert.equal((authSection.match(/class="card settings-panel/g)??[]).length,2);
+assert.ok(authSection.indexOf('id="backup-cloud-title"')<authSection.indexOf('id="settings-security-title"'));
+assert.doesNotMatch(authSection,/write-lock-recovery-title/);
+assert.match(maintenance,/<section class="settings-details-column settings-write-lock-recovery" aria-labelledby="write-lock-recovery-title">/);
+assert.equal((html.match(/id="write-lock-recovery-title"/g)??[]).length,1);
+assert.match(maintenance,/確認済みの場合のみ[\s\S]*?索引・年度・PDF原本は削除しないでください。/);
 assert.match(css,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,1fr\)/);
 assert.match(css,/\.settings-page \.settings-details-column \+ \.settings-details-column\s*\{\s*border-top:/);
 assert.ok(html.indexOf('id="settings-backup-title"')<html.indexOf('id="settings-auth-title"'));

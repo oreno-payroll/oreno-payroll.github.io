@@ -276,35 +276,32 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
  await vault.saveBatch(batch,onProgress,existing,authorized,state,uploadPreflight);
  return {saved:batch.length,skipped};
 }
+/** A missing approval is detected before the first business write, under the
+ * lock. The editor may then obtain fresh approvals outside the lock. */
+export class PayrollEditConflictError extends Error {
+ constructor(){super('重複する明細が変更されました。再度確認してください。');this.name='PayrollEditConflictError';}
+}
+export function needsEditConflictReview(prior:SavedPayrollSummary,next:SavedPayrollSummary):boolean {
+ return prior.fileHash!==next.fileHash||payrollPeriodKey(prior.form,prior.employerId)!==payrollPeriodKey(next.form,next.employerId);
+}
 /** Edit an existing cloud record without requiring or uploading its original PDF. */
 export async function updateRecordMetadata(record:SavedPayrollSummary,approvals:ReplacementConflict[]=[],expectedSignature?:string,onProgress?:(stage:string)=>void,expectedDirectory?:string):Promise<void> {
  assertValidMetadata(record);
  const vault=await cloudVault();
- let directory:EmployerEntry[]=[];
- const current=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,onEmployerDirectory:value=>{directory=value;}});
- const prior=current.find(r=>r.id===record.id);
- if(!prior||!expectedSignature||recordSignature(prior)!==expectedSignature)
-  throw new Error('別端末で明細が変更されました。読み直してから保存してください。');
- const checkDirectory=expectedDirectory!==undefined||(record.employerId!==undefined&&record.form.job!==prior.form.job);
- if(checkDirectory){
-  if(expectedDirectory!==undefined&&employerDirectorySignature(directory)!==expectedDirectory)throw new Error('勤務先一覧が更新されました。再度確認してください。');
-  if(record.employerId!==undefined&&(record.employerId!==prior.employerId||record.form.job!==prior.form.job)&&!directory.some(e=>e.id===record.employerId&&e.role===record.form.job))throw new Error('勤務区分に対応する勤務先を選択してください。');
- }
- if(prior.fileHash!==record.fileHash||prior.pdfSize!==record.pdfSize||prior.pdfType!==record.pdfType||
-    prior.pages!==record.pages||prior.savedAt!==record.savedAt||prior.originalFileName!==record.originalFileName)
-  throw new Error('PDF原本の保存情報が変更されています。再読み込みしてください。');
- const conflicting=current.filter(r=>r.id!==record.id&&conflicts(r,record).length);
  const allowed=new Map(approvals.map(a=>[a.id,a]));
- if(conflicting.length!==allowed.size||conflicting.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))
-  throw new Error('重複する明細が変更されました。再度確認してください。');
- // The vault always takes physical PDF id/month/hash/size/type from the live source,
- // and verifies the expected revision/signature again at the conditional year write.
- await vault.save({...record,revision:(prior.revision??0)+1},onProgress,
-  remote=>recordSignature(remote)===expectedSignature,remote=>{
+ let conflicting:CloudRecord[]=[];
+ // One fresh full inventory under the write lock is the authoritative preflight.
+ // Do not acquire another unlocked snapshot just to repeat these checks.
+ await vault.save(record,onProgress,
+  remote=>expectedSignature!==undefined&&recordSignature(remote)===expectedSignature,remote=>{
    const liveConflicts=remote.filter(r=>r.id!==record.id&&conflicts(r,record).length);
    if(liveConflicts.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))
     throw new Error('保存直前に重複する明細が変更されました。再度確認してください。');
-  },checkDirectory?employerDirectorySignature(directory):undefined);
+  },expectedDirectory,current=>{
+   conflicting=current.filter(r=>r.id!==record.id&&conflicts(r,record).length);
+   if(conflicting.length!==allowed.size||conflicting.some(r=>allowed.get(r.id)?.signature!==recordSignature(r)))
+    throw new PayrollEditConflictError();
+  });
  if(conflicting.length){
   onProgress?.('明細データを保存済み。重複した明細の除外を確認しています…');
   try{await vault.removeBatch(conflicting.map(other=>({id:other.id,matches:remote=>recordSignature(remote)===recordSignature(other)})));}

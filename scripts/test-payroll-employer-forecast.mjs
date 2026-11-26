@@ -74,3 +74,23 @@ const configuredPrevious=custom.find(e=>e.id===B);const renamed=upsertEmployer(c
 assert.deepEqual(mergeEmployerDirectories(custom,directory),validateEmployerDirectory(custom));assert.deepEqual(mergeEmployerDirectories([],custom),validateEmployerDirectory(custom));
 assert.throws(()=>validateEmployerDirectory([{...directory[0],forecast:undefined}]),/見込み設定/);
 console.log('PASS: configurable employer salary/bonus, latest missing values, no retroactive configured bonuses, period boundaries, duplicate payments, validated preferences and restore preservation');
+
+// A bonus recorded for March but paid in April belongs to the old fiscal year.
+// A different target month remains independently eligible, including adjacent schedules.
+const delayed={...salary(B,'2027-03',0,'main','bonus'),form:{...salary(B,'2027-03',0,'main','bonus').form,paymentDate:'2027-04-15'}};
+const marchToday=new Date(2027,2,10),feb=salary(B,'2027-02',180000),marchPlan=methodDirectory('latest',[3,4]);
+for(const employerId of [B,undefined]){
+ const actual={...delayed,employerId};
+ const annual=calculateAnnualForecast([feb,actual],2026,marchToday,true,marchPlan);
+ assert.deepEqual(annual.jobs.main.pendingBonusMonths,[]);assert.equal(annual.jobs.main.bonusEstimates.length,0);
+ const calendar=calculateCalendarForecast([feb,actual],2027,marchToday,true,marchPlan);
+ assert.deepEqual(calendar.jobs.main.pendingBonusMonths,['2027-03']);
+ assert.equal(calendar.jobs.main.bonusEstimates.length,1);
+}
+assert.deepEqual(calculateAnnualForecast([feb,{...delayed,employerId:A}],2026,marchToday,true,marchPlan).jobs.main.pendingBonusMonths,['2027-03']);
+const december={...salary(B,'2026-12',0,'main','bonus'),form:{...salary(B,'2026-12',0,'main','bonus').form,paymentDate:'2027-01-15'}};
+const twoMonths=methodDirectory('latest',[12,1]);
+assert.deepEqual(calculateAnnualForecast([recent,december],2026,today,true,twoMonths).jobs.main.pendingBonusMonths,['2027-01']);
+assert.deepEqual(calculateCalendarForecast([recent,december],2026,today,true,twoMonths).jobs.main.pendingBonusMonths,['2026-12']);
+assert.deepEqual(calculateAnnualForecast([salary(B,'2027-04',180000),delayed],2027,new Date(2027,3,20),true,marchPlan).jobs.main.pendingBonusMonths,['2027-04','2028-03']);
+console.log('PASS: fiscal/calendar bonus deduplication, March/April and December/January boundaries, zero actuals, adjacent schedules and employer isolation');

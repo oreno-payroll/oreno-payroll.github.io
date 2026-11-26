@@ -255,8 +255,8 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   const explanation = document.createElement('p');
   explanation.className = 'forecast-note';
   explanation.textContent = periodMode === 'fiscal'
-    ? '通常給与は支給時期を考慮した未登録対象月を、勤務先ごとに設定した方法で推計します。直近6か月の支給済み通常給与を参照し、立替経費は繰り返し計上しません。賞与は支給予定月に、最新の通常給与1件から交通費・立替経費を除いた参考額を加算します。業績給は含めません。'
-    : '通常給与は最後の実績支給月の翌月と現在月の遅い方から12月まで、勤務先ごとに設定した方法で推計します。現在月より前の未登録給与月は補完しません。立替経費は繰り返し計上しません。賞与は支給予定月に、最新の通常給与1件から交通費・立替経費を除いた参考額を加算します。業績給は含めません。';
+    ? '通常給与は支給時期を考慮した未登録対象月を、勤務先ごとに設定した方法で推計します。直近6か月の支給済み通常給与を参照し、立替経費は繰り返し計上しません。賞与は年度内の実績と予定月を照合します。対象年月を優先し、一致しない場合は支給年月も確認して、未登録の予定月に最新の通常給与1件から交通費・立替経費を除いた参考額を加算します。業績給は含めません。'
+    : '通常給与は最後の実績支給月の翌月と現在月の遅い方から12月まで、勤務先ごとに設定した方法で推計します。現在月より前の未登録給与月は補完しません。立替経費は繰り返し計上しません。賞与は支給予定月が未登録の場合に、最新の通常給与1件から交通費・立替経費を除いた参考額を加算します。業績給は含めません。';
   const methodology = document.createElement('details');
   methodology.className = 'forecast-methodology';
   const methodologyTitle = document.createElement('summary');
@@ -277,6 +277,12 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
     deltaLine.textContent = `見込み加算分：${additions.join(' ／ ')}`;
     forecastDetails.append(deltaLine);
   }
+  const formatGrossAddition = (estimates: readonly MonthEstimate[]): string => {
+    const known = estimates.map(estimate => estimate.values.gross).filter((value): value is number => value !== null);
+    if (!known.length) return '算出不可';
+    const partial = known.length < estimates.length || estimates.some(estimate => estimate.incomplete.gross);
+    return `${yen(known.reduce((sum, value) => sum + value, 0))}${partial ? ' ※' : ''}`;
+  };
   for (const job of ['main', 'side'] as const) {
     const item = plan.jobs[job];
     const line = document.createElement('div');
@@ -288,10 +294,10 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
       detail.textContent = `${SALARY_FORECAST_LABELS[item.salaryMethod]}｜${item.reason}`;
     } else {
       const first = item.estimates[0];
-      const total = item.estimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
+      const total = formatGrossAddition(item.estimates);
       const sample = item.sampleMonths.map(month => month.replace('-', '/')).join('・');
       const months = item.pendingMonths.map(month => month.replace('-', '/')).join('、');
-      detail.textContent = `${SALARY_FORECAST_LABELS[item.salaryMethod]}｜${item.estimates.length}か月分の推計（${months}）｜月額総支給額 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${yen(total)}｜参照 ${sample} の${item.sampleMonths.length}件`;
+      detail.textContent = `${SALARY_FORECAST_LABELS[item.salaryMethod]}｜${item.estimates.length}か月分の推計（${months}）｜月額総支給額 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}｜${periodMode === 'fiscal' ? '年度' : '暦年'}への加算 ${total}｜参照 ${sample} の${item.sampleMonths.length}件`;
     }
     line.append(title, detail);
     forecastDetails.append(line);
@@ -307,10 +313,10 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
         bonusDetail.textContent = '見込み対象はありません（登録済み、または対象期間外）。';
       } else {
         const months = item.bonusEstimates.map(e => e.month.replace('-', '/')).join('、');
-        const total = item.bonusEstimates.reduce((sum, e) => sum + (e.values.gross ?? 0), 0);
+        const total = formatGrossAddition(item.bonusEstimates);
         const first = item.bonusEstimates[0];
         const sample = item.bonusSampleMonth ? item.bonusSampleMonth.replace('-', '/') : '不明';
-        bonusDetail.textContent = `${item.bonusEstimates.length}回（${months}）｜額面合計 ${yen(total)}｜1回あたり額面 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}・手取り ${first.values.net === null ? '算出不可' : yen(first.values.net)}｜参照：最新の通常給与 ${sample}（交通費・経費除外）`;
+        bonusDetail.textContent = `${item.bonusEstimates.length}回（${months}）｜額面合計 ${total}｜1回あたり額面 ${first.values.gross === null ? '算出不可' : yen(first.values.gross)}・手取り ${first.values.net === null ? '算出不可' : yen(first.values.net)}｜参照：最新の通常給与 ${sample}（交通費・経費除外）`;
       }
       if(item.bonusMonths.length)bonusDetail.textContent=`予定：${item.bonusMonths.map(m=>`${m}月`).join('・')}｜${bonusDetail.textContent}`;
       bonusLine.append(bonusTitle, bonusDetail);
@@ -319,7 +325,7 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
   }
   const caution = document.createElement('p');
   caution.className = 'forecast-caution';
-  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。課税・非課税の見込みは取得済みの内訳から推計します。項目ごとの中央値を使用するため、総支給額と一致しない場合があります。根拠がない内訳は算出しません。見込み加算分の※は一部算出できない項目を示します。';
+  caution.textContent = '将来分の所得税・住民税・社会保険料は過去の控除額から推計した参考値です。年末調整や最終的な税負担は予測しません。賞与見込みの控除も通常給与を参考にした概算です。業績手当は加算しません。課税・非課税の見込みは取得済みの内訳から推計します。項目ごとの中央値を使用するため、総支給額と一致しない場合があります。根拠がない内訳は算出しません。見込み金額の※は一部算出できない項目を示します。';
   methodology.append(caution);
   forecastDetails.append(methodology);
   const suspicious = plan.estimates.filter(estimate => {
@@ -336,14 +342,40 @@ function renderForecastExplanation(plan: AnnualForecast | CalendarForecast): voi
     forecastDetails.append(warning);
   }
 }
-function updateSummary(prefix: 'total' | Job, result: Summary, count: number, sideSalaryCount = count): void {
+/** Reuse the actual aggregation rules, including explicit zero and optional fields. */
+function showMissingRecords(prefix:'total'|Job,key:SummaryKey,records:readonly SavedPayrollSummary[],estimates:readonly MonthEstimate[],trigger:HTMLButtonElement):void {
+  const authorized=captureOperationAuthorization();
+  const guard=()=>authorized()&&trigger.isConnected&&!dashboardLoading&&!dashboardStale&&!deletionBusy();
+  if(!guard())return;
+  const labels:Record<SummaryKey,string>={gross:'総支給額',net:'手取り',taxable:'課税支給額',nonTaxable:'非課税支給額',incomeTax:'所得税（年調含む）',residentTax:'住民税',socialInsurance:'社会保険料',transportation:'交通費',reimbursedExpenses:'立替経費',workDays:'出勤日数'};
+  const actual=records.filter(record=>summary([record]).partial[key]);
+  const empty=summary([]);
+  const projected=estimates.filter(estimate=>withEstimates(empty,[estimate]).partial[key]);
+  const role=(job:string)=>job==='main'?'本業':'副業';
+  const kind=(value:string)=>value==='bonus'?'賞与':'給与';
+  const details=[actual.length?`未入力の明細：${actual.length}件`:'登録済み明細に未入力はありません。'];
+  const afterLinks:string[]=[];
+  if(projected.length)afterLinks.push(`見込みの算出不足：${projected.length}件（編集対象の明細ではありません）。\n${projected.map(e=>`${e.month} / ${role(e.job)} / ${kind(e.kind)}`).join('\n')}`);
+  const links=[...actual].sort((a,b)=>b.form.targetMonth.localeCompare(a.form.targetMonth)||b.form.paymentDate.localeCompare(a.form.paymentDate)).map(record=>({
+    label:record.fileName,
+    description:`${record.form.targetMonth.replace(/^(\d{4})-(\d{2})$/,(_,year,month)=>`${year}年${Number(month)}月`)} · ${role(record.form.job)} · ${employerName(record)} · ${kind(record.form.kind)}${pendingDeletion.has(record.id)?' · 削除待ち':''}`,
+    href:editRecordHref(record),
+  }));
+  void showOperationMessage({title:`${prefix==='total'?'総収入':role(prefix)}：${labels[key]}の未入力`,details,links,afterLinks,acceptLabel:'閉じる'},guard);
+}
+function editRecordHref(record:SavedPayrollSummary):string {
+  const hintedYear=fiscalYearOfTargetMonth(record.form.targetMonth);
+  return `./edit/index.html#id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}${hintedYear!==null?`&hintYear=${encodeURIComponent(String(hintedYear))}`:''}`;
+}
+function updateSummary(prefix: 'total' | Job, result: Summary, count: number, records:readonly SavedPayrollSummary[], estimates:readonly MonthEstimate[], sideSalaryCount = count): void {
+  const estimatedMissing=withEstimates(summary([]),estimates).missingCounts;
   for (const key of ['gross', 'net', 'taxable', 'nonTaxable', 'incomeTax', 'residentTax', 'socialInsurance', 'transportation', 'reimbursedExpenses'] as const) {
     const id = `${prefix}-${key.replace(/[A-Z]/g, ch => `-${ch.toLowerCase()}`)}`;
     const element = document.getElementById(id);
     if (!element) continue;
     // 金額には金額だけを表示し、欠損情報は項目名の直下へ分離する。
     element.textContent = !count || !result.observed[key] ? '--' : yen(result.sums[key]);
-    setMissingIndicator(element, count && result.partial[key] ? result.missingCounts[key] : 0, count);
+    setMissingIndicator(element, count && result.partial[key] ? result.missingCounts[key] : 0, count, trigger=>showMissingRecords(prefix,key,records,estimates,trigger), estimatedMissing[key]);
   }
   if (prefix === 'total') {
     const complete = count > 0 && result.observed.gross && result.observed.net && !result.partial.gross && !result.partial.net;
@@ -354,7 +386,7 @@ function updateSummary(prefix: 'total' | Job, result: Summary, count: number, si
     if (days) {
       days.textContent = !sideSalaryCount || !result.observed.workDays
         ? '--' : `${result.sums.workDays.toLocaleString('ja-JP')}日`;
-      setMissingIndicator(days, sideSalaryCount && result.partial.workDays ? result.missingCounts.workDays : 0, sideSalaryCount);
+      setMissingIndicator(days, sideSalaryCount && result.partial.workDays ? result.missingCounts.workDays : 0, sideSalaryCount, trigger=>showMissingRecords(prefix,'workDays',records,estimates,trigger), estimatedMissing.workDays);
     }
   }
 }
@@ -449,8 +481,7 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
     edit.className = 'btn btn--icon';
     // A verified source record supplies an untrusted *priority* hint for the
     // edit page. It is never used as an authority for writes or PDF locations.
-    const hintedYear=fiscalYearOfTargetMonth(record.form.targetMonth);
-    edit.href = `./edit/index.html#id=${encodeURIComponent(String(record.id))}&${editPeriodQuery()}${hintedYear!==null?`&hintYear=${encodeURIComponent(String(hintedYear))}`:''}`;
+    edit.href = editRecordHref(record);
     edit.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-edit"></use></svg>';
     edit.setAttribute('aria-label', `${record.fileName} の保存情報を編集`);
     edit.title = '保存情報を確認・編集';
@@ -544,11 +575,11 @@ function render(): void {
   }
   const daysLabel = document.getElementById('side-days-label');
   if (daysLabel) daysLabel.textContent = isCalendar ? '出勤日数（暦年累計）' : '出勤日数（年度累計）';
-  updateSummary('total', withEstimates(summary(yearRecords), projected), yearRecords.length + projected.length);
+  updateSummary('total', withEstimates(summary(yearRecords), projected), yearRecords.length + projected.length, yearRecords, projected);
   const mainProjected = projected.filter(item => item.job === 'main');
   const sideProjected = projected.filter(item => item.job === 'side');
-  updateSummary('main', withEstimates(summary(main), mainProjected), main.length + mainProjected.length);
-  updateSummary('side', withEstimates(summary(side), sideProjected), side.length + sideProjected.length,
+  updateSummary('main', withEstimates(summary(main), mainProjected), main.length + mainProjected.length, main, mainProjected);
+  updateSummary('side', withEstimates(summary(side), sideProjected), side.length + sideProjected.length, side, sideProjected,
     side.filter(item => item.form.kind === 'salary').length + sideProjected.filter(item => item.kind === 'salary').length);
   renderList('main', listRecords.filter(item => item.form.job === 'main'));
   renderList('side', listRecords.filter(item => item.form.job === 'side'));

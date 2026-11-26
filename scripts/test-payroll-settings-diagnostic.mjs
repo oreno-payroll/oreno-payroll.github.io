@@ -12,21 +12,25 @@ class Element extends EventTarget{
  click(){if(!this.disabled)this.dispatchEvent(new Event('click'));} querySelector(s){return this.queries.get(s)??null;} querySelectorAll(s){return this.queries.get(s)??[];} contains(n){return n===password;}
 }
 const body=new Element('body'),trigger=new Element('button');body.append(trigger);trigger.focus();
-globalThis.HTMLElement=Element;globalThis.HTMLInputElement=Element;globalThis.document={body,documentElement:new Element('html'),get activeElement(){return focused;},createElement:tag=>new Element(tag)};
+globalThis.HTMLElement=Element;globalThis.HTMLInputElement=Element;globalThis.document={body,documentElement:new Element('html'),get activeElement(){return focused;},createElement:tag=>new Element(tag),querySelector:s=>s==='dialog[open]'?body.children.find(n=>n.tag==='dialog'&&n.open)??null:null};
 const win=new EventTarget();globalThis.window=win;
 let copied=[];Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{async writeText(s){copied.push(s);}}}});
 const dialogs=()=>body.children.filter(n=>n.tag==='dialog');const outer=()=>dialogs()[0];const find=(node,label)=>node.children.flatMap(c=>[c,...c.children]).find(n=>n.tag==='button'&&n.textContent===label);
 const settle=async()=>{await Promise.resolve();await Promise.resolve();};
 let reads=0,authorized=true;const raw=()=>{reads++;return '{"synthetic":"<private>"}';};const guard=()=>authorized;
 openRecordDiagnostic(raw,guard);assert.equal(reads,0);const first=outer(),output=first.children.find(n=>n.tag==='pre');assert.equal(output.textContent,'');assert.equal(output.hidden,true);
-find(first,'原文を表示').click();find(dialogs()[1],'キャンセル').click();await settle();assert.equal(reads,0);assert.equal(output.textContent,'');
-find(first,'原文を表示').click();find(dialogs()[1],'原文を表示').click();await settle();assert.equal(reads,1);assert.equal(output.textContent,'{"synthetic":"<private>"}');assert.equal(output.hidden,false);
-find(first,'原文を隠す').click();assert.equal(output.textContent,'');assert.equal(output.hidden,true);
-find(first,'原文をコピー').click();find(dialogs()[1],'キャンセル').click();await settle();assert.equal(copied.length,0);
-find(first,'原文をコピー').click();find(dialogs()[1],'原文をコピー').click();await settle();assert.equal(copied.length,1);assert.equal(output.textContent,'');
-find(first,'原文を表示').click();authorized=false;const before=reads;find(dialogs()[1],'原文を表示').click();await settle();assert.equal(reads,before);
-dismissOperationDialog();dismissRecordDiagnostic();assert.equal(dialogs().length,0);assert.equal(output.textContent,'');
-authorized=true;openRecordDiagnostic(raw,guard);const second=outer(),out2=second.children.find(n=>n.tag==='pre');find(second,'原文を表示').click();find(dialogs()[1],'原文を表示').click();await settle();assert.equal(out2.hidden,false);win.dispatchEvent(new Event('pagehide'));assert.equal(out2.textContent,'');assert.equal(dialogs().length,0);
+assert.equal(dialogs().length,1);assert.equal(find(first,'診断データをコピー'),undefined);assert.equal(focused,find(first,'×'));
+openRecordDiagnostic(raw,guard);assert.equal(dialogs().length,1);
+find(first,'診断データを表示').click();await settle();assert.equal(dialogs().length,1);assert.equal(reads,1);assert.equal(output.textContent,'{"synthetic":"<private>"}');assert.equal(output.hidden,false);assert.equal(copied.length,0);
+find(first,'診断データをコピー').click();await settle();assert.deepEqual(copied,['{"synthetic":"<private>"}']);assert.equal(reads,1);assert.equal(dialogs().length,1);
+find(first,'×').click();assert.equal(dialogs().length,0);assert.equal(output.textContent,'');assert.equal(focused,trigger);
+openRecordDiagnostic(raw,guard);const second=outer(),out2=second.children.find(n=>n.tag==='pre');authorized=false;const before=reads;find(second,'診断データを表示').click();await settle();assert.equal(reads,before);assert.equal(dialogs().length,0);assert.equal(out2.textContent,'');
+authorized=true;openRecordDiagnostic(raw,guard);const third=outer(),out3=third.children.find(n=>n.tag==='pre');find(third,'診断データを表示').click();authorized=false;find(third,'診断データをコピー').click();await settle();assert.equal(copied.length,1);assert.equal(dialogs().length,0);assert.equal(out3.textContent,'');
+authorized=true;openRecordDiagnostic(raw,guard);const fourth=outer(),out4=fourth.children.find(n=>n.tag==='pre');find(fourth,'診断データを表示').click();assert.equal(out4.hidden,false);win.dispatchEvent(new Event('pagehide'));assert.equal(out4.textContent,'');assert.equal(dialogs().length,0);
+openRecordDiagnostic(raw,guard);const fifth=outer(),out5=fifth.children.find(n=>n.tag==='pre');find(fifth,'診断データを表示').click();dismissOperationDialog();dismissRecordDiagnostic();assert.equal(out5.textContent,'');assert.equal(dialogs().length,0);
+const existing=new Element('dialog');body.append(existing);existing.showModal();openRecordDiagnostic(raw,guard);assert.deepEqual(dialogs(),[existing]);existing.close();existing.remove();
+openRecordDiagnostic(()=>{throw Error('synthetic');},guard);const failed=outer();find(failed,'診断データを表示').click();await settle();assert.equal(failed.children.find(n=>n.tag==='pre').hidden,true);assert.ok(find(failed,'診断データを表示'));dismissRecordDiagnostic();
+const originalClipboard=navigator.clipboard.writeText;navigator.clipboard.writeText=async()=>{throw Error('synthetic');};openRecordDiagnostic(raw,guard);const retry=outer();find(retry,'診断データを表示').click();find(retry,'診断データをコピー').click();await settle();assert.equal(find(retry,'診断データをコピー').disabled,false);assert.ok(retry.children.some(n=>n.textContent==='コピーできませんでした。もう一度お試しください。'));navigator.clipboard.writeText=originalClipboard;find(retry,'診断データをコピー').click();await settle();assert.equal(copied.length,2);dismissRecordDiagnostic();
 // Exercise real persistent navigation, authorization and secret remasking.
 const root=new Element(),menu=new Element(),password=new Element('input'),toggle=new Element('button');password.type='password';toggle.dataset.togglePassword='pw';root.ownerDocument={getElementById:()=>password};
 const keys=['employers','auth','backup','maintenance','notifications'];const buttons=keys.map(key=>{const b=new Element('button');b.dataset.settingsOpen=key;return b;});menu.queries.set('button[data-settings-open]',buttons);root.queries.set('[data-toggle-password]',[toggle]);

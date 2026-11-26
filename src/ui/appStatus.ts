@@ -19,11 +19,29 @@ function makeStatus(element:HTMLElement,defaultCode:NoticeCode){
  // No layout observers are installed in non-browser test environments.
  const doc=element.ownerDocument,win=doc?.defaultView;
  const surfaces=doc?Array.from(doc.querySelectorAll<HTMLElement>('.save-bar,.vault-bottom,.yea-upload-savebar')):[];
- const position=()=>{
+ const position=(preserve=false)=>{
   if(!win||!surfaces.length||element.hidden)return;
+  const height=win.innerHeight;
+  // An explicitly docked save bar is outside the scrolling editor. Always
+  // place the toast above it, independent of message width or scroll position.
+  const dock=surfaces.find(node=>node.hasAttribute('data-status-dock')&&win.getComputedStyle(node).getPropertyValue('--status-dock').trim()==='above'&&node.getBoundingClientRect().height>0);
+  if(dock){
+   const top=dock.getBoundingClientRect().top;
+   const room=Math.floor(top-26);
+   if(room>=44){
+    element.style.setProperty('--status-bottom',`${Math.ceil(height-top+12)}px`);
+    element.style.setProperty('--status-max-height',`${Math.min(240,room)}px`);
+    return;
+   }
+  }
+  const overlaps=(toast:DOMRect)=>surfaces.map(node=>node.getBoundingClientRect()).filter(r=>r.width>0&&r.height>0&&r.bottom>0&&r.top<height&&r.left<toast.right&&r.right>toast.left&&r.top<toast.bottom&&r.bottom>toast.top);
+  if(preserve){
+   const live=element.getBoundingClientRect();
+   if(live.top>=0&&live.bottom<=height&&!overlaps(live).length)return;
+  }
   element.style.removeProperty('--status-bottom');element.style.removeProperty('--status-max-height');
-  const toast=element.getBoundingClientRect(),height=win.innerHeight;
-  const blockers=surfaces.map(node=>node.getBoundingClientRect()).filter(r=>r.width>0&&r.height>0&&r.bottom>0&&r.top<height&&r.left<toast.right&&r.right>toast.left&&r.top<toast.bottom&&r.bottom>toast.top);
+  const toast=element.getBoundingClientRect();
+  const blockers=overlaps(toast);
   if(!blockers.length)return;
   const top=Math.min(...blockers.map(r=>r.top)),bottom=Math.max(...blockers.map(r=>r.bottom));
   const above=Math.max(0,top-26),below=Math.max(0,height-bottom-26);
@@ -34,8 +52,8 @@ function makeStatus(element:HTMLElement,defaultCode:NoticeCode){
   element.style.setProperty('--status-max-height',`${Math.min(240,Math.floor(room))}px`);
  };
  if(win&&surfaces.length){
-  win.addEventListener('scroll',position,{capture:true,passive:true});win.addEventListener('resize',position);
-  if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(position);for(const surface of surfaces)observer.observe(surface);}
+  win.addEventListener('scroll',()=>position(),{capture:true,passive:true});win.addEventListener('resize',()=>position());
+  if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(()=>position(shown?.kind==='loading'));for(const surface of surfaces)observer.observe(surface);}
  }
  let timer: ReturnType<typeof setTimeout>|undefined;
  let version=0,loadingDismissed=false,loadingActive=false;
@@ -45,6 +63,11 @@ function makeStatus(element:HTMLElement,defaultCode:NoticeCode){
  const pending:Toast[]=[];
  const hide=()=>{version++;if(timer!==undefined)clearTimeout(timer);timer=undefined;shown=undefined;element.hidden=true;messageNode.textContent='';dismiss.hidden=true;element.removeAttribute('data-state');};
  function paint(item:Toast){
+  // Progress is one visible notification, not a sequence of replacements.
+  // Keep the anchor while it remains safe; genuine collisions can reposition it.
+  if(shown?.kind==='loading'&&item.kind==='loading'&&shown.scope===item.scope&&!element.hidden){
+   shown=item;messageNode.textContent=item.message;position(true);return;
+  }
   hide();shown=item;const current=version;
   element.dataset.state=item.kind;messageNode.textContent=item.message;element.hidden=false;dismiss.hidden=false;position();
   if(item.kind!=='loading'&&!item.sticky)timer=setTimeout(()=>{if(current===version)hide();},item.kind==='warning'?9000:3500);

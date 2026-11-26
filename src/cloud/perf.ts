@@ -1,6 +1,6 @@
 /** Opt-in, aggregate-only diagnostics. No payroll values, IDs, paths, tokens or URLs. */
 export type SavePerfPhase = 'save-prepare'|'save-connection'|'save-lock'|'save-records'|'save-duplicates'|'save-inventory'|'save-detached'|'save-original'|'save-annual'|'save-finance'|'save-finish';
-type Operation = 'payroll-upload'|'finance-income-sync'|'yearend-people'|'yearend-year'|'yearend-memo'|'yearend-forecast'|'yearend-pdf-batch';
+type Operation = 'payroll-upload'|'payroll-edit'|'finance-income-sync'|'yearend-people'|'yearend-year'|'yearend-memo'|'yearend-forecast'|'yearend-pdf-batch';
 type Phase = SavePerfPhase|'source-refresh'|'income-read'|'income-prewrite-refresh'|'income-write'|'income-verify'|'income-postwrite-refresh'|'income-register'|'yearend-access'|'yearend-index'|'yearend-profile'|'yearend-context';
 type Transport = 'graph-api'|'encrypted-download';
 const counters:Record<Transport,number>={'graph-api':0,'encrypted-download':0};

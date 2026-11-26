@@ -1,6 +1,8 @@
 /** Round 4/B: source provenance and opt-in zeros, no OAuth/browser/OneDrive I/O. */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {stripTypeScriptTypes} from 'node:module';
+import {runInNewContext} from 'node:vm';
 import {
   ZERO_OPTIONAL_AMOUNT_LABELS,emptyOptionalAmounts,prepareOptionalZeros,
   isValidPayrollZeroResolution,reconcilePayrollZeroResolution,
@@ -99,11 +101,27 @@ const parsed={
 }
 {
  const html=src('public/upload/index.html');const css=src('public/styles/upload.css');const upload=src('src/upload.ts');
- for(const id of ['zero-approval','zero-missing-amounts','zero-approval-list','zero-approval-count'])
+ for(const id of ['zero-approval','zero-missing-amounts','zero-approval-count'])
   assert.match(html,new RegExp(`id="${id}"`));
  assert.ok(html.indexOf('zero-missing-amounts')<html.indexOf('id="save-all"'));
  assert.match(html,/id="zero-missing-amounts" type="checkbox" autocomplete="off"/);
  assert.match(css,/\.zero-approval\[hidden\]/);
+ assert.doesNotMatch(html,/zero-approval-(?:list|details)/);
+ assert.doesNotMatch(css,/\.zero-approval__details/);
+ assert.doesNotMatch(upload,/zeroList|zero-approval-list/);
+ const start=upload.indexOf('  const zeroCounts=');const end=upload.indexOf('  saveButton.disabled',start);
+ assert.ok(start>=0&&end>start);
+ const count=runInNewContext(`(uploadable,emptyOptionalAmounts,zeroCheckbox,zeroApproval,zeroCount,zeroIntroducedWarnings)=>{const saving=false,uploadSaveRecoveryRequired=false,pending=false,badPdf=null,invalidEntry=null,unreviewed=[];${upload.slice(start,end)}}`);
+ for(const [fields,checked,contradiction,expected,hidden] of [
+  [[[],[]],false,false,'0件・0項目（未選択時は空欄）',true],
+  [[['a','b'],[],['c']],false,false,'2件・3項目（未選択時は空欄）',false],
+  [[['a'],['b']],true,false,'2件・2項目（未選択時は空欄）',false],
+  [[['a']],true,true,'1件で0円補完による検算不一致。該当欄を手動確認するかチェックを外してください。',false],
+ ]){
+  const approval={},label={},checkbox={checked};
+  count(fields.map(form=>({form})),form=>form,checkbox,approval,label,()=>contradiction?['warning']:[]);
+  assert.equal(approval.hidden,hidden);assert.equal(label.textContent,expected);assert.equal(checkbox.checked,checked);
+ }
  assert.match(upload,/zeroConsentFingerprint!==fingerprint/,'consent must reset after candidate change');
  assert.match(upload,/zeroCheckbox.checked=false; \/\/ Never restore/,'browser reload cannot restore opt-in');
  assert.match(upload,/const approveZero=zeroCheckbox\.checked&&zeroConsentFingerprint===before/);
@@ -117,3 +135,32 @@ const parsed={
  console.log('PASS: opt-in UI wiring, stale consent invalidation and read/write/backup/edit metadata guards');
 }
 console.log('PASS: Round 4/B zero-resolution and import provenance regression');
+
+// Execute the actual editor shortcut with the normal-save boundary stubbed.
+// No authentication state is fabricated and no cloud write is performed.
+{
+ const edit=src('src/edit.ts'),html=src('public/edit/index.html');
+ const extract=(start,end)=>{const a=edit.indexOf(start),b=edit.indexOf(end,a);assert.ok(a>=0&&b>a);return stripTypeScriptTypes(edit.slice(a,b),{mode:'strip'});};
+ const code=extract('function zeroInputTargets(', 'function updateUI(')+extract('function saveWithOptionalZeros(', 'zeroSaveButton.addEventListener(');
+ assert.match(html,/id="edit-save-zero" type="button"[^>]* disabled/);
+ assert.match(edit,/zeroSaveButton.hidden=deletionPending\|\|deletionNeedsReload/);
+ assert.match(edit,/zeroSaveButton.disabled=saving\|\|deletionPending\|\|deletionConfirming\|\|deletionNeedsReload\|\|errors.length>0/);
+ for(const mode of ['salary','bonus','warning','invalid','locked','saving','deletion','no-target']){
+  const values=form(mode==='bonus'?'bonus':'salary');
+  values.transportation='100';values.nonTaxable='100';values.taxable='249900';
+  values.yearEndAdjustment='';values.bonusBase='';values.performanceBonus='';values.workDays='';
+  if(mode==='warning'){values.taxable='';values.nonTaxable='';}
+  if(mode==='no-target')for(const key of emptyOptionalAmounts(values))values[key]='0';
+  const controls=PAYROLL_FIELDS.filter(k=>!['job','kind','targetMonth','paymentDate'].includes(k)).map(name=>({name,value:values[name],disabled:false,validity:{badInput:mode==='invalid'&&name==='incomeTax'},closest:()=> (values.kind==='salary'?['bonusBase','performanceBonus']:['workDays','yearEndAdjustment','reimbursedExpenses']).includes(name)?{}:null}));
+  let writes=0,focus=0;
+  const ctx={record:{},saving:mode==='saving',deletionPending:mode==='deletion',deletionConfirming:false,deletionNeedsReload:false,zeroSaveButton:{disabled:false},reviewApproval:'old',form:{querySelectorAll:()=>controls},emptyOptionalAmounts,captureOperationAuthorization:()=>()=>mode!=='locked',getValues:()=>({...values,...Object.fromEntries(controls.map(x=>[x.name,x.value]))}),clearInlineError(){},errorView:{},reviewConfirmation:{hidden:true},confirmDiff:{disabled:false,focus(){focus++;}},saveButton:{disabled:false,click(){writes++;}},updateUI(){const checked=validatePayrollForm(ctx.getValues());ctx.saveButton.disabled=!!(checked.errors.length||checked.warnings.length);ctx.reviewConfirmation.hidden=!checked.warnings.length;}};
+  const run=runInNewContext(code+'\nsaveWithOptionalZeros',ctx);run();
+  const changed=ctx.getValues();
+  if(['invalid','locked','saving','deletion','no-target'].includes(mode)){assert.equal(writes,0,mode);assert.equal(ctx.reviewApproval,'old',mode);assert.deepEqual(changed,values,mode);continue;}
+  assert.equal(changed.gross,values.gross);assert.equal(changed.net,values.net);assert.equal(changed.transportation,'100');assert.equal(changed.workDays,'');assert.equal(changed.residentTax,'0');assert.equal(changed.healthInsurance,'0');assert.equal(ctx.reviewApproval,null);
+  if(mode==='bonus'){assert.equal(changed.yearEndAdjustment,'');assert.equal(changed.reimbursedExpenses,'');assert.equal(changed.bonusBase,'0');}
+  else{assert.equal(changed.bonusBase,'');assert.equal(changed.performanceBonus,'');assert.equal(changed.yearEndAdjustment,'0');}
+  if(mode==='warning'){assert.equal(writes,0);assert.equal(focus,1);}else assert.equal(writes,1,mode);
+ }
+ console.log('PASS: editor zero-save uses existing write boundary; existing values, hidden fields, warnings and operation guards are preserved');
+}

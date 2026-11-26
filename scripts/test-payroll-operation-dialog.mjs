@@ -44,12 +44,28 @@ p=confirmOperation(req,yes);dismissOperationDialog();assert.equal(await p,false)
 p=confirmOperation(req,yes);window.dispatchEvent(new Event('pagehide'));assert.equal(await p,false);
 showFails=true;assert.equal(await confirmOperation(req,yes),false);assert.equal(dialog(),undefined);showFails=false;
 p=showOperationMessage({...req,acceptLabel:'閉じる'},yes);assert.equal(focused,button('閉じる'));assert.equal(button('キャンセル'),undefined);button('閉じる').click();assert.equal(await p,true);
+// Only local statement routes can become links; an invalidated dialog cannot navigate.
+let linkValid=true;
+p=showOperationMessage({...req,acceptLabel:'閉じる',links:[{label:'<synthetic>',href:'./edit/index.html#id=3&mode=fiscal&year=2026&hintYear=2026'},{label:'blocked',href:'javascript:void(0)'}]},()=>linkValid);
+const list=find(dialog(),n=>n.tag==='ul');assert.equal(list.children.length,1);
+const link=find(dialog(),n=>n.tag==='a');assert.equal(link.textContent,'<synthetic>');
+assert.equal(link.href,'./edit/index.html#id=3&mode=fiscal&year=2026&hintYear=2026');
+linkValid=false;const linkClick=new Event('click',{cancelable:true});link.dispatchEvent(linkClick);assert.equal(linkClick.defaultPrevented,true);assert.equal(await p,false);assert.equal(dialog(),undefined);
+// The file name and metadata are one native link, with text-only rendering and notes below.
+p=showOperationMessage({title:'未入力',details:['未入力の明細：1件'],links:[{label:'<synthetic>.pdf',description:'2026年2月 · 本業 · <synthetic> · 賞与',href:'./edit/index.html#id=3&mode=calendar&year=2026&hintYear=2025'}],afterLinks:['見込みの算出不足：1件'],acceptLabel:'閉じる'},yes);
+const structured=find(dialog(),n=>n.tag==='ul');assert.equal(structured.children.length,1);assert.equal(structured.children[0].children.length,1);
+const structuredLink=structured.children[0].children[0];assert.equal(structuredLink.tag,'a');assert.equal(structuredLink.href,'./edit/index.html#id=3&mode=calendar&year=2026&hintYear=2025');
+assert.equal(find(structuredLink,n=>n.className==='operation-dialog__link-label').textContent,'<synthetic>.pdf');
+assert.equal(find(structuredLink,n=>n.className==='operation-dialog__link-description').textContent,'2026年2月 · 本業 · <synthetic> · 賞与');
+assert.deepEqual(structured.parent.children.map(n=>n.tag),['p','ul','p']);button('閉じる').click();assert.equal(await p,true);
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 for(const file of ['src/main.ts','src/edit.ts','src/upload.ts'])assert.doesNotMatch(read(file),/window\.(?:confirm|alert)\(/);
 assert.match(read('src/main.ts'),/deletionMatches\(\)&&JSON\.stringify\(targets\)===JSON\.stringify\(pendingDeletion\.snapshot\(\)\)/);
 assert.match(read('src/main.ts'),/saved\.some\(r=>r\.id===record\.id&&recordSignature\(r\)===recordSignature\(record\)\)/);
 assert.match(read('src/edit.ts'),/JSON\.stringify\(applicablePayrollForm\(getValues\(\)\)\)!==JSON\.stringify\(formValues\)/);
-assert.match(read('src/upload.ts'),/generation===diagnosticGeneration&&Boolean\(diagnosticRawText\)/);
+assert.match(read('src/upload.ts'),/diagnosticAuthorized=\(\)=>authorized\(\)&&selectedEntry\(\)===entry/);
+assert.match(read('src/upload.ts'),/if\(generation!==diagnosticGeneration\)return/);
+assert.match(read('src/upload.ts'),/registerDiagnosticClose\(closeDiagnostic\)/);
 assert.match(read('src/cloud/auth.ts'),/return \(\)=>tabLocks\.check\(\)&&tabLocks\.epoch\(\)===startEpoch&&authEpoch\(\)===identity&&clientId\(\)===id/);
 assert.match(read('src/cloud/snapshot.ts'),/invalidateAuthSession\(\):void \{\s*dismissOperationDialog\(\)/);
 // Run the actual authorization-capture function, not an imitation.
@@ -76,7 +92,7 @@ async function restoreScenario(change,approve=true){
  const context={busy:false,preview:{records:[{id:1}]},ack:{checked:true},initialSnapshot:{physical:'synthetic-record',directory:'[]',count:1,bytes:1},currentCount:1,
   restoreButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
-  updateButtons(){},info(){},finishOperation(){},recordNotification(){},replaceAllRecords:async()=>{writes++;},window:{location:{assign(){nav++;}}},
+  selectSettingsOperation(code){assert.equal(code,'restore-button');},updateButtons(){},info(){},finishOperation(){},recordNotification(){},replaceAllRecords:async()=>{writes++;},window:{location:{assign(){nav++;}}},
   resetPreview(){},restorePreview:{},refreshCount:async()=>{},};
  runInNewContext(stripTypeScriptTypes(helper+'\n'+restore,{mode:'strip'}),context);
  const pending=click();assert.equal(writes,0);assert.equal(request.tone,'danger');assert.equal(request.acceptLabel,'置き換えて復元');
@@ -123,7 +139,7 @@ async function addScenario(change,approve=true){
  const context={busy:false,preview:{records:[{id:1}],unreviewedWarnings:0},ack:{checked:false},addPlan:plan,addPlanAuthorized:()=>valid,
   addButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
-  updateButtons(){},info(){},finishOperation(){},restoreAdditiveRecords:async(_records,signature)=>{assert.equal(signature,plan.signature);writes++;return plan;},
+  selectSettingsOperation(code){assert.equal(code,'restore-add-button');},updateButtons(){},info(){},finishOperation(){},restoreAdditiveRecords:async(_records,signature)=>{assert.equal(signature,plan.signature);writes++;return plan;},
   addPreview:{},refreshCount:async()=>{}};
  runInNewContext(stripTypeScriptTypes(helper+'\n'+addDescription+'\n'+addHandler,{mode:'strip'}),context);
  const pending=click();assert.equal(writes,0);assert.equal(request.acceptLabel,'明細を追加復元');
@@ -146,7 +162,7 @@ async function employeeScenario(change,approve=true){
  const context={busy:false,yearEndPreview:{persons:[{id:'fixture'}]},yearEndPlan:plan,
   yearEndCommit:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
-  updateButtons(){},reportYearEnd(){},finishOperation(){},invalidateYearEndPreview(){},yearEndFile:{},
+  selectSettingsOperation(code){assert.equal(code,'ye-restore-commit');},updateButtons(){},reportYearEnd(){},finishOperation(){},invalidateYearEndPreview(){},yearEndFile:{},
   yearEndRepo:{restoreBackupSnapshot:async()=>{writes++;return {restored:1,skipped:2};}}};
  // Await the actual async handler instead of the UI's fire-and-forget wrapper.
  const handler=employeeHandler.replace('()=>{void(async()=>{','async()=>{').replace('})()});','});');

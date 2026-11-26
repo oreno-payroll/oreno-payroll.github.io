@@ -3,6 +3,10 @@ export interface OperationDialogRequest {
  title:string;
  subject?:string;
  details:readonly string[];
+ /** Local, fragment-based links for read-only informational dialogs. */
+ links?:readonly {label:string;href:string;description?:string}[];
+ /** Explanations below the link list in informational dialogs. */
+ afterLinks?:readonly string[];
  acceptLabel:string;
  tone?:'normal'|'warning'|'danger';
  /** Exact typed confirmation for particularly sensitive operations. */
@@ -23,6 +27,27 @@ function openDialog(request:OperationDialogRequest,guard:Guard,messageOnly:boole
   if(request.subject){const subject=document.createElement('p');subject.className='operation-dialog__subject';subject.textContent=request.subject;dialog.append(subject);}
   const details=document.createElement('div');details.id='operation-dialog-details';details.className='operation-dialog__details';
   for(const text of request.details){const p=document.createElement('p');p.textContent=text;details.append(p);}
+  if(messageOnly&&request.links?.length){
+   dialog.className+=' operation-dialog--links';
+   const list=document.createElement('ul');list.className='operation-dialog__links';
+   for(const entry of request.links){
+    // Only the existing same-origin statement edit route; no external URLs or raw HTML.
+    if(!/^\.\/edit\/index\.html#id=\d+&mode=(?:fiscal|calendar)&year=\d{4}(?:&hintYear=\d{4})?$/.test(entry.href))continue;
+    const item=document.createElement('li'),link=document.createElement('a');
+    link.className='operation-dialog__link';link.href=entry.href;
+    if(entry.description!==undefined){
+     const content=document.createElement('span');content.className='operation-dialog__link-content';
+     const label=document.createElement('span');label.className='operation-dialog__link-label';label.textContent=entry.label;
+     const description=document.createElement('span');description.className='operation-dialog__link-description';description.textContent=entry.description;
+     content.append(label,description);link.append(content);
+    }else link.textContent=entry.label;
+    const check=(event:Event)=>{let current=false;try{current=dialog.open&&guard();}catch{/* Fail closed. */}if(!current){event.preventDefault();finish(false);}};
+    link.addEventListener('click',check);link.addEventListener('auxclick',check);
+    item.append(link);list.append(item);
+   }
+   details.append(list);
+  }
+  if(messageOnly)for(const text of request.afterLinks??[]){const p=document.createElement('p');p.className='operation-dialog__link-note';p.textContent=text;details.append(p);}
   dialog.append(details);
   const actions=document.createElement('div');actions.className='operation-dialog__actions';
   const cancel=document.createElement('button');cancel.type='button';cancel.className='btn btn--secondary';cancel.textContent='キャンセル';

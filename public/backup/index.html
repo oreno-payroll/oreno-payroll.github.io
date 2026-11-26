@@ -31,63 +31,66 @@
   <section class="settings-group" id="settings-employers-panel" aria-labelledby="settings-employers-title" hidden>
     <div class="sr-only"><h2 id="settings-employers-title">勤務先管理</h2></div>
     <section class="card vault-section employer-settings" aria-labelledby="employer-list-heading">
-      <div class="employer-settings__header"><div class="vault-section__head"><h3 id="employer-list-heading">登録済みの勤務先</h3><p class="vault-info">本業・副業ごとに現在の勤務先を1件設定できます。</p></div><div class="employer-settings__actions"><button type="button" class="btn btn--secondary btn--small" id="employer-directory-load">保管庫を開く</button><button type="button" class="btn btn--primary btn--small" id="employer-directory-add" disabled>勤務先を追加</button></div></div>
+      <div class="employer-settings__header"><h3 id="employer-list-heading">登録済みの勤務先</h3><div class="employer-settings__actions"><button type="button" class="btn btn--secondary btn--small" id="employer-directory-load">保管庫を開く</button><button type="button" class="btn btn--primary btn--small" id="employer-directory-add" hidden disabled>＋追加</button></div></div>
       <p id="employer-directory-status" class="vault-info" role="status" aria-live="polite">勤務先一覧を読み込みます。</p>
-      <ul id="employer-directory-list" class="employer-settings__list" hidden></ul>
-      <form id="employer-directory-form" class="employer-settings__form" hidden autocomplete="off">
-        <h3>勤務先の追加・編集</h3>
-        <label for="employer-directory-target" hidden>登録対象</label>
-        <select id="employer-directory-target" class="input" hidden><option value="">新しい勤務先</option></select>
-        <div class="employer-settings__fields"><label class="employer-settings__field" for="employer-directory-name">表示名
-        <input id="employer-directory-name" class="input" type="text" maxlength="100" required autocomplete="off" spellcheck="false"></label>
-        <label class="employer-settings__field" for="employer-directory-role">勤務区分
-        <select id="employer-directory-role" class="input"><option value="" disabled>勤務区分を選択</option><option value="main">本業</option><option value="side">副業</option></select></label></div>
-        <label class="vault-check"><input type="checkbox" id="employer-directory-current">現在の勤務先に設定する</label>
-        <fieldset id="employer-forecast-settings" class="employer-forecast-settings">
-          <legend>給与・賞与の見込み設定</legend>
-          <fieldset class="employer-forecast-group">
-            <legend>給与見込みの計算方法</legend>
-            <div class="employer-forecast-methods">
-              <label class="vault-check"><input type="radio" name="employer-salary-method" value="latest">最新の通常給与</label>
-              <label class="vault-check"><input type="radio" name="employer-salary-method" value="median" checked>直近最大3件の中央値</label>
-              <label class="vault-check"><input type="radio" name="employer-salary-method" value="average">直近最大3件の平均値</label>
-              <label class="vault-check"><input type="radio" name="employer-salary-method" value="none">算出しない</label>
-            </div>
+      <div id="employer-directory-list" class="employer-settings__list" hidden></div>
+      <div id="employer-bulk-panel" class="employer-settings__organize" hidden><div><strong id="employer-bulk-total"></strong><p id="employer-bulk-guide" class="vault-info" hidden>先に勤務先を追加してください。</p></div><button type="button" id="employer-bulk-open" class="btn btn--secondary btn--small" disabled>整理する</button></div>
+    </section>
+    <dialog id="employer-directory-dialog" class="operation-dialog employer-dialog" aria-labelledby="employer-directory-heading">
+      <form id="employer-directory-form" class="employer-settings__form" autocomplete="off">
+        <div class="employer-dialog__head"><h2 id="employer-directory-heading">勤務先を追加</h2><button type="button" class="btn btn--ghost btn--small" id="employer-directory-close" aria-label="閉じる">×</button></div>
+        <div class="employer-dialog__body">
+          <label class="employer-settings__field" for="employer-directory-name">勤務先名
+            <input id="employer-directory-name" class="input" type="text" maxlength="100" required autocomplete="off" spellcheck="false" aria-describedby="employer-directory-error"></label>
+          <fieldset id="employer-directory-role" class="employer-forecast-group"><legend>勤務区分</legend><div class="employer-role-choices">
+            <label><input type="radio" name="employer-role" value="main" checked><span>本業</span></label>
+            <label><input type="radio" name="employer-role" value="side"><span>副業</span></label>
+          </div></fieldset>
+          <label class="vault-check"><input type="checkbox" id="employer-directory-current" aria-describedby="employer-current-hint">現在の勤務先に設定する</label>
+          <p id="employer-current-hint" class="vault-info" hidden></p>
+          <fieldset id="employer-forecast-settings" class="employer-forecast-settings">
+            <legend>給与・賞与の見込み設定</legend>
+            <label class="employer-settings__field" for="employer-salary-method">給与見込み
+              <select id="employer-salary-method" class="input" aria-describedby="employer-salary-hint"><option value="latest">最新の通常給与</option><option value="median" selected>直近最大3件の中央値</option><option value="average">直近最大3件の平均値</option><option value="none">算出しない</option></select>
+            </label>
+            <p class="vault-info" id="employer-salary-hint"></p>
+            <fieldset id="employer-bonus-schedule" class="employer-forecast-group">
+              <legend>賞与支給予定月（複数選択可）</legend>
+              <div class="employer-bonus-months">
+              <label><input type="checkbox" name="employer-bonus-month" value="1"><span>1月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="2"><span>2月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="3"><span>3月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="4"><span>4月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="5"><span>5月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="6"><span>6月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="7"><span>7月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="8"><span>8月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="9"><span>9月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="10"><span>10月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="11"><span>11月</span></label>
+              <label><input type="checkbox" name="employer-bonus-month" value="12"><span>12月</span></label>
+              </div>
+              <p class="vault-info" id="employer-bonus-month-hint" aria-live="polite"></p>
+              <p class="vault-info">最新の通常給与1件から交通費・立替経費を除いた参考額を使用します。</p>
+            </fieldset>
           </fieldset>
-          <label class="vault-check"><input type="checkbox" id="employer-bonus-enabled" aria-controls="employer-bonus-schedule">賞与見込みを算出する</label>
-          <fieldset id="employer-bonus-schedule" class="employer-forecast-group" hidden disabled>
-            <legend>賞与支給予定月（複数選択可）</legend>
-            <div class="employer-bonus-months">
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="1">1月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="2">2月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="3">3月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="4">4月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="5">5月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="6">6月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="7">7月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="8">8月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="9">9月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="10">10月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="11">11月</label>
-              <label class="vault-check"><input type="checkbox" name="employer-bonus-month" value="12">12月</label>
-            </div>
-            <p class="vault-info" id="employer-bonus-month-hint">1か月以上選択してください。最新の通常給与1件から交通費・立替経費を除いた参考額を使用します。</p>
-          </fieldset>
-        </fieldset>
-        <p class="vault-info">既存の明細にある未登録の勤務先も名称を設定できます。ID未設定の明細には自動で割り当てません。</p>
-        <div class="settings-action-row"><button type="button" id="employer-directory-cancel" class="btn btn--secondary">キャンセル</button><button type="submit" id="employer-directory-save" class="btn btn--primary" disabled>勤務先を保存</button></div>
+          <p id="employer-directory-error" class="vault-info" role="alert" hidden></p>
+        </div>
+        <div class="operation-dialog__actions"><button type="button" id="employer-directory-cancel" class="btn btn--secondary">キャンセル</button><button type="submit" id="employer-directory-save" class="btn btn--primary" disabled>勤務先を保存</button></div>
       </form>
-    </section>
-    <section class="card vault-section" id="employer-bulk-panel" aria-labelledby="employer-bulk-heading" hidden>
-      <div class="vault-section__head"><h3 id="employer-bulk-heading">明細の勤務先を一括設定</h3><p class="vault-info">勤務先未設定の明細を選び、同じ勤務区分の登録済み勤務先へ紐付けます。金額やPDF原本は変更しません。</p></div>
-      <label class="employer-settings__field" for="employer-bulk-target">設定する勤務先
-      <select id="employer-bulk-target" class="input" disabled><option value="">勤務先を選択</option></select></label>
-      <div class="employer-bulk__toolbar"><p id="employer-bulk-count" class="vault-info" aria-live="polite"></p>
-      <div class="employer-bulk__actions"><button type="button" id="employer-bulk-all" class="btn btn--text btn--small" disabled>すべて選択</button><button type="button" id="employer-bulk-none" class="btn btn--text btn--small" disabled>選択解除</button></div></div>
-      <div id="employer-bulk-list" class="employer-bulk__list" role="group" aria-label="勤務先未設定の明細"></div>
-      <div class="employer-bulk__footer"><p id="employer-bulk-status" class="vault-info" role="status" aria-live="polite"></p>
-      <button type="button" id="employer-bulk-save" class="btn btn--primary" disabled>勤務先を設定</button></div>
-    </section>
+    </dialog>
+    <dialog id="employer-bulk-dialog" class="operation-dialog employer-dialog" aria-labelledby="employer-bulk-heading">
+      <div class="employer-dialog__head"><h2 id="employer-bulk-heading">明細の勤務先を一括設定</h2><button type="button" class="btn btn--ghost btn--small" id="employer-bulk-close" aria-label="閉じる">×</button></div>
+      <div class="employer-dialog__body">
+        <p class="vault-info">同じ勤務区分の未設定明細だけを割り当てます。金額やPDF原本は変更しません。</p>
+        <label class="employer-settings__field" for="employer-bulk-target">設定する勤務先
+          <select id="employer-bulk-target" class="input" disabled><option value="">勤務先を選択</option></select></label>
+        <div class="employer-bulk__toolbar"><p id="employer-bulk-count" class="vault-info" aria-live="polite"></p><div class="employer-bulk__actions"><button type="button" id="employer-bulk-all" class="btn btn--text btn--small" disabled>すべて選択</button><button type="button" id="employer-bulk-none" class="btn btn--text btn--small" disabled>選択解除</button></div></div>
+        <div id="employer-bulk-list" class="employer-bulk__list" role="group" aria-label="勤務先未設定の明細"></div>
+        <p id="employer-bulk-status" class="vault-info" role="status" aria-live="polite"></p>
+      </div>
+      <div class="operation-dialog__actions"><button type="button" id="employer-bulk-cancel" class="btn btn--secondary">キャンセル</button><button type="button" id="employer-bulk-save" class="btn btn--primary" disabled>勤務先を設定</button></div>
+    </dialog>
   </section>
 
   <section class="settings-group" id="settings-backup-panel" aria-label="バックアップ" hidden>
@@ -204,16 +207,6 @@
         </div>
       </section>
 
-      <section class="card settings-panel" aria-labelledby="write-lock-recovery-title">
-        <div class="settings-panel__head"><h3 id="write-lock-recovery-title">書き込みロックの復旧</h3></div>
-        <div class="backup-key-change__body"><p>保存が中断され、ロックが残った場合</p>
-          <p>通常は保存完了時に解除します。処理の終了を確認できたロックは、同じブラウザで次に保存するときに自動復旧します。他の端末が保存中の場合や、処理結果が不明な場合は解除しません。</p>
-          <p>自動復旧できない場合は、すべての端末・タブで保存を終了し、保留中のアップロードも終了または失効したことを確認してください。不明な場合は解除せず調査してください。</p>
-          <p>確認済みの場合のみ、OneDriveのアプリ専用フォルダー直下（payrollフォルダーの隣）の <code>payroll-write-lock-v1.bin</code> を個別に削除してください。索引・年度・PDF原本は削除しないでください。</p>
-          <p>最新版を読み直し、明細・原本・Finance連携・鍵変更の状態を確認してから作業を再開してください。</p>
-        </div>
-      </section>
-
       <section class="card settings-panel backup-key-change" aria-labelledby="settings-security-title">
         <div class="settings-panel__head"><h3 id="settings-security-title">保管庫のパスフレーズ</h3></div>
         <div class="backup-key-change__body">
@@ -262,6 +255,14 @@
           <button type="button" id="orphan-year-recover" class="btn btn--secondary" hidden disabled>確認した年度を復旧</button>
         </div>
         <p id="orphan-year-status" class="vault-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="settings-details-column settings-write-lock-recovery" aria-labelledby="write-lock-recovery-title">
+        <h3 id="write-lock-recovery-title">書き込みロックの復旧</h3>
+        <p class="settings-note">保存が中断され、ロックが残った場合</p>
+        <p class="settings-note">通常は保存完了時に解除します。処理の終了を確認できたロックは、同じブラウザで次に保存するときに自動復旧します。他の端末が保存中の場合や、処理結果が不明な場合は解除しません。</p>
+        <p class="settings-note">自動復旧できない場合は、すべての端末・タブで保存を終了し、保留中のアップロードも終了または失効したことを確認してください。不明な場合は解除せず調査してください。</p>
+        <p class="settings-note">確認済みの場合のみ、OneDriveのアプリ専用フォルダー直下（payrollフォルダーの隣）の <code>payroll-write-lock-v1.bin</code> を個別に削除してください。索引・年度・PDF原本は削除しないでください。</p>
+        <p class="settings-note">最新版を読み直し、明細・原本・Finance連携・鍵変更の状態を確認してから作業を再開してください。</p>
       </section>
       <section class="settings-details-column settings-legacy" aria-labelledby="settings-legacy-title">
         <h3 id="settings-legacy-title">旧データの整理・移行</h3>

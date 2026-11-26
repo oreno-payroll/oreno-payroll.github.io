@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import { setMissingIndicator } from '../src/ui/missingIndicator.ts';
 import { summary } from '../src/forecast/summary.ts';
 
-class FakeElement {
+class FakeElement extends EventTarget {
   constructor(id = '', text = '') {
+    super();
     this.id = id;
     this.textContent = text;
     this.children = [];
@@ -40,7 +41,9 @@ class FakeElement {
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   removeAttribute(name) { this.attributes.delete(name); if (name === 'title') this.title = ''; }
 }
-globalThis.document = { createElement: () => new FakeElement() };
+class FakeButton extends FakeElement {}
+globalThis.HTMLButtonElement=FakeButton;
+globalThis.document = { createElement: tag => tag==='button'?new FakeButton():new FakeElement() };
 let cases = 0;
 function check(name, test) { test(); console.log(`PASS ${++cases}: ${name}`); }
 const makeRow = (amount='0円') => {
@@ -102,5 +105,15 @@ check('CSS上も金額の横ではなくラベルの下に配置', () => {
   assert.match(main,/setMissingIndicator\(element,/);
   assert.match(main,/setMissingIndicator\(days,/);
   assert.doesNotMatch(main,/\$\{result\.partial\[key\] \? ' ※'/);
+});
+check('クリック対象は件数だけであり、見込み不足は実績未入力と分ける',()=>{
+  const {label,value}=makeRow('100円');let clicked;
+  setMissingIndicator(value,3,10,button=>{clicked=button;},1);
+  const button=label.children[0];
+  assert.ok(button instanceof FakeButton);assert.equal(button.type,'button');
+  assert.equal(button.textContent,'未入力 2件・見込み不足 1件');
+  assert.equal(button.attributes.get('aria-haspopup'),'dialog');
+  button.dispatchEvent(new Event('click'));assert.equal(clicked,button);
+  setMissingIndicator(value,0,10,()=>{});assert.equal(label.children.length,0);
 });
 console.log(`OK: 未入力注記レイアウトと0円判別 ${cases}件`);

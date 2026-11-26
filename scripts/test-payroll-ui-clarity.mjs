@@ -60,9 +60,9 @@ assert.match(yearUI,/month:r\.targetMonth/);
 assert.match(yearUI,/month:item\.draft\?\.targetMonth/);
 assert.doesNotMatch(yearCSS,/\.yea-file-month-heading/);
 assert.match(main,/periodMode==='calendar' \? record\.form\.paymentDate\.slice\(0,7\) : record\.form\.targetMonth/);
-// Exactly one advanced settings panel contains the four independent operations.
+// Exactly one advanced settings panel contains the five independent operations.
 assert.match(settingsHTML,/<h2 id="settings-details-title">メンテナンス<\/h2>/);
-assert.equal((settingsHTML.match(/class="settings-details-column/g)??[]).length,4);
+assert.equal((settingsHTML.match(/class="settings-details-column/g)??[]).length,5);
 for (const id of ['payroll-income-publish','orphan-year-check','orphan-year-recover','legacy-cleanup-delete','legacy-cleanup-check','migrate-legacy-cloud']) {
  assert.equal((settingsHTML.match(new RegExp(`id="${id}"`,'g'))??[]).length,1,id);
 }

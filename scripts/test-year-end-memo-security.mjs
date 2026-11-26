@@ -28,9 +28,9 @@ const share=redact.redactCoordinateDiagnostic(`===== 1ページ =====\n[1] x=10 
 assert.ok(share.includes('[マスク済み]'));
 assert.ok(!share.includes(sensitive));
 const upload=read('src/upload.ts');
-assert.match(upload,/redactCoordinateDiagnostic\(diagnostic\.raw\)/);
-assert.match(upload,/diagnostic-copy-original/);
-assert.match(upload,/diagnostic-view-original/);
+assert.match(upload,/const text=original\?diagnosticRawText:redactCoordinateDiagnostic\(diagnosticRawText\)/);
+assert.match(upload,/diagnostic-mode-original/);
+assert.match(upload,/registerDiagnosticClose\(closeDiagnostic\)/);
 const audit=read('scripts/audit-private-data.mjs');
 assert.match(audit,/git\(\['log','--all'/);
 assert.match(audit,/Gitleaks/);

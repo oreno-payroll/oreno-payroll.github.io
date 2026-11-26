@@ -26,7 +26,12 @@ assert.match(css,/payroll-cloud-error\[hidden\]/,'failed login details must not 
 assert.match(html,/id="save-feedback"/);
 assert.match(html,/id="save-progress-track"/);
 assert.match(html,/id="save-guidance"/);
-assert.match(html,/端末内で暗号化し、OneDriveへ保存します/);
+// The upload UI no longer repeats the persistence explanation in its diagnostic panel.
+// Keep the public documentation and verify encryption at the actual Graph write boundary.
+assert.match(source('README.md'),/給与の平文PDF・平文JSONをOneDriveへアップロードしません/);
+const persistence=source('src/cloud/vault.ts');
+assert.match(persistence,/const encrypted=await encryptBytes\('original',bytes,key\);[\s\S]*?this\.graph\.write\(this\.storagePath\('originals',year,mm\),`\$\{uuid\}\.enc`,encrypted,/);
+assert.match(persistence,/const encrypted=await encryptJson\('year',merged,this\.unlocked\(\),this\.salt\);[\s\S]*?this\.graph\.write\(this\.storagePath\('statements'\),`\$\{year\}\.enc`,encrypted,/);
 assert.doesNotMatch(html,/IndexedDBへ保存します/,'stale persistence instructions must not return');
 assert.match(upload,/saveElapsed\.textContent/);
 assert.doesNotMatch(upload,/通信応答を待っています|OneDriveの応答待ち/);

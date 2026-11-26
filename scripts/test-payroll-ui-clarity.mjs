@@ -86,7 +86,7 @@ for (const file of ['src/main.ts','src/upload.ts','src/edit.ts','src/backup.ts',
 assert.match(sharedCSS,/\.app-status\{position:fixed;right:/);
 assert.match(sharedCSS,/\.app-status\[data-state="loading"\]::before/);
 assert.match(sharedCSS,/\.app-status\[data-state="error"\]/);
-assert.match(statusUI,/if\(kind!=='loading'&&!sticky\)timer=setTimeout/);
+assert.match(statusUI,/if\(item.kind!=='loading'&&!item.sticky\)timer=setTimeout/);
 assert.match(read('public/view/index.html'),/class="app-status" id="pdf-status"/);
 assert.match(read('public/upload/index.html'),/class="app-status" id="toast"/);
 assert.match(read('public/year-end-assist/index.html'),/class="app-status yea-status" id="yea-status"/);

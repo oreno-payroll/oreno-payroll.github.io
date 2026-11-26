@@ -38,6 +38,8 @@ export class GraphError extends Error {
     super(status===403?'OneDriveへのアクセス権限がありません。Microsoftの接続権限を確認してください（HTTP 403）。':status===401?'Microsoft認証が無効です。再接続後にOneDriveの状態を確認してください（HTTP 401）。':`OneDrive通信エラー HTTP ${status}${code ? ` (${code})` : ''}`);
   }
 }
+/** Distinguish an explicit mutation rejection from a failed read with the same status. */
+export class GraphWriteRejectedError extends GraphError {}
 // Explicit Graph rejections are not lost write replies. Do not resend mutations.
 const rejectedWriteStatus=(status:number):boolean=>[401,403,409,412,429].includes(status);
 export const isCollision = (e: unknown): boolean => e instanceof GraphError && (e.status === 409 || e.status === 412);
@@ -332,7 +334,8 @@ export class PayrollGraph {
         let code = '';
         try { const v = await r.json() as {error?:{code?:string}}; code = (v.error?.code ?? '').slice(0,80); } catch {}
         this.assertCurrent();
-        throw new GraphError(r.status,code);
+        throw !readonly&&!lockControl&&rejectedWriteStatus(r.status)
+          ? new GraphWriteRejectedError(r.status,code) : new GraphError(r.status,code);
       }
       this.assertCurrent();
       return r;
@@ -823,7 +826,7 @@ export class PayrollGraph {
       });
       this.assertCurrent();
       if (!response.ok) {
-        if(rejectedWriteStatus(response.status)){chunkDispatched=false;finalDispatched=false;if(this.writeOwner)this.markRejected();throw new GraphError(response.status,'upload-rejected');}
+        if(rejectedWriteStatus(response.status)){chunkDispatched=false;finalDispatched=false;if(this.writeOwner)this.markRejected();throw new GraphWriteRejectedError(response.status,'upload-rejected');}
         throw new Error(`OneDriveのアップロードに失敗しました (HTTP ${response.status})。`);
       }
       if (end<bytes.length && response.status!==202) throw new Error('分割アップロードが途中終了しました。');

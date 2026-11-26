@@ -6,6 +6,7 @@ import { amountOrMissing } from '../storage/payrollValidation.ts';
 import { isZeroIfMissingSummaryKey } from './missingPolicy.ts';
 import { monthIndex, targetMonthOf, salaryPaymentLag, monthStringFromIndex } from './payrollCalendar.ts';
 import {forecastEmployerScope,type ForecastEmployerSetting} from './activeEmployer.ts';
+import {defaultEmployerForecast,type SalaryForecastMethod} from '../storage/employerForecast.ts';
 
 export type ForecastJob = 'main' | 'side';
 export type ForecastKind = 'salary' | 'bonus';
@@ -33,7 +34,7 @@ export interface JobForecast {
   pendingMonths: string[];
   /** 月給の推計だけ。 */
   estimates: MonthEstimate[];
-  /** 本業だけ。既存賞与がある8月・2月は作らない。 */
+  /** 勤務先ごとの未登録賞与の参考推計。 */
   bonusEstimates: MonthEstimate[];
   pendingBonusMonths: string[];
   /** 賞与見込みの参照元：直近登録済み通常給与の支給年月。 */
@@ -41,6 +42,8 @@ export interface JobForecast {
   bonusReason?: string;
   reason?: string;
   employerName?: string;
+  salaryMethod:SalaryForecastMethod;
+  bonusMonths:number[];
 }
 export interface AnnualForecast {
   fiscalYear: number;
@@ -64,7 +67,8 @@ function fieldValue(form: Record<string, string>, key: ForecastKey): { value: nu
   const value = amountOrMissing(form[key]);
   return { value: value ?? (isZeroIfMissingSummaryKey(key) ? 0 : null), incomplete: false };
 }
-export function estimateFromSamples(job: ForecastJob, month: string, samples: ForecastSource[]): MonthEstimate {
+export function estimateFromSamples(job: ForecastJob, month: string, samples: ForecastSource[], method:Exclude<SalaryForecastMethod,'none'>='median'): MonthEstimate {
+  if(method==='latest')samples=[...samples].sort((a,b)=>b.form.paymentDate.localeCompare(a.form.paymentDate)).slice(0,1);
   const values = {} as Record<ForecastKey, number | null>;
   const incomplete: Partial<Record<ForecastKey, boolean>> = {};
   for (const key of FORECAST_KEYS) {
@@ -90,21 +94,21 @@ export function estimateFromSamples(job: ForecastJob, month: string, samples: Fo
       }
       return part;
     });
-    values[key] = median(parts.flatMap(part => part.value === null ? [] : [part.value]));
+    const known=parts.flatMap(part=>part.value===null?[]:[part.value]);
+    values[key] = method==='average'&&known.length ? Math.round(known.reduce((sum,v)=>sum+v,0)/known.length) : median(known);
     if (parts.some(part => part.value === null || part.incomplete)) incomplete[key] = true;
   }
   return { month, job, kind: 'salary', values, incomplete };
 }
 
 /**
- * 賞与額は本業の通常給与の「交通費・立替経費を除いた月額」をベースにする。
+ * 賞与額は勤務先の通常給与の「交通費・立替経費を除いた月額」をベースにする。
  * 保存フォームには基本給・固定残業手当が個別に残らないため、
  * 給与明細の課税支給額（PDF解析時に基本給＋固定残業代で検算）を参照する。
  * 交通費・立替経費が分かる場合は総支給からその合計を除外して照合し、
  * 手取りからも同額を除外する。
  * 交通費が記載されない月は、総支給額=課税支給額なら交通費ゼロとみなす。
- * どうしても金額が識別できない場合は月給そのものを参考値として採用し、
- * 未確定フラグを付ける（賞与が確実であると断言しない）。
+ * 金額を識別できない場合は見込みを算出しない。
  */
 function transportExcludedSalary(form: Record<string, string>): {
   gross: number | null; net: number | null; incomplete: boolean;
@@ -137,13 +141,13 @@ function transportExcludedSalary(form: Record<string, string>): {
   return { gross: null, net: null, incomplete: true };
 }
 /**
- * 本業の未登録賞与は、支給済みの最新「通常給与」1件だけを基準にする。
+ * 未登録賞与は、支給済みの最新「通常給与」1件だけを基準にする。
  * 8月に実績として存在する業績給はその明細の実績にのみ含め、
  * 将来の2月賞与や未登録8月賞与へ業績給を横展開しない。
  * 保存フォームは基本給/固定残業代を個別保持していないため、
  * 解析済みの課税支給額、または総支給-交通費-立替経費を用いる。
  */
-export function estimateMainBonus(month: string, samples: ForecastSource[]): MonthEstimate | null {
+export function estimateBonus(job:ForecastJob,month: string, samples: ForecastSource[]): MonthEstimate | null {
   const latest = [...samples].sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate))[0];
   if (!latest) return null;
   const adjusted = transportExcludedSalary(latest.form);
@@ -172,17 +176,33 @@ export function estimateMainBonus(month: string, samples: ForecastSource[]): Mon
       if (part.value === null || part.incomplete) incomplete[key] = true;
     }
   }
-  return { month, job: 'main', kind: 'bonus', values, incomplete };
+  return { month, job, kind: 'bonus', values, incomplete };
+}
+/** Existing callers/tests of the original main-employer model. */
+export function estimateMainBonus(month:string,samples:ForecastSource[]):MonthEstimate|null {
+ return estimateBonus('main',month,samples);
 }
 
-/**
- * 対象は「現在進行中の年度」。給与は支給時差を考慮した未登録の対象月だけ補完し、
- * 本業の賞与だけ8月・翌2月のうち実績がない月を予測する。
- * 過去の賞与が未登録の場合も、年間見込みから漏らさないため推計対象とする。
- * 直近6か月以内の通常給与を、新しい順に最大3対象月採用する。
- * 対象月と支給月のずれは勤務先の通常給与履歴から推定する。
- * 副業の賞与は一切推計しない。賞与表示OFFなら本業の賞与も推計しない。
+/** Calculate bonus schedules in the selected period. For a registered current employer,
+ * compare payment months (including unassigned legacy actuals), never fill earlier months.
+ * Role-only legacy records retain the original historical bonus behavior and annual target-month check.
  */
+export function pendingForecastBonusMonths(records:readonly ForecastSource[],job:ForecastJob,scope:{current?:ForecastEmployerSetting;inactive:boolean},months:readonly number[],start:number,end:number,todayIso:string,applicable:boolean,includeBonus:boolean,fiscal:boolean):string[]{
+ if(!applicable||!includeBonus||scope.inactive||!months.length)return [];
+ const registered=records.filter(r=>r.form.job===job&&r.form.kind==='bonus'&&(!scope.current||r.employerId===scope.current.id||r.employerId===undefined));
+ const paid=new Set(registered.flatMap(({form})=>{
+  const payment=form.paymentDate?.slice(0,7);
+  // Keep the exact legacy annual target-month rule when no directory is registered.
+  return fiscal&&!scope.current?[targetMonthOf(form)]:[payment];
+ }));
+ const candidates:string[]=[];
+ for(let i=start;i<=end;i++){
+  const month=monthStringFromIndex(i);
+  if(months.includes(i%12+1)&&!paid.has(month)&&(!scope.current||month>=todayIso.slice(0,7)))candidates.push(month);
+ }
+ return candidates;
+}
+/** 現在年度の未登録対象月のみ給与見込みを計算。勤務先別の賞与予定月は同月の支給予定として扱う。 */
 export function calculateAnnualForecast(
   records: readonly ForecastSource[], selectedYear: number, today: Date, includeBonus = true, directory:readonly ForecastEmployerSetting[] = [],
 ): AnnualForecast {
@@ -197,6 +217,7 @@ export function calculateAnnualForecast(
     const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const scope=forecastEmployerScope(allSalaries,job,todayIso,directory);
     const salaries=scope.samples;
+    const {salaryMethod,bonusMonths}=scope.current?.forecast??defaultEmployerForecast(job);
     const paidMonths = new Set(scope.registered.map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
     // 本業は「10月対象→11月支給」、副業は「10月対象→10月支給」など、
     // 保存済み給与から各勤務先の通常の支給タイミングを推定する。
@@ -218,7 +239,7 @@ export function calculateAnnualForecast(
       }
     }
     const seen = new Set<string>();
-    const samples = salaries
+    const eligibleSamples = salaries
       .filter(({ form }) => {
         const month = targetMonthOf(form);
         const index = month === null ? null : monthIndex(month);
@@ -231,41 +252,35 @@ export function calculateAnnualForecast(
         seen.add(month);
         return true;
       }).slice(0, 3);
+    const samples=salaryMethod==='none'?[]:salaryMethod==='latest'?eligibleSamples.slice(0,1):eligibleSamples;
     const sampleMonths = samples.map(({ form }) => targetMonthOf(form)!);
-    const estimates = applicable && samples.length
-      ? pendingMonths.map(month => estimateFromSamples(job, month, samples)) : [];
+    const estimates = applicable && salaryMethod!=='none' && samples.length
+      ? pendingMonths.map(month => estimateFromSamples(job, month, samples,salaryMethod)) : [];
     const reason = !applicable ? '現在進行中の年度以外は予測しません。'
       : scope.inactive ? '現在の勤務先が未設定のため、見込みを計算しません。'
+      : salaryMethod==='none' ? '給与見込みを算出しない設定です。'
       : scope.current&&!samples.length ? '現在の勤務先の直近6か月の給与実績がなく、見込みを計算できません。'
       : !pendingMonths.length ? '見込み対象の未登録月はありません。'
       : !samples.length ? '直近6か月に通常給与の実績がなく、予測できません。'
       : undefined;
 
-    const bonusMonths = [`${selectedYear}-08`, `${selectedYear + 1}-02`];
-    const paidBonusMonths = new Set(records.filter(r => r.form.job === 'main' && r.form.kind === 'bonus' && (!scope.current||r.employerId===scope.current.id||r.employerId===undefined))
-      .map(({ form }) => targetMonthOf(form)).filter((month): month is string => month !== null));
-    const pendingBonusMonths = job === 'main' && applicable && includeBonus && !scope.inactive
-      ? bonusMonths.filter(month => !paidBonusMonths.has(month)&&(!scope.current||month>=todayIso.slice(0,7))) : [];
-    // 給与の通常月見込みは「直近6か月・最大3件」。賞与だけは最後の登録済み通常給与1件を使う。
-    // 賞与見込みが古い給与からでも算出できるよう、通常月見込みのサンプルとは独立させる。
-    const latestBonusSalary = job === 'main' ? salaries
-      .filter(({ form }) => form.paymentDate <= todayIso)
-      .sort((a, b) => b.form.paymentDate.localeCompare(a.form.paymentDate))[0] : undefined;
-    const bonusSampleMonth = latestBonusSalary?.form.paymentDate?.slice(0, 7);
-    const bonusEstimates = job === 'main' && pendingBonusMonths.length && latestBonusSalary
-      ? pendingBonusMonths.flatMap(month => {
-        const estimate = estimateMainBonus(month, [latestBonusSalary]);
-        return estimate ? [estimate] : [];
-      }) : [];
-    const bonusReason = job === 'main' && applicable && includeBonus && pendingBonusMonths.length && !bonusEstimates.length
-      ? '本業賞与の参考になる通常給与の内訳が不足しているため、見込み賞与を算出できません。' : undefined;
+    const pendingBonusMonths=pendingForecastBonusMonths(records,job,scope,bonusMonths,fiscalStart,fiscalEnd,todayIso,applicable,includeBonus,true);
+    // 賞与は給与見込みの設定・サンプル期間と独立して、最後の支給済み通常給与を参照する。
+    const latestBonusSalary = pendingBonusMonths.length ? [...salaries].sort((a,b)=>b.form.paymentDate.localeCompare(a.form.paymentDate))[0] : undefined;
+    const bonusSampleMonth = latestBonusSalary?.form.paymentDate?.slice(0,7);
+    const bonusEstimates = latestBonusSalary ? pendingBonusMonths.flatMap(month=>{
+      const estimate=estimateBonus(job,month,[latestBonusSalary]);return estimate?[estimate]:[];
+    }):[];
+    const bonusReason = scope.inactive ? '現在の勤務先が未設定のため、見込みを計算しません。'
+      : !bonusMonths.length ? '賞与見込みを算出しない設定です。'
+      : pendingBonusMonths.length&&!bonusEstimates.length ? '賞与の参考になる通常給与の内訳が不足しているため、見込み賞与を算出できません。' : undefined;
 
-    jobs[job] = { job, sampleMonths, pendingMonths, estimates, bonusEstimates, pendingBonusMonths,
+    jobs[job] = { job, salaryMethod,bonusMonths, sampleMonths, pendingMonths, estimates, bonusEstimates, pendingBonusMonths,
       ...(scope.current ? {employerName:scope.current.name} : {}),
       ...(bonusSampleMonth ? { bonusSampleMonth } : {}),
       ...(reason ? { reason } : {}), ...(bonusReason ? { bonusReason } : {}) };
   }
   return { fiscalYear: selectedYear, applicable, jobs, estimates: [
-    ...jobs.main.estimates, ...jobs.side.estimates, ...jobs.main.bonusEstimates,
+    ...jobs.main.estimates, ...jobs.side.estimates, ...jobs.main.bonusEstimates, ...jobs.side.bonusEstimates,
   ] };
 }

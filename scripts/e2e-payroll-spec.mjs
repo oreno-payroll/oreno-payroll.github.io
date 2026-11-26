@@ -507,7 +507,33 @@ test('settings overview separates categories and retains only in-page drafts',as
  const menu=page.locator('#settings-menu');
  const version=page.locator('#settings-version');
  await expect(version).toBeVisible();
- await expect(version.locator('[data-build-version]')).toHaveText(/^v\d+\.\d+\.\d+ · .+ · (?:[a-f0-9]{4,64}|local)$/);
+ await expect(version.locator('[data-build-version]')).toHaveText(/^v\d+\.\d+\.\d+$/);
+ const buildDetails=page.locator('[data-build-details]');
+ await expect(buildDetails).toHaveText(/^\d{4}[/.-]\d{1,2}[/.-]\d{1,2} .+ · (?:[a-f0-9]{4,64}|local)$/);
+ await expect(version.locator('[data-build-details]')).toHaveCount(0);
+ // Release notes are accessible before connecting or unlocking, without extra navigation.
+ const historyDialog=page.getByRole('dialog',{name:'アップデート履歴'});
+ const buildVersion=await version.locator('[data-build-version]').textContent();
+ await buildDetails.click();await expect(historyDialog).toBeHidden();
+ await version.focus();await page.keyboard.press('Enter');
+ await expect(historyDialog).toBeVisible();
+ await expect(historyDialog.locator('.release-history__entry').first().locator('strong').first()).toHaveText(buildVersion);
+ await expect(historyDialog.getByText('最新版',{exact:true})).toHaveCount(1);
+ const historyClose=historyDialog.locator('.operation-dialog__actions .btn--primary');
+ await expect(historyClose).toHaveText('閉じる');
+ await expect(historyClose).toBeFocused();
+ const historyBody=historyDialog.locator('#release-history-content');
+ await historyBody.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+ await expect(historyClose).toBeInViewport();
+ const bodyRect=await historyBody.boundingBox(),closeRect=await historyClose.boundingBox();
+ expect(closeRect.y).toBeGreaterThanOrEqual(bodyRect.y+bodyRect.height);
+ await expect(historyDialog.getByText('Payroll 初期公開',{exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');await expect(historyDialog).toBeHidden();await expect(version).toBeFocused();
+ await page.route('**/release-notes.json',route=>route.fulfill({status:503,body:'unavailable'}));
+ await version.click();await expect(historyDialog.getByText(/履歴を読み込めませんでした/)).toBeVisible();
+ await historyDialog.getByRole('button',{name:'閉じる',exact:true}).click();
+ await expect(historyDialog).toBeHidden();
+ await page.unroute('**/release-notes.json');
  const personal=menu.getByRole('button',{name:"バックアップ",exact:true});
  const viewport=page.viewportSize();
  const left=await menu.boundingBox();
@@ -554,7 +580,12 @@ test('settings overview separates categories and retains only in-page drafts',as
  await expect(page.locator('#ye-restore-commit')).toBeDisabled();
  await expect(page.locator('#ye-restore-ack')).toHaveCount(0);
  await expect(page.locator('#settings-personal-panel')).toBeVisible();
- await expect(menu.locator('button')).toHaveCount(4);
+ await expect(menu.locator('button')).toHaveCount(5);
+ await menu.getByRole('button',{name:/^通知履歴/}).click();
+ await expect(page.locator('#settings-notifications-panel')).toBeVisible();
+ await expect(page.locator('#notification-empty')).toBeVisible();
+ await expect(page.locator('#notification-confirm-all')).toBeDisabled();
+ await expect(page.locator('#payroll-cloud-gate')).toHaveCount(0);
  await menu.getByRole('button',{name:/^勤務先管理/}).click();
  await expect(page.locator('#settings-backup-panel')).toBeHidden();
  await expect(page.locator('#settings-employers-panel')).toBeVisible();
@@ -714,6 +745,18 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
     overflow:document.documentElement.scrollWidth-innerWidth};
   },theme);
   expect(settings.gap).toBe(18);expect(settings.radius).toBe('9px');expect(settings.menuRadius).toBe(settings.radius);expect(settings.overflow).toBe(0);
+  // The real settings HTML/CSS is rendered here with scripts blocked, not a fake signed-in account.
+  const formLayout=await page.evaluate(()=>{
+   const form=document.querySelector('#employer-directory-form'),schedule=document.querySelector('#employer-bonus-schedule');
+   form.hidden=false;schedule.hidden=false;schedule.disabled=false;
+   const bounds=form.getBoundingClientRect();
+   const inputs=[...form.querySelectorAll('input[name="employer-salary-method"],input[name="employer-bonus-month"]')];
+   const inside=inputs.every(input=>{const b=input.getBoundingClientRect();return b.width>=16&&b.height>=16&&b.left>=bounds.left&&b.right<=bounds.right;});
+   const overflow=document.documentElement.scrollWidth-innerWidth;
+   schedule.hidden=true;const hidden=getComputedStyle(schedule).display==='none';form.hidden=true;
+   return {inside,overflow,hidden,count:inputs.length};
+  });
+  expect(formLayout).toEqual({inside:true,overflow:0,hidden:true,count:16});
   for(const id of ['settings-backup-panel','settings-details-panel','settings-auth-panel']){
    await page.evaluate(id=>{for(const s of document.querySelectorAll('main>.settings-group'))s.hidden=s.id!==id;},id);
    expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0);

@@ -5,6 +5,7 @@
  * Live Serverはdist/を公開ルートにする。
  */
 import * as esbuild from "esbuild";
+import { writeChangelog } from "./generate-changelog.mjs";
 import { watch } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -53,6 +54,8 @@ for (const rel of ["public/index.html", "public/upload/index.html", "public/view
   }
 }
 
+writeChangelog();
+
 // 古い成果物を残さず、配信用のHTML/CSS等は階層をそのまま保持してコピー。
 await fs.rm(distDir, { recursive: true, force: true });
 await fs.mkdir(distDir, { recursive: true });
@@ -89,9 +92,10 @@ const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"
 let gitHash = "local";
 try { gitHash = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch {}
 const buildStamp = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", hour12: false });
-const buildLabel = `v${pkg.version} · ${buildStamp} · ${gitHash}`;
+const buildVersion = `v${pkg.version}`;
+const buildDetails = `${buildStamp} · ${gitHash}`;
 await fs.writeFile(path.join(distDir, "build-info.js"),
-  `document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ${JSON.stringify(buildLabel)}; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n`, "utf8");
+  `document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ${JSON.stringify(buildVersion)}; });\ndocument.querySelectorAll('[data-build-details]').forEach(el => { el.textContent = ${JSON.stringify(buildDetails)}; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n`, "utf8");
 
 if (!watchMode) {
   await esbuild.build(options);
@@ -107,12 +111,14 @@ if (!watchMode) {
     queue = queue.then(async () => {
       // filenameが返らない場合はpublic全体を再コピーする。
       if (!filename) {
+        writeChangelog();
         await fs.cp(publicDir, distDir, { recursive: true, force: true });
         console.log("[dev] public/ を同期しました。");
         return;
       }
 
       const rel = String(filename);
+      if (rel === "release-notes.json") writeChangelog();
       const src = path.resolve(publicDir, rel);
       const dest = path.resolve(distDir, rel);
       if (!src.startsWith(publicDir + path.sep) || !dest.startsWith(distDir + path.sep)) return;

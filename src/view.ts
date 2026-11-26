@@ -1,3 +1,4 @@
+import {resetNotificationHistory} from './ui/notificationHistory';
 import { createAppStatus } from './ui/appStatus';
 /** PDF原本はクリック時だけ取得する。ファイル名を履歴・タブタイトルに渡さない。 */
 import {readNavigationParams,replaceNavigationParams} from './ui/navigationParams';
@@ -8,7 +9,7 @@ import {asVerifiedPdfBlob,requirePdfMime} from './pdf/safePdf';
 import {createTabLockCoordinator} from './cloud/tabLock';
 
 const status = document.getElementById('pdf-status');
-const appStatus=createAppStatus(status);
+const appStatus=createAppStatus(status,'view');
 const reader = document.getElementById('pdf-reader') as HTMLIFrameElement | null;
 document.title='Payroll | PDF原本';
 if(reader)reader.title='PDF原本';
@@ -19,7 +20,7 @@ const locks=createTabLockCoordinator(()=>{
  document.title='Payroll | PDF原本';
  if(reader){reader.hidden=true;reader.removeAttribute('src');reader.title='PDF原本';}
  if(fallbackUrl){URL.revokeObjectURL(fallbackUrl);fallbackUrl=undefined;}
- appStatus.error('保管庫がロックされました。このPDFは閉じてください。');
+ resetNotificationHistory();appStatus.locked();
 });
 function assertUnlocked(start:string){
  if(locked||!locks.check()||locks.epoch()!==start)throw new Error('保管庫がロックされました。PDFを開き直してください。');
@@ -91,7 +92,7 @@ async function start(): Promise<void> {
 
 appStatus.loading('PDF原本を取得しています…');
 void start().catch(error => {
-  if (status) {
+  if (status&&!locked) {
     appStatus.error(`PDFを表示できませんでした：${error instanceof Error ? error.message : String(error)}`);
   }
 });

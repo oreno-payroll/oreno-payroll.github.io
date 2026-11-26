@@ -1,6 +1,6 @@
 /** Settings categories are presentation-only; switching does not create history entries. */
-type View='employers'|'auth'|'backup'|'maintenance';
-const views:readonly View[]=['employers','auth','backup','maintenance'];
+type View='employers'|'auth'|'backup'|'maintenance'|'notifications';
+const views:readonly View[]=['employers','auth','backup','maintenance','notifications'];
 const stateKey='payrollSettingsView';
 function readView(state:unknown):View|undefined{
  const value=(state as Record<string,unknown>|null)?.[stateKey];
@@ -14,7 +14,7 @@ export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean
  };
  const menu=required<HTMLElement>('#settings-menu');
  const buttons=Array.from(menu.querySelectorAll<HTMLButtonElement>('button[data-settings-open]'));
- const panels={employers:required<HTMLElement>('#settings-employers-panel'),auth:required<HTMLElement>('#settings-auth-panel'),backup:required<HTMLElement>('#settings-backup-panel'),maintenance:required<HTMLElement>('#settings-details-panel')};
+ const panels={employers:required<HTMLElement>('#settings-employers-panel'),auth:required<HTMLElement>('#settings-auth-panel'),backup:required<HTMLElement>('#settings-backup-panel'),maintenance:required<HTMLElement>('#settings-details-panel'),notifications:required<HTMLElement>('#settings-notifications-panel')};
  let busy=false;
  let current:View='auth';
  function renderButtons():void{

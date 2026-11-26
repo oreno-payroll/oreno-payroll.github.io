@@ -87,9 +87,9 @@ try{
      format:'esm',platform:'browser',target:'es2022',minify:true,write:false,logLevel:'silent'});
    writeFileSync(path.join(target,destination),built.outputFiles[0].contents);
  }
- const label='v1.1.1 · 2026/11/22 17:40:11 · local';
+ const label='2026/11/22 17:40:11 · local';
  writeFileSync(path.join(target,'build-info.js'),
-   `document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = ${JSON.stringify(label)}; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n`);
+   `document.querySelectorAll('[data-build-version]').forEach(el => { el.textContent = "v1.1.1"; });\ndocument.querySelectorAll('[data-build-details]').forEach(el => { el.textContent = ${JSON.stringify(label)}; el.title = 'このブラウザが読み込んでいるPayrollのビルド情報'; });\n`);
  const verify=async()=>await auditDist({root:temp,verifyBundles:true,requirePrivateTerms:true});
  assert.deepEqual((await verify()).problems,[],'complete legitimate build must pass');
  for(const filename of ['main.js','vendor/msal/msal-browser.bundle.js','auth/redirect-bridge.js','build-info.js']){

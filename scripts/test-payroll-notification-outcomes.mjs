@@ -1,22 +1,14 @@
 /** Actual shared notification and one-time handoff, synthetic values only. */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {build} from 'esbuild';
-import {fileURLToPath} from 'node:url';
-const root=fileURLToPath(new URL('../',import.meta.url));
-// Bundle the real modules together, as test-navigation-session.mjs does.
-// Native Node TypeScript loading does not resolve extensionless TS imports.
-const built=await build({
- stdin:{contents:[
-  "export {createAppStatus} from './src/ui/appStatus.ts'",
-  "export {rememberNavigationNotice,takeNavigationNotice,navigationFeedback,clearNavigationNotice} from './src/ui/navigationNotice.ts'",
-  "export {invalidateAuthSession,authEpoch} from './src/cloud/snapshot.ts'",
- ].join(';'),resolveDir:root,sourcefile:'notification-entry.ts',loader:'ts'},
- bundle:true,platform:'node',format:'esm',target:'es2022',write:false,logLevel:'silent',
-});
-const {createAppStatus,rememberNavigationNotice,takeNavigationNotice,navigationFeedback,clearNavigationNotice,invalidateAuthSession,authEpoch}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].contents).toString('base64'));
+import {createAppStatus} from '../src/ui/appStatus.ts';
+import {rememberNavigationNotice,takeNavigationNotice,navigationFeedback,clearNavigationNotice} from '../src/ui/navigationNotice.ts';
+import {invalidateAuthSession,authEpoch} from '../src/cloud/snapshot.ts';
+import {activateNotificationHistory,notificationHistory,recordNotification,confirmNotificationHistory,resetNotificationHistory,NOTICE_HISTORY_KEY} from '../src/ui/notificationHistory.ts';
 const items=new Map();globalThis.sessionStorage={getItem:k=>items.get(k)??null,setItem:(k,v)=>items.set(k,String(v)),removeItem:k=>items.delete(k)};
+const local=new Map();globalThis.localStorage={getItem:k=>local.get(k)??null,setItem:(k,v)=>local.set(k,String(v)),removeItem:k=>local.delete(k)};
 const key='payroll-navigation-notice-v1';
+activateNotificationHistory(()=>true);
 const notice={operation:'upload-saved',count:3};
 rememberNavigationNotice(notice,authEpoch());
 assert.deepEqual(JSON.parse(items.get(key)).notice,notice);
@@ -31,7 +23,7 @@ rememberNavigationNotice(notice,authEpoch());
 const stale=JSON.parse(items.get(key));stale.created-=121000;items.set(key,JSON.stringify(stale));
 assert.equal(takeNavigationNotice(authEpoch()),null);
 items.set(key,'broken');assert.equal(takeNavigationNotice(authEpoch()),null);assert.equal(items.has(key),false);
-rememberNavigationNotice(notice,authEpoch());invalidateAuthSession();assert.equal(items.has(key),false);
+rememberNavigationNotice(notice,authEpoch());invalidateAuthSession();assert.equal(items.has(key),false);assert.equal(items.has(NOTICE_HISTORY_KEY),false);activateNotificationHistory(()=>true);
 rememberNavigationNotice({operation:'delete-income-partial'},authEpoch());
 assert.equal(navigationFeedback(takeNavigationNotice(authEpoch())).kind,'partial');
 assert.match(navigationFeedback({operation:'delete-income-partial'}).message,/再削除は不要/);
@@ -68,5 +60,51 @@ try{
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 assert.match(read('src/upload.ts'),/function notice\(kind:Exclude<AppStatusKind,'loading'>,message: string\): void \{\s*appStatus\.show\(kind,message\);/);
 assert.match(read('src/edit.ts'),/rememberNavigationNotice\(\{operation:'edit-saved'\},operationEpoch\)/);
-assert.match(read('src/year-end-assist.ts'),/if\(result.cleanupPending\)appStatus.success/);
+assert.match(read('src/year-end-assist.ts'),/appStatus.show\('success',result.cleanupPending\?/);
 console.log('PASS: actual toast states, explicit kinds, persistent error/partial, dismissal and timer isolation');
+// Protected outcomes, explicit retry identities and history limits.
+resetNotificationHistory();activateNotificationHistory(()=>true);
+const protectedStatus=createAppStatus(new StubElement(),'settings');const protectedEl=protectedStatus.element;
+const [protectedMessage,close]=protectedEl.children;
+const scope=protectedStatus.begin('payroll-income-publish','same-target');
+protectedStatus.show('partial','Synthetic partial',false,{scope});
+const other=protectedStatus.begin('pdf-zip');
+protectedStatus.show('loading','Synthetic loading',false,{scope:other});protectedStatus.info('Synthetic info');
+protectedStatus.show('success','Synthetic unrelated success',false,{scope:other});protectedStatus.warning('Synthetic warning');protectedStatus.clear();
+assert.equal(protectedMessage.textContent,'Synthetic partial');
+assert.deepEqual(notificationHistory().entries.map(x=>x.kind),['warning','success','partial']);
+protectedStatus.show('success','duplicate result',false,{scope:other});assert.equal(notificationHistory().entries.length,3);
+const second=protectedStatus.begin('export-button');protectedStatus.show('error','Synthetic error',false,{scope:second});
+assert.equal(protectedMessage.textContent,'Synthetic partial');close.click();assert.equal(protectedMessage.textContent,'Synthetic error');
+assert.equal(notificationHistory().entries.filter(x=>!x.seen).length,3);close.click();assert.equal(protectedEl.hidden,true);
+const fail=protectedStatus.begin('payroll-income-publish','same-target');protectedStatus.show('error','Synthetic failure',false,{scope:fail});
+const different=protectedStatus.begin('payroll-income-publish','different-target');protectedStatus.show('success','Other target',false,{scope:different});assert.equal(protectedEl.dataset.state,'error');
+const retry=protectedStatus.begin('payroll-income-publish','same-target');protectedStatus.show('success','Verified retry',false,{scope:retry});assert.equal(protectedEl.dataset.state,'success');assert.equal(notificationHistory().entries.filter(x=>x.kind==='error').length,2);
+const progress=protectedStatus.begin('export-button');protectedStatus.show('loading','start',false,{scope:progress});close.click();protectedStatus.show('loading','update',false,{scope:progress});assert.equal(protectedEl.hidden,true);
+const independent=protectedStatus.begin('export-button');protectedStatus.show('loading','next',false,{scope:independent});assert.equal(protectedEl.dataset.state,'loading');protectedStatus.clear(independent);
+assert.equal(protectedEl.hidden,true);
+protectedStatus.show('error','<img src=x onerror=alert(1)> synthetic-private-name'+'@'+'example.invalid');
+assert.ok(!items.get(NOTICE_HISTORY_KEY).includes('synthetic-private-name'));assert.ok(!items.get(NOTICE_HISTORY_KEY).includes('<img'));
+confirmNotificationHistory();assert.equal(notificationHistory().entries.filter(x=>!x.seen).length,0);assert.equal(protectedEl.dataset.state,'error');
+for(let i=0;i<210;i++)recordNotification('general','warning');
+assert.equal(notificationHistory().entries.length,200);assert.equal(notificationHistory().entries.every(x=>!x.seen),true);assert.ok(notificationHistory().omitted>=10);
+const oldScope=protectedStatus.begin('settings');local.set('payroll-global-vault-lock-epoch-v1',crypto.randomUUID());
+assert.equal(notificationHistory().entries.length,0);assert.equal(items.has(NOTICE_HISTORY_KEY),false);assert.equal(protectedEl.hidden,true);
+protectedStatus.show('error','late old result',false,{scope:oldScope});assert.equal(protectedEl.hidden,true);
+activateNotificationHistory(()=>true);protectedStatus.show('success','late old result',false,{scope:oldScope});assert.equal(notificationHistory().entries.length,0);
+recordNotification('settings','success');const savedHistory=items.get(NOTICE_HISTORY_KEY);
+const fresh=await import('../src/ui/notificationHistory.ts?reload=1');assert.equal(fresh.notificationHistory().entries.length,0);fresh.activateNotificationHistory(()=>true);assert.equal(fresh.notificationHistory().entries.length,1);
+items.set(NOTICE_HISTORY_KEY,savedHistory.replace('settings','arbitrary-private-string'));const corrupt=await import('../src/ui/notificationHistory.ts?reload=2');corrupt.activateNotificationHistory(()=>true);assert.equal(corrupt.notificationHistory().entries.length,0);
+items.set(NOTICE_HISTORY_KEY,savedHistory);local.set('payroll-global-vault-lock-epoch-v1',crypto.randomUUID());const switched=await import('../src/ui/notificationHistory.ts?reload=3');switched.activateNotificationHistory(()=>true);assert.equal(switched.notificationHistory().entries.length,0);
+const oldStorage=globalThis.sessionStorage;globalThis.sessionStorage={getItem(){throw Error('blocked')},setItem(){throw Error('blocked')},removeItem(){throw Error('blocked')}};
+const memory=await import('../src/ui/notificationHistory.ts?reload=4');memory.activateNotificationHistory(()=>true);memory.recordNotification('settings','error');assert.equal(memory.notificationHistory().entries.length,1);memory.resetNotificationHistory();assert.equal(memory.notificationHistory().entries.length,0);globalThis.sessionStorage=oldStorage;
+console.log('PASS: protected outcomes, independent and related retry, no raw storage, confirmation, 200 cap, reload, epoch change, invalid storage, memory fallback');
+// A restored BFCache page must reload the same-tab snapshot, not its stale memory.
+items.delete(NOTICE_HISTORY_KEY);const win=new EventTarget();win.opener=null;globalThis.window=win;
+const cached=await import('../src/ui/notificationHistory.ts?bfcache=1');cached.activateNotificationHistory(()=>true);cached.recordNotification('settings','error');
+win.dispatchEvent(new Event('pagehide'));assert.equal(cached.notificationHistory().entries.length,0);cached.recordNotification('settings','success');
+const nextPage=await import('../src/ui/notificationHistory.ts?bfcache=2');nextPage.activateNotificationHistory(()=>true);nextPage.recordNotification('edit-saved','success');
+const returned=new Event('pageshow');Object.defineProperty(returned,'persisted',{value:true});win.dispatchEvent(returned);assert.equal(cached.notificationHistory().entries.length,2);
+win.dispatchEvent(new Event('pagehide'));local.set('payroll-global-vault-lock-epoch-v1',crypto.randomUUID());win.dispatchEvent(returned);assert.equal(cached.notificationHistory().entries.length,0);assert.equal(items.has(NOTICE_HISTORY_KEY),false);
+const parent=await import('../src/ui/notificationHistory.ts?opener=1');parent.activateNotificationHistory(()=>true);parent.recordNotification('settings','error');win.opener={};const child=await import('../src/ui/notificationHistory.ts?opener=2');child.activateNotificationHistory(()=>true);assert.equal(child.notificationHistory().entries.length,0);delete globalThis.window;
+console.log('PASS: BFCache refresh, stale generation rejection, inherited opener storage discarded');

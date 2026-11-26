@@ -55,7 +55,7 @@ for(const [id,title] of [['settings-backup-title','本人のバックアップ']
 for(const [id,title] of [['settings-finance-income-title','Finance連携用の収入データ'],['settings-orphan-title','年度データの復旧'],['settings-legacy-title','旧データの整理・移行']]){
  assert.ok(html.includes(`<h3 id="${id}">${title}</h3>`));
 }
-assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,4,'employer management, shared backup, auth and maintenance groups');
+assert.equal((html.match(/class="settings-group(?: [^"]+)?"/g)??[]).length,5,'employer management, shared backup, auth, maintenance and notifications groups');
 assert.match(html,/<div class="card settings-details-grid">/);
 assert.equal((html.match(/class="settings-details-column/g)??[]).length,4);
 assert.match(css,/\.settings-page \.settings-details-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,1fr\)/);
@@ -114,7 +114,7 @@ assert.ok(account?.includes('id="remember-browser-register"'));
 assert.ok(!passphrase?.includes('id="remember-browser-register"'));
 console.log('PASS: personal/employee restore flow, browser auth layout, maintenance layout, safety confirmation');
 // All detail controls stay mounted, but no category is exposed before navigation initializes.
-for(const [key,panel] of [['auth','auth'],['employers','employers'],['backup','backup'],['maintenance','details']]){
+for(const [key,panel] of [['auth','auth'],['employers','employers'],['backup','backup'],['maintenance','details'],['notifications','notifications']]){
  assert.match(html,new RegExp(`data-settings-open="${key}" aria-controls="settings-${panel}-panel" disabled`));
  assert.match(html,new RegExp(`id="settings-${panel}-panel"[^>]* hidden>`));
 }

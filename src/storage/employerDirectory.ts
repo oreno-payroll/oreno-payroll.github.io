@@ -1,21 +1,22 @@
 /** Private employer labels belong only in the encrypted Payroll index and backup. */
-import {validEmployerId} from './employerIdentity';
+import {validEmployerId} from './employerIdentity.ts';
+import {validateEmployerForecast,type EmployerForecastPreferences} from './employerForecast.ts';
 export type EmployerRole='main'|'side';
-export interface EmployerEntry {id:string;name:string;role:EmployerRole;current:boolean}
+export interface EmployerEntry {id:string;name:string;role:EmployerRole;current:boolean;forecast?:EmployerForecastPreferences}
 const MAX_EMPLOYERS=200;
 /** No arbitrary fields, invisible control characters, or duplicate identities/defaults. */
 export function validateEmployerDirectory(value:unknown):EmployerEntry[] {
  if(!Array.isArray(value)||value.length>MAX_EMPLOYERS)throw new Error('勤務先一覧の形式または件数が不正です。');
  const ids=new Set<string>(),defaults=new Set<EmployerRole>();
  return Array.from(value,raw=>{
-  if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).length!==4||
+  if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).length!==(Object.hasOwn(raw,'forecast')?5:4)||
      !['id','name','role','current'].every(key=>Object.hasOwn(raw,key))||
      typeof raw.id!=='string'||!validEmployerId(raw.id)||ids.has(raw.id)||
      typeof raw.name!=='string'||raw.name!==raw.name.trim()||!raw.name||[...raw.name].length>100||/[\p{Cc}\p{Cf}]/u.test(raw.name)||
      (raw.role!=='main'&&raw.role!=='side')||typeof raw.current!=='boolean'||(raw.current&&defaults.has(raw.role)))
    throw new Error('勤務先一覧に不正または重複した情報があります。');
   ids.add(raw.id);if(raw.current)defaults.add(raw.role);
-  return {id:raw.id,name:raw.name,role:raw.role,current:raw.current};
+  return {id:raw.id,name:raw.name,role:raw.role,current:raw.current,...(Object.hasOwn(raw,'forecast')?{forecast:validateEmployerForecast(raw.forecast)}:{})};
  }).sort((a,b)=>a.id.localeCompare(b.id));
 }
 export function employerDirectorySignature(value:readonly EmployerEntry[]):string {
@@ -38,5 +39,6 @@ export function upsertEmployer(directory:readonly EmployerEntry[],entry:Employer
  const live=validateEmployerDirectory(directory);
  const existing=live.find(x=>x.id===entry.id);
  if(existing&&existing.role!==entry.role)throw new Error('登録済み勤務先の勤務区分は変更できません。');
- return validateEmployerDirectory([...live.filter(x=>x.id!==entry.id).map(x=>entry.current&&x.role===entry.role?{...x,current:false}:x),entry]);
+ const updated=existing?.forecast&&!Object.hasOwn(entry,'forecast')?{...entry,forecast:existing.forecast}:entry;
+ return validateEmployerDirectory([...live.filter(x=>x.id!==entry.id).map(x=>entry.current&&x.role===entry.role?{...x,current:false}:x),updated]);
 }

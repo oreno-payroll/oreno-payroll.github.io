@@ -1,10 +1,11 @@
 /** Tab-scoped *encrypted* read-only view cache. OneDrive remains the sole durable source.
  * No plaintext salary metadata, PDFs, or passphrases are written to browser storage.
  * A restored snapshot is display-only: every mutation still revalidates OneDrive. */
-import {encryptJson,decryptJson} from './crypto';
-import {clearNavigationNotice} from '../ui/navigationNotice';
-import {dismissOperationDialog} from '../ui/operationDialog';
-import {dismissRecordDiagnostic} from '../ui/recordDiagnostic';
+import {encryptJson,decryptJson} from './crypto.ts';
+import {resetNotificationHistory} from '../ui/notificationHistory.ts';
+import {clearNavigationNotice} from '../ui/navigationNotice.ts';
+import {dismissOperationDialog} from '../ui/operationDialog.ts';
+import {dismissRecordDiagnostic} from '../ui/recordDiagnostic.ts';
 const CACHE='payroll-navigation-snapshot-v1';
 const PEOPLE_CACHE='payroll-yearend-navigation-snapshot-v1';
 export const NAVIGATION_MUTATION_KEY='payroll-navigation-write-epoch-v1';
@@ -41,6 +42,7 @@ export function invalidateAuthSession():void {
  dismissOperationDialog();
  dismissRecordDiagnostic();
  clearNavigationNotice();
+ resetNotificationHistory();
  invalidateNavigationSnapshot();
  try{storage()?.setItem(AUTH_EPOCH,crypto.randomUUID());}catch{}
 }

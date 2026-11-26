@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import {stripTypeScriptTypes} from 'node:module';
+import {defaultEmployerForecast,validateEmployerForecast} from '../src/storage/employerForecast.ts';
 import {currentEmployer,employerChoices,legacyEmployers,renderEmployerSelect} from '../src/ui/employerSelection.ts';
 const A='emp_'+'a'.repeat(32),B='emp_'+'b'.repeat(32),C='emp_'+'c'.repeat(32),D='emp_'+'d'.repeat(32);
 const directory=[{id:A,name:'架空勤務先A',role:'main',current:true},{id:B,name:'架空勤務先B',role:'main',current:false},{id:C,name:'架空勤務先C',role:'side',current:true}];
@@ -28,5 +31,22 @@ assert.match(src('src/upload.ts'),/entry\.employerChosen=true/);assert.match(src
 assert.match(src('src/cloud/auth.ts'),/if\(!allowPrompt\)throw new MicrosoftSignInRequiredError\(\);\s*return beginUnlock\(\);/);
 assert.match(src('src/edit.ts'),/refreshEmployerSelect\(record\?\.employerId\)/);
 assert.match(src('src/backup.ts'),/vault\.writeEmployerDirectory\(expected,next\)/);
-assert.match(src('src/backup.ts'),/employerDirectoryRole\.addEventListener\('change',updateEmployerButtons\)/);
+const backup=src('src/backup.ts'),markup=src('public/backup/index.html');
+assert.match(backup,/employerDirectoryRole\.addEventListener\('change',\(\)=>\{\s*fillEmployerForecast\(defaultEmployerForecast/);
+assert.match(backup,/employerForecastSettings\.addEventListener\('change',updateEmployerButtons\)/);
+assert.match(backup,/next=upsertEmployer\(expected,\{[^\n]+forecast/);
+assert.equal((markup.match(/name="employer-salary-method"/g)??[]).length,4);
+assert.equal((markup.match(/name="employer-bonus-month"/g)??[]).length,12);
+const control=(value='')=>({value,checked:false,disabled:false,hidden:false});
+const methods=['latest','median','average','none'].map(control),months=Array.from({length:12},(_,i)=>control(String(i+1)));
+const ctx={employers:directory,legacyDirectory:[],busy:false,defaultEmployerForecast,validateEmployerForecast,employerSalaryMethods:methods,employerBonusMonths:months,employerBonusEnabled:control(),employerBonusSchedule:control(),employerForecastSettings:control(),employerDirectoryLoad:control(),employerDirectoryAdd:control(),employerDirectoryCancel:control(),employerDirectoryTarget:control(A),employerDirectoryName:control(),employerDirectoryRole:control(),employerDirectoryCurrent:control(),employerDirectorySave:control()};
+const section=(a,b)=>backup.slice(backup.indexOf(a),backup.indexOf(b,backup.indexOf(a)));
+runInNewContext(stripTypeScriptTypes(section('function fillEmployerForecast(','const employerDirectorySave=')+section('function updateEmployerButtons(','function renderEmployerDirectory('),{mode:'strip'})+';globalThis.fill=fillEmployerDraft;globalThis.update=updateEmployerButtons;globalThis.read=draftEmployerForecast;',ctx);
+ctx.fill();assert.equal(ctx.read().salaryMethod,'median');assert.deepEqual(ctx.read().bonusMonths,[2,8]);assert.equal(ctx.employerBonusSchedule.hidden,false);
+ctx.employerBonusEnabled.checked=false;ctx.update();assert.equal(ctx.employerBonusSchedule.hidden,true);assert.equal(ctx.employerBonusSchedule.disabled,true);assert.deepEqual(ctx.read().bonusMonths,[]);assert.equal(ctx.employerDirectorySave.disabled,false);
+ctx.employerBonusEnabled.checked=true;for(const input of months)input.checked=false;ctx.update();assert.equal(ctx.employerDirectorySave.disabled,true);assert.throws(()=>ctx.read(),/支給予定月/);months[11].checked=true;ctx.update();assert.equal(ctx.employerDirectorySave.disabled,false);assert.deepEqual(ctx.read().bonusMonths,[12]);
+ctx.busy=true;ctx.update();assert.equal(ctx.employerForecastSettings.disabled,true);assert.equal(ctx.employerDirectorySave.disabled,true);ctx.busy=false;
+ctx.employers=directory.map(x=>x.id===C?{...x,forecast:{salaryMethod:'latest',bonusMonths:[6,12]}}:x);ctx.employerDirectoryTarget.value=C;ctx.fill();assert.equal(ctx.read().salaryMethod,'latest');assert.deepEqual(ctx.read().bonusMonths,[6,12]);assert.equal(ctx.employerDirectoryRole.disabled,true);
+ctx.employerDirectoryTarget.value='';ctx.fill();assert.equal(ctx.read().salaryMethod,'median');assert.deepEqual(ctx.read().bonusMonths,[2,8]);
+
 console.log('PASS: employer names, role-filtered defaults, legacy identities, safe DOM options and fresh-directory guards');

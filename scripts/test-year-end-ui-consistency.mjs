@@ -12,8 +12,8 @@ const normal = read('public/upload/index.html');
 
 // Activity is transient; errors remain visible until a later action.
 assert.match(html, /id="yea-status"[^>]*hidden/);
-assert.match(ui, /function showBusy\(message:string\)/);
-assert.match(ui, /if\(!failed&&appStatus\.element\.dataset\.state==='loading'\)/);
+assert.match(ui, /function showBusy\(message:string,scope\?/);
+assert.match(ui, /if\(!failed&&authorized\(\)\)\{if\(_showSuccess\)appStatus.show\('success'/);
 assert.doesNotMatch(ui, /が完了しました。/);
 assert.match(read('public/styles/style.css'), /\.app-status\[data-state=\"loading\"\]::before/);
 assert.match(html, /class="app-status yea-status"/);

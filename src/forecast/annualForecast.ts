@@ -183,17 +183,22 @@ export function estimateMainBonus(month:string,samples:ForecastSource[]):MonthEs
  return estimateBonus('main',month,samples);
 }
 
-/** Calculate bonus schedules in the selected period. For a registered current employer,
- * compare payment months (including unassigned legacy actuals), never fill earlier months.
- * Role-only legacy records retain the original historical bonus behavior and annual target-month check.
+/** Match actuals using the same month axis as the selected period's totals.
+ * Current-employer schedules never fill earlier months; legacy behavior is retained.
  */
 export function pendingForecastBonusMonths(records:readonly ForecastSource[],job:ForecastJob,scope:{current?:ForecastEmployerSetting;inactive:boolean},months:readonly number[],start:number,end:number,todayIso:string,applicable:boolean,includeBonus:boolean,fiscal:boolean):string[]{
  if(!applicable||!includeBonus||scope.inactive||!months.length)return [];
  const registered=records.filter(r=>r.form.job===job&&r.form.kind==='bonus'&&(!scope.current||r.employerId===scope.current.id||r.employerId===undefined));
  const paid=new Set(registered.flatMap(({form})=>{
   const payment=form.paymentDate?.slice(0,7);
-  // Keep the exact legacy annual target-month rule when no directory is registered.
-  return fiscal&&!scope.current?[targetMonthOf(form)]:[payment];
+  if(!fiscal)return [payment];
+  const target=targetMonthOf(form),index=monthIndex(target??undefined);
+  if(index===null||index<start||index>end)return [];
+  // In fiscal view an actual is counted by target month. Prefer a matching
+  // scheduled target; only fall back to the scheduled payment month if the
+  // target is not scheduled, and never let one actual cancel two months.
+  if(!scope.current||months.includes(index%12+1))return [target];
+  return [payment];
  }));
  const candidates:string[]=[];
  for(let i=start;i<=end;i++){

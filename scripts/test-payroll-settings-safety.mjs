@@ -1,6 +1,7 @@
 /** Synthetic-only settings security UX regression: no account, tokens, or Graph. */
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {stripTypeScriptTypes} from "node:module";
 import {readFileSync} from 'node:fs';
 import {operationFeedback} from '../src/ui/operationOutcome.ts';
 import {microsoftDiagnostic,microsoftSilentTemporaryError,MicrosoftSignInRequiredError} from '../src/cloud/msalPolicy.ts';
@@ -110,3 +111,25 @@ assert.equal(testTransition({status:'error',message:'アクセス権限があり
 assert.equal(testTransition({status:'partial',message:''})[0][0],'partial');
 assert.equal(testTransition(null)[0][0],'error');
 console.log('PASS: actual transition uses the typed result, not the message body');
+
+// Real settings retry target selection. A destination or selected record change
+// must not silently resolve a different operation, even with the same code.
+{
+ const targetSource=backup.slice(backup.indexOf('function settingsRetryTarget('),backup.indexOf('function reportStatusTransition(){'));
+ const file={},otherFile={},newDraft={};
+ const ctx={employerDraft:{id:'synthetic-a',noticeTarget:newDraft},bulkCandidates:()=>[{id:2},{id:1},{id:3}],bulkTarget:{value:'synthetic-a'},bulkSelected:new Set([2,1]),filePicker:{files:[file]},yearEndFile:{files:[otherFile]}};
+ vm.runInNewContext(stripTypeScriptTypes(targetSource,{mode:'strip'})+'\nglobalThis.target=settingsRetryTarget;',ctx);
+ const target=ctx.target;
+ assert.equal(target('employer-directory-save'),'synthetic-a');
+ ctx.employerDraft={id:'synthetic-b',noticeTarget:{}};assert.notEqual(target('employer-directory-save'),'synthetic-a');
+ ctx.employerDraft={id:'',noticeTarget:newDraft};assert.equal(target('employer-directory-save'),newDraft);
+ ctx.employerDraft={id:'',noticeTarget:{}};assert.notEqual(target('employer-directory-save'),newDraft);
+ const selection=target('employer-bulk-save');ctx.bulkSelected=new Set([1,2]);assert.equal(target('employer-bulk-save'),selection);
+ ctx.bulkSelected=new Set([1,3]);assert.notEqual(target('employer-bulk-save'),selection);
+ ctx.bulkSelected=new Set([1,2]);ctx.bulkTarget.value='synthetic-b';assert.notEqual(target('employer-bulk-save'),selection);
+ ctx.bulkSelected.clear();assert.equal(target('employer-bulk-save'),undefined);
+ assert.equal(target('verify-button'),file);ctx.filePicker.files=[otherFile];assert.notEqual(target('verify-button'),file);
+ assert.equal(target('ye-restore-verify'),otherFile);assert.equal(target('employer-directory-load'),'whole-dataset');
+ assert.equal(target('restore-button'),undefined);assert.equal(target('cloud-cleanup-delete'),undefined);
+}
+console.log('PASS: settings retry identities distinguish employers, new drafts, bulk record sets and file selections');

@@ -46,7 +46,7 @@ check('閲覧・一件ダウンロード・ZIPが同じ共通命名ルールを�
 });
 check('診断を生データとして確認でき、共有用マスクは任意の別操作', () => {
   assert.match(read('src/upload.ts'),/redactCoordinateDiagnostic/);
-  assert.match(read('public/upload/index.html'),/id="diagnostic-redact"/);
+  assert.match(read('public/upload/index.html'),/id="diagnostic-mode-shared" checked/);
   assert.match(read('src/pdf/diagnostic.ts'),/createCoordinateDiagnostic/);
 });
 check('低画面・小画面のスクロール対策が存在', () => {

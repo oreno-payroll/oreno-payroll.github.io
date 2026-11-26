@@ -142,7 +142,6 @@ html[data-theme="dark"] .segmented-choice span { background:#202e42; color:var(-
 html[data-theme="dark"] .segmented-choice label:hover span { background:#2a3e5e; border-color:#6485bd; }
 html[data-theme="dark"] .segmented-choice input:checked + span { background:var(--color-primary-soft); color:var(--color-primary); border-color:var(--color-primary); }
 html[data-theme="dark"] .analysis-issues,
-html[data-theme="dark"] .diagnostic-dialog__warning { background:var(--state-warning-bg); border-color:var(--state-warning-border); color:var(--state-warning-text); }
 html[data-theme="dark"] .analysis-issues__head,
 html[data-theme="dark"] .analysis-issues__head span,
 html[data-theme="dark"] .analysis-issues__item--warning,
@@ -158,9 +157,7 @@ html[data-theme="dark"] .review-panel .field--auto .field__label::after { color:
 html[data-theme="dark"] .review-panel .field--manual .field__label::after { color:var(--color-muted); }
 html[data-theme="dark"] .diagnostic-dialog,
 html[data-theme="dark"] .yea-create-dialog { background:var(--color-surface); color:var(--color-text); }
-html[data-theme="dark"] .diagnostic-dialog__textarea,
-html[data-theme="dark"] .diagnostic-dialog__details pre { background:#101d2e; color:var(--color-text); border-color:var(--color-border-strong); }
-html[data-theme="dark"] .diagnostic-dialog__close:hover { background:#2d3c50; }
+html[data-theme="dark"] .diagnostic-dialog__textarea { background:#101d2e; color:var(--color-text); border-color:var(--color-border-strong); }
 
 /* Settings, backups and encryption/authentication gate. */
 html[data-theme="dark"] .vault-step,

@@ -107,6 +107,7 @@
               <div class="selected-file__name-wrap"><strong id="selected-name"></strong><span id="selected-meta"></span></div>
               <div class="selected-file__actions">
                 <button class="btn btn--soft btn--small" id="open-pdf" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>原本を見る</button>
+                <button class="btn btn--small btn--square btn--ghost" id="diagnostic-button" type="button" title="詳細診断" aria-label="詳細診断"><svg class="icon" aria-hidden="true"><use href="#icon-info"></use></svg></button>
               </div>
             </div>
             <div class="read-result" id="read-result" role="status" aria-live="polite"></div>
@@ -116,13 +117,6 @@
               <ul id="analysis-issues-list"></ul>
               <p>検出されなかった項目は空欄のままです。原本で確認して、必要に応じて入力してください。</p>
             </section>
-
-            <details class="upload-troubleshooting">
-              <summary>詳細・トラブルシューティング</summary>
-              <p>PDF原本と読み取りデータは端末内で暗号化し、OneDriveへ保存します。</p>
-              <p>PDFの文字認識や座標が合わない場合の診断機能です。個人情報を含む可能性があるため、共有にはマスク済みの診断結果を使用してください。</p>
-              <button class="btn btn--secondary btn--small" type="button" id="diagnostic-button">座標診断を開く</button>
-            </details>
 
             <form id="review-form" novalidate>
               <section class="form-section">
@@ -200,10 +194,6 @@
             <span>未取得の金額を0円として登録</span>
           </label>
           <div id="zero-approval-count" class="zero-approval__count" aria-live="polite"></div>
-          <details class="zero-approval__details" id="zero-approval-details">
-            <summary>対象項目</summary>
-            <ul id="zero-approval-list"></ul>
-          </details>
         </div>
         <div class="save-bar__status">
           <strong id="save-status" role="status" aria-live="polite" hidden></strong>
@@ -234,23 +224,24 @@
       </div>
     </main>
   </div>
-  <dialog id="diagnostic-dialog" class="diagnostic-dialog" aria-labelledby="diagnostic-title">
+  <dialog id="diagnostic-dialog" class="operation-dialog diagnostic-dialog" aria-labelledby="diagnostic-title" aria-describedby="diagnostic-note">
     <div class="diagnostic-dialog__header">
-      <div>
-        <h2 id="diagnostic-title">文字・座標の診断</h2>
-      </div>
-      <button id="diagnostic-close" class="diagnostic-dialog__close" type="button" aria-label="診断画面を閉じる">×</button>
+      <h2 id="diagnostic-title">PDFの詳細診断</h2>
+      <button id="diagnostic-close" class="btn btn--ghost btn--small btn--square diagnostic-dialog__close" type="button" aria-label="閉じる">×</button>
     </div>
-    <p class="diagnostic-dialog__description">初期状態は共有用の全マスク表示です。原文の表示とコピーは、それぞれ別の確認操作が必要です。PDF原本はOneDriveへ暗号化して保存します。診断テキストを外部の解析サービスへ送信しません。</p>
-    <div class="diagnostic-dialog__warning" role="note"><strong>この欄には氏名・会社名・社員番号・口座情報・実際の金額が含まれる可能性があります。</strong> 「共有用をコピー」は必ず全文を再マスクします。原文のコピーには明示的な確認が必要です。</div>
+    <p id="diagnostic-note" class="diagnostic-dialog__description">PDFから読み取った文字と位置を確認できます。読み取りの不具合を調べるための情報です。</p>
+    <fieldset class="diagnostic-dialog__modes" id="diagnostic-modes" disabled>
+      <legend>表示する内容</legend>
+      <div class="segmented-choice segmented-choice--small">
+        <label><input type="radio" name="diagnostic-mode" id="diagnostic-mode-shared" checked><span>共有用（文字を伏せる）</span></label>
+        <label><input type="radio" name="diagnostic-mode" id="diagnostic-mode-original"><span>原文（個人情報を含む）</span></label>
+      </div>
+    </fieldset>
+    <p id="diagnostic-mode-note" class="diagnostic-dialog__description">文字をすべて伏せ、位置だけを残します。</p>
+    <textarea id="diagnostic-shared" class="diagnostic-dialog__textarea" rows="12" spellcheck="false" readonly aria-label="診断データ" placeholder="診断結果を作成しています…"></textarea>
     <p id="diagnostic-state" class="diagnostic-dialog__state" role="status" aria-live="polite"></p>
-    <label for="diagnostic-shared" class="diagnostic-dialog__label">共有用の文字・座標（最初から全文マスク済み）</label>
-    <textarea id="diagnostic-shared" class="diagnostic-dialog__textarea" rows="18" spellcheck="false" placeholder="診断結果を作成しています…"></textarea>
-    <div class="diagnostic-dialog__actions">
-      <button id="diagnostic-redact" class="btn btn--secondary" type="button" disabled>共有用に戻す</button>
-      <button id="diagnostic-copy" class="btn btn--primary" type="button" disabled>共有用をコピー（全マスク）</button>
-      <button id="diagnostic-view-original" class="btn btn--secondary" type="button" disabled>原文を表示（確認）</button>
-      <button id="diagnostic-copy-original" class="btn btn--secondary" type="button" disabled>原文をコピー（確認）</button>
+    <div class="operation-dialog__actions diagnostic-dialog__actions">
+      <button id="diagnostic-copy" class="btn btn--primary" type="button" disabled>共有用データをコピー</button>
     </div>
   </dialog>
   <div class="app-status" id="toast" role="status" aria-live="polite" hidden></div>

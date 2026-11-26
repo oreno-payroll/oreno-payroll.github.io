@@ -840,8 +840,8 @@ export class PayrollVault {
   }
   return [...byId.values()];
  }
- private async commit(year:string,changed:AnnualDocument,checkRemote?:(remote:AnnualDocument)=>void,checkIndex?:(index:Index)=>void):Promise<void> {
-  const existingYearChecked=await this.prepareYearForWrite(year);
+ private async commit(year:string,changed:AnnualDocument,checkRemote?:(remote:AnnualDocument)=>void,checkIndex?:(index:Index)=>void,knownExistingYear=false):Promise<void> {
+  const existingYearChecked=knownExistingYear&&this.index.years.includes(year)||await this.prepareYearForWrite(year);
   const base=copy(this.shards.get(year)??emptyDoc());
   for(let retry=0;retry<5;retry++) {
    // The existing-year preparation read is this attempt's fresh index guard.
@@ -854,6 +854,7 @@ export class PayrollVault {
    // device may have started rotation while we were awaiting either operation.
    const encrypted=await encryptJson('year',merged,this.unlocked(),this.salt);
    const latestIndex=await this.readIndex();
+   if(knownExistingYear&&!latestIndex.index.years.includes(year))throw new Error('保存対象の年度が索引から変更されました。再読み込みしてください。');
    checkIndex?.(latestIndex.index);
    try {
     await this.graph.write(this.storagePath('statements'),`${year}.enc`,encrypted,file,MAX_YEAR);
@@ -1416,21 +1417,27 @@ export class PayrollVault {
   return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('');
  }
  async original(record:CloudRecord):Promise<Blob> {return (await this.readVerifiedOriginal(record)).data;}
- async save(record:SavedPayrollRecord|SavedPayrollSummary,progress?:(stage:string)=>void,expectedMatch?:(current:CloudRecord)=>boolean,checkConflicts?:(records:readonly CloudRecord[],year:string)=>void,expectedDirectory?:string):Promise<void> {
+ async save(record:SavedPayrollRecord|SavedPayrollSummary,progress?:(stage:string)=>void,expectedMatch?:(current:CloudRecord)=>boolean,checkConflicts?:(records:readonly CloudRecord[],year:string)=>void,expectedDirectory?:string,editPreflight?:(current:readonly CloudRecord[])=>void):Promise<void> {
   const state:PayrollWriteState={attempted:false,uncertain:false,completed:false,lock:'none'};
   return this.graph.withWriteLock(async()=>{
   this.unlocked();
-  const checkDirectory=(index:Index)=>{
-   if(expectedDirectory!==undefined&&employerDirectorySignature(index.employers??[])!==expectedDirectory)throw new Error('勤務先一覧が更新されました。再度確認してください。');
-  };
   const year=shardYear(record);
-  await this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
-  checkDirectory(this.index);
+  const current=await this.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
   if(!record.fileHash||!/^[a-f0-9]{64}$/.test(record.fileHash))throw new Error('PDF原本のSHA-256が必要です。');
-  const originalPrior=this.records().find(r=>r.id===record.id);
+  const originalPrior=current.find(r=>r.id===record.id);
   const metadataOnly=!('pdf' in record);
   if(metadataOnly&&(!originalPrior||!expectedMatch||!expectedMatch(originalPrior)))
-   throw new Error('明細が変更・削除されました。最新の明細を開き直してください。');
+   throw new Error('別端末で明細が変更・削除されました。最新の明細を開き直してください。');
+  const assignmentChanged=originalPrior&&(record.employerId!==originalPrior.employerId||record.form.job!==originalPrior.form.job);
+  const checkDirectory=(index:Index)=>{
+   if(expectedDirectory!==undefined&&(!editPreflight||assignmentChanged)&&employerDirectorySignature(index.employers??[])!==expectedDirectory)throw new Error('勤務先一覧が更新されました。再度確認してください。');
+   if(editPreflight&&assignmentChanged&&record.employerId!==undefined&&!(index.employers??[]).some(e=>e.id===record.employerId&&e.role===record.form.job))throw new Error('勤務区分に対応する勤務先を選択してください。');
+  };
+  checkDirectory(this.index);
+  if(editPreflight){
+   if(!metadataOnly||!originalPrior)throw new Error('編集元の明細を確認できません。');
+   editPreflight(current);
+  }
   const month=originalPrior?.originalMonth??record.form.targetMonth;
   const id=originalPrior?.originalId??crypto.randomUUID();
   let next:CloudRecord;
@@ -1450,7 +1457,7 @@ export class PayrollVault {
     throw new Error('PDF原本の保存情報が変化しました。最新の明細を開き直してください。');
    next={...previous,fileName:record.fileName,form:copy(record.form),
     warningsAcknowledged:record.warningsAcknowledged,reviewedIssues:record.reviewedIssues,
-    reviewedAt:record.reviewedAt,revision:record.revision};
+    reviewedAt:record.reviewedAt,revision:editPreflight?(previous.revision??0)+1:record.revision};
    if(record.employerId===undefined)delete next.employerId;else next.employerId=record.employerId;
    if(record.zeroResolution===undefined)delete next.zeroResolution;else next.zeroResolution=copy(record.zeroResolution);
    validateDoc({format:'payroll-annual-v1',records:[next],deleted:[]});
@@ -1474,7 +1481,7 @@ export class PayrollVault {
    if(originalPrior&&shardYear(originalPrior)===year){
     if(!current||!expectedMatch(current))throw new Error('保存直前に明細が更新されました。再読み込みしてください。');
    }else if(current)throw new Error('年度移動先に同じ明細IDが存在します。保存を中断しました。');
-  }:undefined,checkDirectory);
+  }:undefined,checkDirectory,Boolean(editPreflight&&originalPrior&&shardYear(originalPrior)===year));
   // 対象年変更時は移動元を削除履歴へ。原本は回復のため削除しない。
   for(const [other,base] of [...this.shards])if(other!==year&&base.records.some(r=>r.id===record.id)) {
    const changed=copy(base);changed.records=changed.records.filter(r=>r.id!==record.id);changed.deleted.push(record.id);
@@ -1497,7 +1504,7 @@ export class PayrollVault {
   }
   state.payrollSaved=true;
   progress?.('Finance連携用の収入データを同期しています…');
-  try{await this.syncIncomeUnderLock(new Set([incomeYear(record),...(originalPrior?[incomeYear(originalPrior)]:[])]));}
+  try{await this.syncIncomeUnderLock(new Set([incomeYear(record),...(originalPrior?[incomeYear(originalPrior)]:[])]),undefined,Boolean(editPreflight));}
   catch(error){throw new PayrollPartialSuccessError('income-sync',`明細ID ${record.id} の変更は保存済みですが、Finance連携用収入ファイルの同期に失敗しました。設定画面で連携データを再生成してください。原因: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
   progress?.('クラウド保存と検証が完了しました');
   },state);
@@ -1688,7 +1695,7 @@ export class PayrollVault {
  async syncIncome(changedYears?:ReadonlySet<string>,state?:PayrollWriteState):Promise<void> {
   return this.graph.withWriteLock(()=>this.syncIncomeUnderLock(changedYears),state,Boolean(state));
  }
- private async syncIncomeUnderLock(changedYears?:ReadonlySet<string>,checkSource?:()=>void):Promise<void> {
+ private async syncIncomeUnderLock(changedYears?:ReadonlySet<string>,checkSource?:()=>void,reuseFirstSource=false):Promise<void> {
   const perf=beginPerfOperation('finance-income-sync');
   let success=false;
   const requested=changedYears?new Set(changedYears):undefined;
@@ -1700,7 +1707,10 @@ export class PayrollVault {
   };
   try {
    for(let attempt=0;attempt<8;attempt++){
-    await perf.measure('source-refresh',()=>this.refresh(options));
+    // A metadata edit already refreshed all years under this same lock and
+    // installed authenticated annual readbacks. It is a candidate only; the
+    // mandatory prewrite refresh below still checks the entire live source.
+    if(!reuseFirstSource||attempt>0)await perf.measure('source-refresh',()=>this.refresh(options));
     checkSource?.();
     const years=yearsForSource();
     if(years.some(year=>!/^(19|20|21)\d{2}$/.test(year)))throw new Error('収入連携の支給年が不正です。');
@@ -1737,7 +1747,11 @@ export class PayrollVault {
     if(collision)continue;
     // Register once, then revalidate the authoritative source. This also
     // catches a source change during the index write itself.
-    await perf.measure('income-register',()=>this.registerYears(years,'incomeYears'));
+    // The prewrite refresh checked the live index. For an ordinary edit,
+    // registered years need no intermediate no-op read; the final refresh
+    // still verifies registration and retries if the source changed.
+    if(!reuseFirstSource||!years.every(year=>this.index.incomeYears.includes(year)))
+     await perf.measure('income-register',()=>this.registerYears(years,'incomeYears'));
     await perf.measure('income-postwrite-refresh',()=>this.refresh(options));
     checkSource?.();
     if(!years.every(year=>this.index.incomeYears.includes(year))||!same(yearsForSource(),years)||!same(documents(years),expected))continue;

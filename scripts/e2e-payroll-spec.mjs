@@ -439,43 +439,31 @@ test('employer selection uses names and requires an available directory',async({
 });
 
 // Actual nested modal over the PDF diagnostic: cancellation must never reveal the raw text.
-test('PDF diagnostic requires explicit shared-dialog consent to reveal original text',async({page})=>{
+test('PDF diagnostic uses one dialog and copies only the selected disclosure mode',async({page})=>{
+ await page.addInitScript(()=>{window.syntheticCopies=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(text){window.syntheticCopies.push(text);}}});});
  await page.goto('/upload/index.html');
- await (await readyUploadInput(page)).setInputFiles({
-  name:'synthetic-dialog.pdf',mimeType:'application/pdf',buffer:syntheticOnePagePdf(),
- });
+ await (await readyUploadInput(page)).setInputFiles({name:'synthetic-dialog.pdf',mimeType:'application/pdf',buffer:syntheticOnePagePdf()});
  await expect(page.locator('#review-content')).toBeVisible();
- await page.locator('.upload-troubleshooting > summary').click();
- await page.locator('#diagnostic-button').click();
- const outer=page.locator('#diagnostic-dialog');
- const original=outer.locator('#diagnostic-view-original');
- const shared=outer.locator('#diagnostic-shared');
- await expect(original).toBeEnabled();
- await expect(shared).toHaveValue(/\[マスク済み\]/);
- await original.click();
- const confirm=page.getByRole('dialog',{name:'PDF診断の原文を表示',exact:true});
- await expect(confirm).toBeVisible();
- await expect(confirm.getByRole('button',{name:'キャンセル',exact:true})).toBeFocused();
- await page.keyboard.press('Escape');
- await expect(confirm).toHaveCount(0);
- await expect(outer).toBeVisible();
- await expect(shared).not.toHaveValue(/"synthetic"/);
- await original.click();
- await confirm.getByRole('button',{name:'キャンセル',exact:true}).click();
- await expect(shared).not.toHaveValue(/"synthetic"/);
- await original.click();
- await confirm.getByRole('button',{name:'原文を表示',exact:true}).click();
- await expect(shared).toHaveValue(/"synthetic"/);
- await outer.locator('#diagnostic-redact').click();
- await expect(shared).not.toHaveValue(/"synthetic"/);
- await outer.locator('#diagnostic-copy-original').click();
- const copy=page.getByRole('dialog',{name:'PDF診断の原文をコピー',exact:true});
- await expect(copy).toBeVisible();
- await copy.getByRole('button',{name:'キャンセル',exact:true}).click();
- await expect(copy).toHaveCount(0);
- await outer.locator('#diagnostic-close').click();
- await expect(outer).toBeHidden();
- await expect(shared).toHaveValue('');
+ const trigger=page.locator('#diagnostic-button');
+ await expect(trigger).toBeVisible();
+ const current=page.locator('.file-list__current');
+ for(const theme of ['light','dark']){
+  await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+  expect(await current.evaluate(el=>{const s=getComputedStyle(el);return [s.backgroundColor,s.borderTopWidth,s.paddingTop];})).toEqual(['rgba(0, 0, 0, 0)','0px','0px']);
+  await trigger.click();
+  const outer=page.locator('#diagnostic-dialog'),shared=outer.locator('#diagnostic-shared'),copy=outer.locator('#diagnostic-copy');
+  await expect(copy).toBeEnabled();await expect(shared).toHaveValue(/\[マスク済み\]/);await expect(shared).not.toHaveValue(/"synthetic"/);
+  await expect(outer.locator('#diagnostic-mode-shared')).toBeChecked();await expect(page.locator('dialog[open]')).toHaveCount(1);
+  await copy.click();expect(await page.evaluate(()=>window.syntheticCopies.at(-1))).not.toContain('"synthetic"');
+  await outer.getByText('原文（個人情報を含む）',{exact:true}).click();await expect(shared).toHaveValue(/"synthetic"/);
+  await expect(copy).toHaveText('個人情報を含む原文をコピー');await expect(page.locator('dialog[open]')).toHaveCount(1);
+  await copy.click();expect(await page.evaluate(()=>window.syntheticCopies.at(-1))).toContain('"synthetic"');
+  await outer.getByText('共有用（文字を伏せる）',{exact:true}).click();await expect(shared).not.toHaveValue(/"synthetic"/);
+  await copy.click();expect(await page.evaluate(()=>window.syntheticCopies.at(-1))).not.toContain('"synthetic"');
+  await outer.locator('#diagnostic-close').click();await expect(outer).toBeHidden();await expect(shared).toHaveValue('');
+  await trigger.click();await expect(copy).toBeEnabled();await expect(shared).not.toHaveValue(/"synthetic"/);
+  await page.keyboard.press('Escape');await expect(outer).toBeHidden();await expect(shared).toHaveValue('');
+ }
 });
 
 // No account or real data. The actual settings migration action is cancelled before any read/write.
@@ -701,6 +689,8 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
    expect(Math.abs(upload.width)).toBeLessThan(1);expect(upload.overflow).toBe(0);
    await expect(page.locator('.file-panel')).toBeHidden();await expect(page.locator('.review-panel')).toBeHidden();
    await page.mouse.move(0,0);
+   const uploadHeading=await page.locator('.upload-heading h1').evaluate(e=>{const c=getComputedStyle(e),r=e.getBoundingClientRect();return [c.fontSize,c.fontWeight,c.lineHeight,r.left,r.top];});
+   const uploadFile=await page.locator('.selected-file').evaluate(e=>{const c=getComputedStyle(e),n=getComputedStyle(e.querySelector('strong'));return [c.backgroundColor,c.borderColor,c.borderRadius,n.fontSize,n.fontWeight];});
    await fixture('edit/index.html');
    const edit=await page.evaluate(theme=>{
     document.documentElement.dataset.theme=theme;
@@ -712,12 +702,15 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
      originalStyle:appearance('#original-pdf'),downloadStyle:appearance('#download-pdf'),removeStyle:appearance('#edit-delete'),
      icon:[icon.width,icon.height],overflow:document.documentElement.scrollWidth-innerWidth};
    },theme);
+   const editHeading=await page.locator('.upload-heading h1').evaluate(e=>{const c=getComputedStyle(e),r=e.getBoundingClientRect();return [c.fontSize,c.fontWeight,c.lineHeight,r.left,r.top];});
+   const editFile=await page.locator('.selected-file').evaluate(e=>{const c=getComputedStyle(e),n=getComputedStyle(e.querySelector('strong'));return [c.backgroundColor,c.borderColor,c.borderRadius,n.fontSize,n.fontWeight];});
+   expect(editHeading).toEqual(uploadHeading);expect(editFile).toEqual(uploadFile);
    expect(edit.download).toBe(edit.original);expect(edit.download).toBe(edit.remove);
-   expect(edit.width).toBe(edit.download);expect(edit.icon).toEqual([19,19]);expect(edit.overflow).toBe(0);
+   expect(edit.width).toBe(edit.download);expect(edit.icon).toEqual([14,14]);expect(edit.overflow).toBe(0);
    expect(edit.downloadStyle).toEqual(edit.originalStyle);
    expect(edit.removeStyle.slice(1,4)).toEqual(edit.originalStyle.slice(1,4));
    expect(edit.removeStyle[0]).not.toBe(edit.originalStyle[0]);
-   await page.addStyleTag({content:'.saved-file__actions .btn { transition: none !important; }'});
+   await page.addStyleTag({content:'.selected-file__actions .btn { transition: none !important; }'});
    const hoveredStyle=id=>page.locator(id).evaluate(el=>{const c=getComputedStyle(el);return [c.borderColor,c.backgroundColor,c.color];});
    await page.locator('#original-pdf').hover();const originalHover=await hoveredStyle('#original-pdf');
    await page.locator('#download-pdf').hover();expect(await hoveredStyle('#download-pdf')).toEqual(originalHover);
@@ -738,25 +731,40 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
   const settings=await page.evaluate(theme=>{
    document.documentElement.dataset.theme=theme;
    document.querySelector('#settings-employers-panel').hidden=false;
-   document.querySelector('#employer-bulk-panel').hidden=false;
-   const a=document.querySelector('.employer-settings'),b=document.querySelector('#employer-bulk-panel');
-   return {gap:b.getBoundingClientRect().top-a.getBoundingClientRect().bottom,radius:getComputedStyle(a).borderRadius,
-    menuRadius:getComputedStyle(document.querySelector('#settings-menu')).borderRadius,
-    overflow:document.documentElement.scrollWidth-innerWidth};
+   const a=document.querySelector('.employer-settings');
+   return {radius:getComputedStyle(a).borderRadius,menuRadius:getComputedStyle(document.querySelector('#settings-menu')).borderRadius,overflow:document.documentElement.scrollWidth-innerWidth};
   },theme);
-  expect(settings.gap).toBe(18);expect(settings.radius).toBe('9px');expect(settings.menuRadius).toBe(settings.radius);expect(settings.overflow).toBe(0);
-  // The real settings HTML/CSS is rendered here with scripts blocked, not a fake signed-in account.
-  const formLayout=await page.evaluate(()=>{
-   const form=document.querySelector('#employer-directory-form'),schedule=document.querySelector('#employer-bonus-schedule');
-   form.hidden=false;schedule.hidden=false;schedule.disabled=false;
-   const bounds=form.getBoundingClientRect();
-   const inputs=[...form.querySelectorAll('input[name="employer-salary-method"],input[name="employer-bonus-month"]')];
-   const inside=inputs.every(input=>{const b=input.getBoundingClientRect();return b.width>=16&&b.height>=16&&b.left>=bounds.left&&b.right<=bounds.right;});
-   const overflow=document.documentElement.scrollWidth-innerWidth;
-   schedule.hidden=true;const hidden=getComputedStyle(schedule).display==='none';form.hidden=true;
-   return {inside,overflow,hidden,count:inputs.length};
-  });
-  expect(formLayout).toEqual({inside:true,overflow:0,hidden:true,count:16});
+  expect(settings.radius).toBe('9px');expect(settings.menuRadius).toBe(settings.radius);expect(settings.overflow).toBe(0);
+  const employerViewport=page.viewportSize();
+  for(const width of [1280,390,320]){
+   await page.setViewportSize({width,height:650});
+   const formLayout=await page.evaluate(()=>{
+    const dialog=document.querySelector('#employer-directory-dialog'),form=document.querySelector('#employer-directory-form');dialog.showModal();
+    const bounds=dialog.getBoundingClientRect(),body=form.querySelector('.employer-dialog__body'),actions=form.querySelector('.operation-dialog__actions');
+    const inputs=[...form.querySelectorAll('input[name="employer-role"],input[name="employer-bonus-month"]')];
+    const inside=inputs.every(input=>{const b=input.getBoundingClientRect();return b.width>=16&&b.height>=16&&b.left>=bounds.left&&b.right<=bounds.right;});
+    const footer=actions.getBoundingClientRect().bottom<=bounds.bottom;
+    const overflow=document.documentElement.scrollWidth-innerWidth;
+    const horizontal=body.scrollWidth>body.clientWidth;
+    dialog.close();return {inside,overflow,horizontal,footer,count:inputs.length};
+   });
+   expect(formLayout).toEqual({inside:true,overflow:0,horizontal:false,footer:true,count:14});
+  }
+  await page.setViewportSize(employerViewport);
+  const originalSettingsViewport=page.viewportSize();
+  for(const width of [1280,390,320]){
+   await page.setViewportSize({width,height:900});
+   await page.evaluate(()=>{for(const s of document.querySelectorAll('main>.settings-group'))s.hidden=s.id!=='settings-auth-panel';});
+   const auth=await page.evaluate(()=>{
+    const grid=document.querySelector('.settings-auth-grid'),a=grid.children[0].getBoundingClientRect(),b=grid.children[1].getBoundingClientRect();
+    return {cards:grid.children.length,sameRow:Math.abs(a.top-b.top)<1,stacked:b.top>=a.bottom,overflow:document.documentElement.scrollWidth-innerWidth};
+   });
+   expect(auth.cards).toBe(2);expect(auth.overflow).toBe(0);expect(width>830?auth.sameRow:auth.stacked).toBe(true);
+   await expect(page.locator('#write-lock-recovery-title')).toBeHidden();
+   await page.evaluate(()=>{for(const s of document.querySelectorAll('main>.settings-group'))s.hidden=s.id!=='settings-details-panel';});
+   await expect(page.locator('#settings-details-panel #write-lock-recovery-title')).toBeVisible();
+  }
+  if(originalSettingsViewport)await page.setViewportSize(originalSettingsViewport);
   for(const id of ['settings-backup-panel','settings-details-panel','settings-auth-panel']){
    await page.evaluate(id=>{for(const s of document.querySelectorAll('main>.settings-group'))s.hidden=s.id!==id;},id);
    expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0);
@@ -776,7 +784,7 @@ test('upload save footer remains usable through success and recovery at phone an
  }
  for(const [width,height] of [[360,800],[390,844],[412,915],[820,900],[1280,800]]){
   await page.setViewportSize({width,height});
-  for(const theme of ['light','dark'])for(const state of ['before','expanded','saving','failed','recovery','checking','success']){
+  for(const theme of ['light','dark'])for(const state of ['before','checked','saving','failed','recovery','checking','success']){
    const out=await page.evaluate(([theme,state])=>{
      const $=id=>document.getElementById(id),el=s=>document.querySelector(s);
      document.documentElement.dataset.theme=theme;el('.workspace').classList.remove('is-empty');el('.save-bar').classList.remove('is-empty');
@@ -785,16 +793,16 @@ test('upload save footer remains usable through success and recovery at phone an
      const recover=['recovery','checking'].includes(state),active=state==='saving',failed=['failed','recovery','checking'].includes(state),success=state==='success';
      el('.save-bar').classList.toggle('is-recovering',recover);
      $('save-status').hidden=active;$('save-status').setAttribute('role',failed?'alert':'status');$('save-status').textContent=failed?'保存に失敗しました: OneDriveフォルダー一覧の取得：OneDriveへの照会通信に失敗しました（再試行上限）。':'1件を保存できます。';
-     $('zero-approval').hidden=!['before','expanded','failed'].includes(state);$('zero-approval-count').textContent='1件・9項目（未選択時は空欄）';$('zero-approval-details').open=state==='expanded';$('zero-approval-list').innerHTML='<li>synthetic.pdf：健康保険・厚生年金・雇用保険・所得税・住民税</li>';
-     $('save-all').disabled=!['before','expanded','failed'].includes(state);$('save-feedback').hidden=['before','expanded'].includes(state);$('save-feedback').classList.toggle('is-failed',failed);$('save-feedback').classList.toggle('is-complete',success);
+     $('zero-approval').hidden=!['before','checked','failed'].includes(state);$('zero-approval-count').textContent='1件・9項目（未選択時は空欄）';$('zero-missing-amounts').checked=state==='checked';
+     $('save-all').disabled=!['before','checked','failed'].includes(state);$('save-feedback').hidden=['before','checked'].includes(state);$('save-feedback').classList.toggle('is-failed',failed);$('save-feedback').classList.toggle('is-complete',success);
      $('save-stage').textContent=failed?'保存を完了できませんでした':success?'OneDriveへの保存完了':'保存済みデータを確認中…';$('save-elapsed').textContent='経過 1:20';$('save-guidance').textContent=failed?'選択したPDFと入力内容は保持しています。':'完了するまでこの画面を開いてください。';
      $('upload-save-recovery').hidden=!recover;$('upload-save-recovery-status').textContent=state==='checking'?'OneDriveの保存結果を確認中…':'書き込み結果が不明です。OneDriveの状態を確認してください。入力内容は保持しています。';
      const rect=e=>{const r=e.getBoundingClientRect();return {w:r.width,h:r.height,x:r.x,y:r.y,bottom:r.bottom,right:r.right}};
-     return {option:rect($('zero-approval')),details:rect($('zero-approval-details')),stage:rect($('save-stage')),overflow:document.documentElement.scrollWidth-innerWidth,bar:rect(el('.save-bar')),status:rect(el('.save-bar__status')),actions:rect(el('.save-bar__actions')),button:rect($('save-all')),feedback:rect($('save-feedback')),list:rect($('file-list')),panel:rect(el('.file-panel')),review:rect(el('.review-panel')),recheck:rect($('upload-save-recheck')),rootHeight:document.documentElement.scrollHeight};
+     return {option:rect($('zero-approval')),hasDetails:Boolean($('zero-approval').querySelector('details')),stage:rect($('save-stage')),overflow:document.documentElement.scrollWidth-innerWidth,bar:rect(el('.save-bar')),status:rect(el('.save-bar__status')),actions:rect(el('.save-bar__actions')),button:rect($('save-all')),feedback:rect($('save-feedback')),list:rect($('file-list')),panel:rect(el('.file-panel')),review:rect(el('.review-panel')),recheck:rect($('upload-save-recheck')),rootHeight:document.documentElement.scrollHeight};
     },[theme,state]);
    const label=`${width} ${theme} ${state}`;
-   expect(out.overflow,label).toBeLessThanOrEqual(1);expect(out.list.h,label).toBeGreaterThan(15);expect(out.status.w,label).toBeGreaterThan(100);expect(out.bar.h,label).toBeLessThan(500);
-   if(['before','expanded','failed'].includes(state)){expect(out.option.w,label).toBeGreaterThanOrEqual(out.bar.w-45);expect(out.option.bottom,label).toBeLessThanOrEqual(out.status.y+1);}
+   expect(out.hasDetails,label).toBe(false);expect(out.overflow,label).toBeLessThanOrEqual(1);expect(out.list.h,label).toBeGreaterThan(15);expect(out.status.w,label).toBeGreaterThan(100);expect(out.bar.h,label).toBeLessThan(500);
+   if(['before','checked','failed'].includes(state)){expect(out.option.w,label).toBeGreaterThanOrEqual(out.bar.w-45);expect(out.option.bottom,label).toBeLessThanOrEqual(out.status.y+1);}
    if(state==='failed')expect(out.stage.h,label).toBe(0);
    if(width>860&&out.button.w){expect(out.button.x,label).toBeGreaterThanOrEqual(out.status.right);expect(out.status.w,label).toBeGreaterThan(out.bar.w*.65);}
    if(width<=860){
@@ -803,5 +811,264 @@ test('upload save footer remains usable through success and recovery at phone an
     else expect(out.recheck.w,label).toBeGreaterThan(out.bar.w*.75);
    }
   }
+ }
+});
+
+// Real shared controller and CSS, with an isolated synthetic save surface.
+// No app bootstrap, credentials, or OneDrive request is needed for layout.
+test('shared loading notification keeps its anchor across save phases',async({page})=>{
+ const {build}=await import('esbuild');
+ const {fileURLToPath}=await import('node:url');
+ const bundle=await build({stdin:{contents:"export {createAppStatus} from './src/ui/appStatus.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'ts'},bundle:true,format:'iife',globalName:'NoticeFixture',write:false,logLevel:'silent'});
+ await page.route('**/*',route=>route.abort('blockedbyclient'));
+ for(const width of [320,390,1280])for(const theme of ['light','dark']){
+  await page.setViewportSize({width,height:800});
+  for(const cls of ['vault-bottom','save-bar','yea-upload-savebar']){
+   await page.setContent(`<main><div class="${cls}" style="position:fixed;right:12px;bottom:85px;width:120px;height:34px;z-index:2"><button type="button">保存</button></div></main><div id="synthetic-status" hidden></div>`);
+   for(const name of ['ress','style','theme'])await page.addStyleTag({content:readFileSync(new URL(`../public/styles/${name}.css`,import.meta.url),'utf8')});
+   await page.addScriptTag({content:bundle.outputFiles[0].text});
+   const result=await page.evaluate(({theme,cls})=>{
+    document.documentElement.dataset.theme=theme;
+    const el=document.getElementById('synthetic-status'),surface=document.querySelector('.'+cls);
+    const status=NoticeFixture.createAppStatus(el,'edit'),scope=cls==='vault-bottom'?undefined:status.begin('edit');
+    const show=message=>status.show('loading',message,false,{scope});
+    show('解析済み給与データを保存・検証しています。'.repeat(8));
+    const before=el.getBoundingClientRect(),anchor=el.style.getPropertyValue('--status-bottom');
+    const dismiss=el.querySelector('.app-status__dismiss'),dismissBorder=getComputedStyle(dismiss).borderTopWidth;
+    const observer=new MutationObserver(()=>{});observer.observe(el,{attributes:true,attributeFilter:['hidden']});
+    show('Finance連携中…');
+    const after=el.getBoundingClientRect(),hiddenChanges=observer.takeRecords().length;observer.disconnect();
+    const b=surface.getBoundingClientRect();
+    const overlap=after.top<b.bottom&&after.bottom>b.top&&after.left<b.right&&after.right>b.left;
+    surface.style.bottom='500px';window.dispatchEvent(new Event('scroll'));
+    const reset=el.style.getPropertyValue('--status-bottom');
+    status.show('success','保存完了',false,{scope});
+    const outcome=el.dataset.state;status.clear();
+    return {anchor,dismissBorder,drift:Math.abs(before.bottom-after.bottom),hiddenChanges,overlap,reset,outcome,hidden:el.hidden};
+   },{theme,cls});
+   expect(result.anchor,`${width} ${theme} ${cls}`).not.toBe('');
+   expect(result.dismissBorder).toBe('0px');
+   expect(result.drift).toBeLessThanOrEqual(1);expect(result.hiddenChanges).toBe(0);expect(result.overlap).toBe(false);
+   expect(result.reset).toBe('');expect(result.outcome).toBe('success');expect(result.hidden).toBe(true);
+  }
+ }
+});
+
+ test('employer overview, editor and assignment use verified data without writing on cancel',async({page})=>{
+  const {employerFixtureScript}=await import('./employer-ui-fixture.mjs');
+  await page.route('**/backup.js',route=>route.fulfill({contentType:'application/javascript',body:employerFixtureScript()}));
+  await page.route('**/release-history.js',route=>route.fulfill({contentType:'application/javascript',body:''}));
+  await page.goto('/backup/index.html');
+  const list=page.locator('#employer-directory-list'),modal=page.locator('#employer-directory-dialog'),bulk=page.locator('#employer-bulk-dialog');
+  await expect(list).toContainText('架空本業');await expect(list).toContainText('2月・8月');
+  await expect(list).toContainText('架空副業');await expect(list).toContainText('名称未登録の勤務先');
+  await expect(list.locator('details')).not.toHaveAttribute('open','');
+  await expect(page.locator('#employer-bulk-total')).toHaveText('勤務先未設定の明細 2件');
+  const initialViewport=page.viewportSize(),initialTheme=await page.evaluate(()=>document.documentElement.getAttribute('data-theme'));
+  for(const theme of ['light','dark']){
+   await page.evaluate(value=>document.documentElement.dataset.theme=value,theme);
+   for(const width of [320,390,855,1280]){
+    await page.setViewportSize({width,height:900});
+    const layout=await list.evaluate(el=>{
+     const [main,side]=el.querySelectorAll(':scope > .employer-settings__group');
+     const a=main.getBoundingClientRect(),b=side.getBoundingClientRect();
+     const forecastRows=[...el.querySelectorAll('.employer-settings__forecast > div')];
+     return {width:el.clientWidth,sideBySide:Math.abs(a.top-b.top)<1,overflow:document.documentElement.scrollWidth-innerWidth,
+      gaps:forecastRows.map(row=>row.querySelector('dd').getBoundingClientRect().left-row.querySelector('dt').getBoundingClientRect().right),
+      clipped:forecastRows.some(row=>row.querySelector('dd').scrollWidth>row.querySelector('dd').clientWidth)};
+    });
+    expect(layout.sideBySide).toBe(layout.width>=600);expect(layout.overflow).toBeLessThanOrEqual(0);expect(layout.clipped).toBe(false);
+    for(const gap of layout.gaps){expect(gap).toBeGreaterThanOrEqual(8);expect(gap).toBeLessThanOrEqual(16);}
+   }
+  }
+  if(initialViewport)await page.setViewportSize(initialViewport);
+  await page.evaluate(value=>{if(value===null)document.documentElement.removeAttribute('data-theme');else document.documentElement.setAttribute('data-theme',value);},initialTheme);
+  const edit=list.getByRole('button',{name:/架空本業を編集/});await edit.click();
+  await expect(modal).toBeVisible();await expect(modal.locator('input[name="employer-role"][value="side"]')).toBeDisabled();
+  await expect(modal.locator('input[name="employer-bonus-month"][value="2"]')).toBeChecked();
+  await modal.locator('#employer-directory-name').fill('破棄する入力');await page.keyboard.press('Escape');
+  await expect(modal).toBeHidden();await expect(edit).toBeFocused();expect(await page.evaluate(()=>window.fixture.writes)).toBe(0);
+  await edit.click();await expect(modal.locator('#employer-directory-name')).toHaveValue('架空本業');
+  await modal.locator('input[name="employer-bonus-month"][value="2"]').uncheck();await modal.locator('input[name="employer-bonus-month"][value="8"]').uncheck();
+  await expect(modal.locator('#employer-bonus-month-hint')).toHaveText('算出しない');
+  await page.evaluate(()=>window.fixture.pauseWrite=true);await modal.locator('#employer-directory-save').click();
+  await expect(modal.locator('#employer-directory-save')).toBeDisabled();await page.keyboard.press('Escape');await expect(modal).toBeVisible();
+  await page.evaluate(()=>window.fixture.release());await expect(modal).toBeHidden();expect(await page.evaluate(()=>window.fixture.writes)).toBe(1);
+  expect(await page.evaluate(()=>window.fixture.list.find(e=>e.current&&e.role==='main').forecast.bonusMonths)).toEqual([]);
+  await page.locator('#employer-directory-add').click();await modal.locator('#employer-directory-name').fill('架空追加');
+  await modal.locator('#employer-directory-current').check();await expect(modal.locator('#employer-current-hint')).toContainText('架空本業');
+  await modal.locator('#employer-directory-close').click();await expect(modal).toBeHidden();
+  await page.evaluate(()=>window.fixture.pauseWrite=false);
+  await list.locator('details summary').click();
+  await list.getByRole('button',{name:/架空旧勤務先を編集/}).click();await modal.locator('#employer-directory-current').check();
+  await expect(modal.locator('#employer-current-hint')).toContainText('架空本業');await modal.locator('#employer-directory-save').click();await expect(modal).toBeHidden();
+  expect(await page.evaluate(()=>window.fixture.list.find(e=>e.name==='架空本業').current)).toBe(false);
+  expect(await page.evaluate(()=>window.fixture.list.find(e=>e.name==='架空旧勤務先').current)).toBe(true);
+  const beforeLegacy=await page.evaluate(()=>window.fixture.records);
+  await list.getByRole('button',{name:'名称を設定',exact:true}).click();await expect(modal.locator('#employer-directory-heading')).toHaveText('勤務先の名称を設定');
+  await modal.locator('#employer-directory-name').fill('架空名称設定');await modal.locator('#employer-directory-save').click();await expect(modal).toBeHidden();
+  expect(await page.evaluate(()=>window.fixture.records)).toEqual(beforeLegacy);await expect(list).not.toContainText('名称未登録の勤務先');
+  await page.evaluate(()=>window.fixture.failWrite=true);await list.getByRole('button',{name:/架空旧勤務先を編集/}).click();await modal.locator('#employer-directory-name').fill('保存失敗の入力');await modal.locator('#employer-directory-save').click();
+  await expect(modal).toBeHidden();await expect(page.locator('#employer-directory-status')).toContainText('保存結果を確認できませんでした');await expect(list).not.toContainText('保存失敗の入力');
+  const toast=page.locator('.app-status');await expect(toast).toHaveAttribute('data-state','error');
+  await page.evaluate(()=>window.fixture.failWrite=false);
+  await list.getByRole('button',{name:/架空副業を編集/}).click();await modal.locator('#employer-directory-save').click();await expect(modal).toBeHidden();
+  await expect(toast).toHaveAttribute('data-state','error');
+  await list.getByRole('button',{name:/架空旧勤務先を編集/}).click();await modal.locator('#employer-directory-save').click();await expect(modal).toBeHidden();
+  await expect(toast).toHaveAttribute('data-state','success');
+  await page.locator('#employer-bulk-open').click();await expect(bulk).toBeVisible();
+  await expect(bulk.locator('#employer-bulk-save')).toBeDisabled();
+  const target=bulk.locator('#employer-bulk-target');await target.selectOption({label:'架空本業（本業）'});
+  await expect(bulk.locator('#employer-bulk-list input')).toHaveCount(1);await bulk.locator('#employer-bulk-all').click();
+  await target.selectOption({label:'架空副業（副業）'});await expect(bulk.locator('#employer-bulk-save')).toBeDisabled();
+  await bulk.locator('#employer-bulk-all').click();await bulk.locator('#employer-bulk-save').click();
+  await expect(page.locator('dialog[open]')).toHaveCount(1);await expect(bulk).toBeHidden();
+  await page.locator('dialog[open]').getByRole('button',{name:'キャンセル'}).click();await expect(bulk).toBeVisible();expect(await page.evaluate(()=>window.fixture.writes)).toBe(6);
+  await bulk.locator('#employer-bulk-save').click();await page.locator('dialog[open]').getByRole('button',{name:'勤務先を設定',exact:true}).click();
+  await expect(bulk).toBeHidden();await expect(page.locator('#employer-bulk-total')).toHaveText('勤務先未設定の明細 1件');
+  await page.locator('#employer-bulk-open').click();await target.selectOption({label:'架空本業（本業）'});await bulk.locator('#employer-bulk-all').click();await bulk.locator('#employer-bulk-save').click();await page.locator('dialog[open]').getByRole('button',{name:'勤務先を設定',exact:true}).click();
+  await expect(page.locator('#employer-bulk-panel')).toBeHidden();expect(await page.evaluate(()=>window.fixture.writes)).toBe(8);
+  await page.evaluate(()=>window.fixture.failRead=true);await page.locator('#employer-directory-load').click();
+  await expect(page.locator('#employer-directory-load')).toHaveText('再読み込み');await expect(list).toBeHidden();await expect(page.locator('#employer-directory-add')).toBeHidden();
+ });
+
+// Isolated production dialog controller; no real records or account connection.
+test('missing statement details show one distinct link per record on desktop and mobile', async ({page})=>{
+ const {stripTypeScriptTypes}=await import('node:module');
+ const source=readFileSync(new URL('../src/ui/operationDialog.ts',import.meta.url),'utf8').replace(/^export /gm,'');
+ await page.route('**/*',route=>route.abort('blockedbyclient'));
+ await page.setContent('<!doctype html><html lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><button id="trigger">未入力</button></body></html>');
+ for(const name of ['ress','style','dashboard','theme'])await page.addStyleTag({content:readFileSync(new URL(`../public/styles/${name}.css`,import.meta.url),'utf8')});
+ await page.addScriptTag({content:stripTypeScriptTypes(source,{mode:'strip'})+'\nwindow.openMissingFixture=showOperationMessage;'});
+ const href='./edit/index.html#id=3&mode=calendar&year=2026&hintYear=2025';
+ const label='synthetic-'+ 'longfilename'.repeat(12)+'.pdf';
+ const description='2026年2月 · 本業 · <synthetic> · 賞与';
+ const trigger=page.locator('#trigger');
+ for(const theme of ['light','dark'])for(const width of [320,390,1280]){
+  await page.setViewportSize({width,height:800});
+  await page.evaluate(({theme,href,label,description})=>{
+   document.documentElement.dataset.theme=theme;document.getElementById('trigger').focus();
+   void window.openMissingFixture({title:'本業：総支給額の未入力',details:['未入力の明細：1件'],links:[{label,description,href}],afterLinks:['見込みの算出不足：1件'],acceptLabel:'閉じる'},()=>true);
+  },{theme,href,label,description});
+  const dialog=page.locator('dialog');const link=dialog.getByRole('link');
+  await expect(dialog.locator('li')).toHaveCount(1);await expect(link).toHaveCount(1);
+  await expect(link).toHaveAttribute('href',href);
+  await expect(link.locator('.operation-dialog__link-label')).toHaveText(label);
+  await expect(link.locator('.operation-dialog__link-description')).toHaveText(description);
+  expect(await link.evaluate(e=>{const r=e.getBoundingClientRect();const d=e.closest('dialog').getBoundingClientRect();return r.width>0&&r.height>=44&&r.left>=d.left&&r.right<=d.right&&e.scrollWidth<=e.clientWidth;})).toBe(true);
+  await expect(dialog.locator('.operation-dialog__link-note')).toHaveCount(1);
+  await expect(dialog).not.toContainText('0を入力して保存');
+  await link.hover();
+  await expect(link).toHaveCSS('text-decoration-line','none');
+  await expect(link.locator('.operation-dialog__link-label')).toHaveCSS('text-decoration-line','none');
+  await expect(link.locator('.operation-dialog__link-description')).toHaveCSS('text-decoration-line','none');
+  await link.focus();await expect(link).toBeFocused();await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);await expect(trigger).toBeFocused();
+ }
+ // Different records remain different rows; forecast-only rows are not links.
+ await page.evaluate(({href,label,description})=>{void window.openMissingFixture({title:'未入力',details:['未入力の明細：2件'],links:[{href,label,description},{href:href.replace('id=3','id=4'),label:'other.pdf',description}],afterLinks:['見込みの算出不足：1件'],acceptLabel:'閉じる'},()=>true);},{href,label,description});
+ await expect(page.locator('dialog li')).toHaveCount(2);await expect(page.locator('dialog a')).toHaveCount(2);
+ await page.getByRole('button',{name:'閉じる'}).click();
+ await page.evaluate(()=>{void window.openMissingFixture({title:'未入力',details:['登録済み明細に未入力はありません。'],links:[],afterLinks:['見込みの算出不足：1件'],acceptLabel:'閉じる'},()=>true);});
+ await expect(page.locator('dialog a')).toHaveCount(0);await expect(page.locator('dialog')).toContainText('見込みの算出不足：1件');
+});
+
+// Real edit markup, styles and shared notification controller, without auth or cloud I/O.
+test('saved editor scrolls independently and keeps notices above the save controls',async({page})=>{
+ const {build}=await import('esbuild');
+ const {fileURLToPath}=await import('node:url');
+ const bundle=await build({stdin:{contents:"export {createAppStatus} from './src/ui/appStatus.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'ts'},bundle:true,format:'iife',globalName:'NoticeFixture',write:false,logLevel:'silent'});
+ // Keep the genuine page and its CSP. Only the document, its styles, and the
+ // synthetic notification bundle may load; the actual application never starts.
+ const origin='http://127.0.0.1:4177';
+ const fixtureUrl=origin+'/__e2e__/editor-notice.js';
+ const styles=new Map(['ress','style','upload','vault','cloud','theme'].map(name=>[origin+`/styles/${name}.css`,fileURLToPath(new URL(`../public/styles/${name}.css`,import.meta.url))]));
+ await page.route('**/*',async route=>{
+  const request=route.request(),url=request.url(),type=request.resourceType();
+  if(request.method()==='GET'){
+   if(type==='script'&&url===fixtureUrl)return route.fulfill({contentType:'application/javascript',body:bundle.outputFiles[0].text});
+   if(type==='document'&&url===origin+'/edit/index.html')return route.fulfill({contentType:'text/html; charset=utf-8',path:fileURLToPath(new URL('../public/edit/index.html',import.meta.url))});
+   if(type==='stylesheet'&&styles.has(url))return route.fulfill({contentType:'text/css; charset=utf-8',path:styles.get(url)});
+  }
+  return route.abort('blockedbyclient');
+ });
+ await page.goto('/edit/index.html');
+ await expect(page.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveCount(1);
+ await expect(page.locator('#editor')).toBeHidden();
+ await page.addScriptTag({url:fixtureUrl});
+ await page.evaluate(()=>{
+  document.getElementById('record-name').textContent='synthetic-statement.pdf';
+  document.getElementById('record-details').textContent='2026-01 / synthetic';
+  document.getElementById('editor').hidden=false;
+  window.editorNotice=NoticeFixture.createAppStatus(undefined,'edit');
+ });
+ for(const [width,height] of [[1280,800],[855,650],[390,800],[320,600]])for(const theme of ['light','dark']){
+  await page.setViewportSize({width,height});
+  const toolbar=await page.evaluate(({width,theme})=>{
+   document.documentElement.dataset.theme=theme;
+   const bar=document.querySelector('.selected-file'),name=document.getElementById('record-name'),diagnostic=document.getElementById('record-diagnostic-open');
+   name.textContent='synthetic-statement.pdf';document.getElementById('record-details').textContent='PDF 141 KB';
+   const bounds=bar.getBoundingClientRect(),d=diagnostic.getBoundingClientRect();
+   const fits=()=>{const b=bar.getBoundingClientRect();return [...bar.querySelectorAll('.btn')].every(e=>{const r=e.getBoundingClientRect();return r.left>=b.left-1&&r.right<=b.right+1;})&&document.querySelector('.edit-scroll').scrollWidth<=document.querySelector('.edit-scroll').clientWidth&&document.documentElement.scrollWidth<=innerWidth;};
+   const compact=bounds.height<=(width>680?70:110),singleRow=Math.abs(d.top-bar.querySelector('.selected-file__actions').getBoundingClientRect().top)<1,normalFits=fits();
+   name.textContent='synthetic_long_filename_'.repeat(10)+'.pdf';const longFits=fits();name.textContent='synthetic-statement.pdf';
+   return {compact,singleRow,normalFits,longFits,diagnosticInToolbar:bar.contains(diagnostic),diagnosticDisabled:diagnostic.disabled,diagnosticAccessible:diagnostic.getAttribute('aria-label')==='詳細診断',diagnosticSize:d.width>=36&&d.height>=36,insideEditor:document.querySelector('.saved-editor-panel').contains(bar),sharedFile:bar.querySelector('.selected-file__icon')!==null,headingOnly:document.querySelector('.edit-page > .upload-heading').textContent.trim()==='明細を編集'};
+  },{width,theme});
+  expect(toolbar).toEqual({compact:true,singleRow:true,normalFits:true,longFits:true,diagnosticInToolbar:true,diagnosticDisabled:true,diagnosticAccessible:true,diagnosticSize:true,insideEditor:true,sharedFile:true,headingOnly:true});
+  const result=await page.evaluate(async({width,theme})=>{
+   document.documentElement.dataset.theme=theme;
+   const region=document.querySelector(width>680?'.saved-editor-panel':'.edit-scroll');
+   const footer=document.querySelector('.edit-page .vault-bottom'),button=document.getElementById('edit-save');
+   const notice=window.editorNotice,el=notice.element;
+   const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+   notice.clear();region.scrollTop=0;document.getElementById('edit-status').textContent='';await settle();
+   const scope=notice.begin('edit');notice.show('loading','保存処理中…',false,{scope});await settle();
+   const first=el.getBoundingClientRect(),initialFooter=footer.getBoundingClientRect();
+   region.scrollTop=region.scrollHeight;await settle();
+   const moved=region.scrollTop>0,scrollBottom=el.getBoundingClientRect().bottom;
+   notice.show('loading','合成データの保存結果を検証しています。'.repeat(12),false,{scope});await settle();
+   const long=el.getBoundingClientRect();
+   document.getElementById('edit-status').textContent='未保存の変更があります。';await settle();
+   notice.show('error','合成データの保存に失敗しました。',false,{scope});await settle();
+   const last=el.getBoundingClientRect(),f=footer.getBoundingClientRect(),b=button.getBoundingClientRect();
+   const lastField=document.querySelector('[name="otherDeductions"]');lastField.focus();await settle();
+   const field=lastField.getBoundingClientRect(),r=region.getBoundingClientRect();
+   const result={moved,docScroll:document.scrollingElement.scrollHeight-document.scrollingElement.clientHeight,scrollY:window.scrollY,footerDrift:Math.abs(initialFooter.top-f.top),drift:Math.max(Math.abs(first.bottom-scrollBottom),Math.abs(first.bottom-long.bottom),Math.abs(first.bottom-last.bottom)),above:Math.max(first.bottom,long.bottom,last.bottom)<=f.top-10,buttonVisible:b.top>=0&&b.bottom<=innerHeight,fieldVisible:field.top>=r.top-1&&field.bottom<=r.bottom+1,overflow:document.documentElement.scrollWidth>innerWidth,closeVisible:el.querySelector('button').getBoundingClientRect().top>=0};
+   el.querySelector('button').click();return result;
+  },{width,theme});
+  expect(result,`${width}×${height} ${theme}`).toMatchObject({moved:true,scrollY:0,above:true,buttonVisible:true,fieldVisible:true,overflow:false,closeVisible:true});
+  expect(result.docScroll).toBeLessThanOrEqual(1);expect(result.drift).toBeLessThanOrEqual(1);expect(result.footerDrift).toBeLessThanOrEqual(1);
+ }
+ await page.setViewportSize({width:390,height:430});
+ expect(await page.evaluate(()=>{const doc=document.scrollingElement;window.scrollTo(0,doc.scrollHeight);return doc.scrollHeight>innerHeight&&document.getElementById('edit-save').getBoundingClientRect().bottom<=innerHeight+1;})).toBe(true);
+ // Initial loading or failed authorization must not be clipped by the editor layout.
+ await page.evaluate(()=>{document.getElementById('editor').hidden=true;const error=document.getElementById('edit-error');error.hidden=false;error.textContent='合成の読み込みエラー';});
+ await expect(page.locator('#edit-error')).toBeVisible();
+});
+
+// The diagnostic uses one native dialog; explicit reveal precedes explicit copy.
+test('saved record diagnostic has one dialog, contextual action and top close',async({page})=>{
+ const {build}=await import('esbuild');
+ const {fileURLToPath}=await import('node:url');
+ const bundle=await build({stdin:{contents:"export {openRecordDiagnostic,dismissRecordDiagnostic} from './src/ui/recordDiagnostic.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'ts'},bundle:true,format:'iife',globalName:'DiagnosticFixture',write:false,logLevel:'silent'});
+ await page.route('**/*',route=>route.abort('blockedbyclient'));
+ await page.setContent('<button id="trigger" type="button">詳細診断</button>');
+ for(const name of ['ress','style','vault','theme'])await page.addStyleTag({content:readFileSync(new URL(`../public/styles/${name}.css`,import.meta.url),'utf8')});
+ await page.addScriptTag({content:bundle.outputFiles[0].text});
+ await page.evaluate(()=>{
+  window.diagnosticReads=0;window.diagnosticCopies=[];window.diagnosticAllowed=true;
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(value){window.diagnosticCopies.push(value);}}});
+  document.getElementById('trigger').addEventListener('click',()=>DiagnosticFixture.openRecordDiagnostic(()=>{window.diagnosticReads++;return JSON.stringify({synthetic:Array.from({length:100},(_,i)=>`synthetic-${i}`)},null,2);},()=>window.diagnosticAllowed));
+ });
+ for(const [width,height] of [[320,600],[390,800],[1280,800]])for(const theme of ['light','dark']){
+  await page.setViewportSize({width,height});await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;window.diagnosticReads=0;window.diagnosticCopies=[];window.diagnosticAllowed=true;},theme);
+  await page.locator('#trigger').click();const d=page.locator('.record-diagnostic');
+  await expect(d).toBeVisible();await expect(page.locator('dialog[open]')).toHaveCount(1);await expect(d.locator('button')).toHaveCount(2);
+  await expect(d.getByRole('button',{name:'閉じる'})).toBeFocused();await expect(d.locator('pre')).toBeHidden();expect(await page.evaluate(()=>window.diagnosticReads)).toBe(0);
+  await d.getByRole('button',{name:'診断データを表示'}).click();await expect(d.locator('pre')).toBeVisible();await expect(page.locator('dialog[open]')).toHaveCount(1);await expect(d.locator('button')).toHaveCount(2);
+  expect(await d.evaluate(e=>{const r=e.getBoundingClientRect(),x=e.querySelector('.record-diagnostic__head button').getBoundingClientRect(),h=e.querySelector('h2').getBoundingClientRect(),p=e.querySelector('pre');return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&x.left>=h.right-1&&x.top<p.getBoundingClientRect().top&&e.scrollWidth<=e.clientWidth+1&&p.scrollHeight>p.clientHeight;})).toBe(true);
+  await d.getByRole('button',{name:'診断データをコピー'}).click();await expect(d.getByRole('status')).toHaveText('クリップボードにコピーしました。');expect(await page.evaluate(()=>[window.diagnosticReads,window.diagnosticCopies.length])).toEqual([1,1]);
+  await d.getByRole('button',{name:'閉じる'}).click();await expect(d).toHaveCount(0);await expect(page.locator('#trigger')).toBeFocused();
+  await page.locator('#trigger').click();await page.keyboard.press('Escape');await expect(d).toHaveCount(0);
+  await page.locator('#trigger').click();await d.getByRole('button',{name:'診断データを表示'}).click();await page.evaluate(()=>{window.diagnosticAllowed=false;});await d.getByRole('button',{name:'診断データをコピー'}).click();await expect(d).toHaveCount(0);expect(await page.evaluate(()=>window.diagnosticCopies.length)).toBe(1);
  }
 });

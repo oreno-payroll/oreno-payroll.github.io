@@ -10,10 +10,11 @@ import {preparePdfHandoff} from './pdf/handoff';
 import {readNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
 import {capturePdfHandoffAuthorization,captureOperationAuthorization} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
-import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,type SavedPayrollSummary} from './storage/payrollStore';
-import {reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
+import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,needsEditConflictReview,PayrollEditConflictError,type ReplacementConflict,type SavedPayrollSummary} from './storage/payrollStore';
+import {emptyOptionalAmounts,reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
 import {validEmployerId} from './storage/employerIdentity';
-import {employerDirectorySignature,type EmployerEntry} from './storage/employerDirectory';
+import type {EmployerEntry} from './storage/employerDirectory';
+import {beginPerfOperation} from './cloud/perf';
 import {renderEmployerSelect,employerAssignmentAllowed,employerDisplayName} from './ui/employerSelection';
 import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
@@ -32,6 +33,7 @@ const editor = $<HTMLElement>('editor');
 const appStatus=createAppStatus(undefined,'edit');
 const status = $<HTMLElement>('edit-status');
 const saveButton = $<HTMLButtonElement>('edit-save');
+const zeroSaveButton = $<HTMLButtonElement>('edit-save-zero');
 const deleteButton = $<HTMLButtonElement>('edit-delete');
 const confirmDiff = $<HTMLInputElement>('confirm-diff');
 const reviewConfirmation=$<HTMLElement>('edit-review-confirmation');
@@ -105,6 +107,15 @@ function hasUnsavedChanges(): boolean {
 }
 function approvalFingerprint():string{return JSON.stringify([getValues(),employerInput.value.trim()]);}
 function hasApproval():boolean{return reviewApproval!==null&&reviewApproval===approvalFingerprint();}
+/** HTML number inputs can expose an empty value for an invalid draft. Do not
+ * turn that into a confirmed zero, or touch inactive/non-money controls. */
+function zeroInputTargets(values:Record<string,string>):HTMLInputElement[] {
+  const active = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="number"]'))
+    .filter(input=>!input.closest('[hidden]'));
+  if(active.some(input=>input.validity.badInput))return [];
+  const fields=new Set<string>(emptyOptionalAmounts(values));
+  return active.filter(input=>!input.disabled&&fields.has(input.name)&&input.value.trim()==='');
+}
 function updateUI(): void {
   if (!record) return;
   const values = getValues();
@@ -112,7 +123,7 @@ function updateUI(): void {
   const selected=employerInput.value||undefined;
   if(employerRoleSelectionRequired||!validEmployerId(selected)||!employerAssignmentAllowed(employerDirectory,values.job,selected,record))errors.unshift('勤務区分に対応する勤務先（または未設定）を選び直してください。');
   const changed = hasUnsavedChanges();
-  form.inert=deletionPending||deletionNeedsReload;
+  form.inert=saving||deletionPending||deletionNeedsReload;
   deleteButton.textContent=deletionPending?'元に戻す':'削除';
   deleteButton.setAttribute('aria-label',deletionPending?'明細の削除を取り消す':'明細を削除待ちにする');
   saveButton.textContent=deletionPending?'削除を確定':'変更を保存';
@@ -128,6 +139,8 @@ function updateUI(): void {
     ? '未保存の変更があります。'
     : '');
   saveButton.disabled = saving || !changed || errors.length > 0 || Boolean(warnings.length && !hasApproval());
+  zeroSaveButton.hidden=deletionPending||deletionNeedsReload;
+  zeroSaveButton.disabled=saving||deletionPending||deletionConfirming||deletionNeedsReload||errors.length>0||!zeroInputTargets(values).length;
   employerInput.disabled=saving||deletionPending||deletionNeedsReload;
   if(deletionPending||deletionNeedsReload){
     reviewConfirmation.hidden=true;currentReview.hidden=true;
@@ -175,6 +188,20 @@ form.addEventListener('change', event => {
 });
 form.addEventListener('submit', event => event.preventDefault());
 confirmDiff.addEventListener('change', () => { reviewApproval=confirmDiff.checked&&!confirmDiff.disabled?approvalFingerprint():null;clearInlineError(errorView); updateUI(); });
+// Explicit user action only. Reuse the normal save/validation/conflict path;
+// do not create import provenance for values entered later in the editor.
+function saveWithOptionalZeros():void {
+  if(!record||saving||deletionPending||deletionConfirming||deletionNeedsReload||zeroSaveButton.disabled||!captureOperationAuthorization()())return;
+  const targets=zeroInputTargets(getValues());
+  if(!targets.length)return;
+  for(const input of targets)input.value='0';
+  reviewApproval=null;
+  clearInlineError(errorView);
+  updateUI();
+  if(!saveButton.disabled)saveButton.click();
+  else if(!reviewConfirmation.hidden&&!confirmDiff.disabled)confirmDiff.focus();
+}
+zeroSaveButton.addEventListener('click',saveWithOptionalZeros);
 saveButton.addEventListener('click', async () => {
   if(deletionPending){await commitPendingDeletion();return;}
   if (!record || saving || deletionNeedsReload || !hasUnsavedChanges()) return;
@@ -185,6 +212,9 @@ saveButton.addEventListener('click', async () => {
   if (checked.errors.length) { showError(checked.errors[0]); return; }
   if (checked.warnings.length && !hasApproval()) return;
   const operationEpoch=authEpoch(),authorized=captureOperationAuthorization();
+  const perf=beginPerfOperation('payroll-edit');
+  let completed=false;
+  perf.mark('save-prepare');
   saving = true;
   appStatus.loading('明細の変更を保存しています…');
   updateUI();
@@ -197,28 +227,51 @@ saveButton.addEventListener('click', async () => {
       zeroResolution: reconcilePayrollZeroResolution(record.zeroResolution,formValues),
       ...editedReviewRecord(record,checked.warnings,hasApproval(),new Date().toISOString()),
     };
-    let freshDirectory:EmployerEntry[]|undefined;
-    const conflicts = await inspectReplacementConflicts([updated], updated.id,directory=>{freshDirectory=directory;});
-    if(!freshDirectory)throw new Error('勤務先一覧を確認できませんでした。');
-    if(!authorized()){saving=false;updateUI();return;}
-    if(employerDirectorySignature(freshDirectory)!==employerDirectorySignature(employerDirectory)){
-      employerDirectory=freshDirectory;refreshEmployerSelect(employerId);reviewApproval=null;saving=false;appStatus.warning('勤務先一覧が更新されました。選択内容を確認してください。',true);updateUI();return;
-    }
-    if (conflicts.length) {
-      const lines = conflicts.map(c => `・${employerDisplayName(employerDirectory,c.employerId,c.period.split('|')[0])} / ${c.fileName}（${c.period.split('|').slice(0,3).join(' / ')}）`).join('\n');
-      if(!await confirmOperation({title:'重複する明細を整理',subject:`残す明細：${employerDisplayName(employerDirectory,updated.employerId,updated.form.job)} / ${updated.fileName}`,tone:'danger',acceptLabel:'保存して重複明細を除外',details:[
-        `一覧・収入情報から除外する明細：${conflicts.length}件\n${lines}`,
-        '明細とFinance連携を更新します。除外対象の暗号化PDF原本は保全し、設定から別途整理できます。',
-      ]},authorized)||!authorized()) {
-        saving=false;appStatus.clear();updateUI();return;
+    let reviewConflicts=needsEditConflictReview(record,updated);
+    for(;;){
+      let conflicts:ReplacementConflict[]=[];
+      if(reviewConflicts){
+        perf.mark('save-duplicates');
+        let freshDirectory:EmployerEntry[]|undefined;
+        conflicts=await inspectReplacementConflicts([updated],updated.id,directory=>{freshDirectory=directory;});
+        if(!freshDirectory)throw new Error('勤務先一覧を確認できませんでした。');
+        if(!authorized()){saving=false;updateUI();return;}
+        employerDirectory=freshDirectory;
+        if(!employerAssignmentAllowed(employerDirectory,formValues.job,employerId,record)){
+          refreshEmployerSelect(employerId);reviewApproval=null;saving=false;appStatus.warning('勤務区分に対応する勤務先を選び直してください。',true);updateUI();return;
+        }
+      }
+      if (conflicts.length) {
+        const lines = conflicts.map(c => `・${employerDisplayName(employerDirectory,c.employerId,c.period.split('|')[0])} / ${c.fileName}（${c.period.split('|').slice(0,3).join(' / ')}）`).join('\n');
+        if(!await confirmOperation({title:'重複する明細を整理',subject:`残す明細：${employerDisplayName(employerDirectory,updated.employerId,updated.form.job)} / ${updated.fileName}`,tone:'danger',acceptLabel:'保存して重複明細を除外',details:[
+          `一覧・収入情報から除外する明細：${conflicts.length}件\n${lines}`,
+          '明細とFinance連携を更新します。除外対象の暗号化PDF原本は保全し、設定から別途整理できます。',
+        ]},authorized)||!authorized()) {
+          saving=false;appStatus.clear();updateUI();return;
+        }
+      }
+      if(!authorized()){saving=false;appStatus.clear();updateUI();return;}
+      // Modal confirmation is asynchronous: do not save a draft changed during confirmation.
+      if(employerRoleSelectionRequired||JSON.stringify(applicablePayrollForm(getValues()))!==JSON.stringify(formValues)||(employerInput.value.trim()||undefined)!==employerId||(checked.warnings.length&&!hasApproval())){
+        saving=false;appStatus.warning('入力内容が変わりました。もう一度確認してください。');updateUI();return;
+      }
+      perf.mark('save-records');
+      try{
+        await updateRecordMetadata(updated, conflicts, recordSignature(record),stage=>{
+          if(stage.startsWith('解析済み給与データ'))perf.mark('save-annual');
+          else if(stage.startsWith('Finance連携用'))perf.mark('save-finance');
+          else if(stage.startsWith('クラウド保存と検証'))perf.mark('save-finish');
+          appStatus.loading(stage);
+        });
+        break;
+      }catch(error){
+        // The preflight error can only escape after a safe lock release. Prompt
+        // outside the lock, then revalidate every approval in the next attempt.
+        if(!(error instanceof PayrollEditConflictError)||reviewConflicts||!authorized())throw error;
+        reviewConflicts=true;
       }
     }
-    if(!authorized()){saving=false;appStatus.clear();updateUI();return;}
-    // Modal confirmation is asynchronous: do not save a draft changed during confirmation.
-    if(employerRoleSelectionRequired||JSON.stringify(applicablePayrollForm(getValues()))!==JSON.stringify(formValues)||(employerInput.value.trim()||undefined)!==employerId||(checked.warnings.length&&!hasApproval())){
-      saving=false;appStatus.warning('入力内容が変わりました。もう一度確認してください。');updateUI();return;
-    }
-    await updateRecordMetadata(updated, conflicts, recordSignature(record),stage=>appStatus.loading(stage),employerDirectorySignature(employerDirectory));
+    completed=true;
     if(!authorized()){saving=false;updateUI();return;}
     if(operationEpoch===authEpoch())rememberNavigationNotice({operation:'edit-saved'},operationEpoch);
     leavingAfterSave = true;
@@ -243,7 +296,7 @@ saveButton.addEventListener('click', async () => {
     }
     showError(`保存処理を完了できませんでした。再読込して最新の状態を確認してください。\n${detail}`);
     updateUI();
-  }
+  }finally{perf.finish(completed);}
 });
 deleteButton.addEventListener('click',()=>{
   if(!record||saving||deletionConfirming||deletionNeedsReload)return;

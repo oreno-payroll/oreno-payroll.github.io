@@ -1,10 +1,10 @@
 /** Fail-closed manifest audit of the *actual* GitHub Pages artifact. */
-import {lstatSync, readFileSync, readdirSync, existsSync} from 'node:fs';
+import {lstatSync, readFileSync, readdirSync, existsSync, mkdtempSync, rmSync} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {findSensitiveContent} from './audit-rules.mjs';
 
 const project=fileURLToPath(new URL('../',import.meta.url));
@@ -150,11 +150,54 @@ export async function auditDist({root=project,requirePrivateTerms=false,verifyBu
   }
   return {count:actual.length,problems};
 }
+// MSAL 5.30.0 / Common 16.17.0 / esbuild 0.28.2: the generic rule matches
+// adjacent minified references to JsonWebTokenTypes and OIDC_DEFAULT_SCOPES.
+// Never ignore a file, line, or rule. Accept only this exact full-bundle hash
+// and the exact Match/Secret digests, after the deterministic build audit.
+const reviewedMsalHash='7603931c55f5b499f26396b12b627b2aba5c5344ee29d7c658231adc2676eb0e';
+export function classifyDistGitleaks(status, report, bundleHash){
+  const findings=report===null?[]:report;
+  if(!Array.isArray(findings))return 'fail';
+  if(status===0&&findings.length===0)return 'clean';
+  if(status!==42||findings.length!==1||bundleHash!==reviewedMsalHash)return 'fail';
+  const finding=findings[0];
+  if(!finding||finding.RuleID!=='generic-api-key'||finding.File!=='dist/vendor/msal/msal-browser.bundle.js'||
+    finding.StartLine!==1||finding.EndLine!==1||typeof finding.Match!=='string'||typeof finding.Secret!=='string')return 'fail';
+  if(sha(finding.Match)!=='daa40aaa77bfc3c9e78384ea71c8eef0aa097ab892e6effda587c3d53c5c25de'||
+     sha(finding.Secret)!=='af23911312fa79893ff95e7b702f76c1f0d7ade2f7a2d68dab8f993808a5e945')return 'fail';
+  return 'reviewed';
+}
+function auditDistGitleaks(root){
+  const bundle=path.join(root,'dist/vendor/msal/msal-browser.bundle.js');
+  const before=sha(readFileSync(bundle));
+  // The report contains unredacted bytes, only in a private temporary directory.
+  // Never log scanner output, raw matches, or parse errors containing report data.
+  const temp=mkdtempSync(path.join(os.tmpdir(),'payroll-dist-gitleaks-'));
+  try{
+    const report=path.join(temp,'report.json');
+    const result=spawnSync('gitleaks',['dir','--redact=0','--no-banner','--exit-code','42',
+      '--report-format','json','--report-path',report,'dist'],{cwd:root,stdio:'ignore'});
+    if(result.error||result.signal||![0,42].includes(result.status)||!existsSync(report))return 'fail';
+    const after=sha(readFileSync(bundle));
+    if(before!==after)return 'fail';
+    return classifyDistGitleaks(result.status,JSON.parse(readFileSync(report,'utf8')),after);
+  }catch{return 'fail';}
+  finally{rmSync(temp,{recursive:true,force:true});}
+}
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
     const result=await auditDist({requirePrivateTerms:process.argv.includes('--require-private-terms')});
     for(const p of result.problems)console.error('NG: '+p);
     if(result.problems.length)process.exitCode=1;
-    else console.log(`[dist監査] PASS: 配信${result.count}ファイル、許可リスト・完全コピー照合・生成コード・CSP・個人情報`);
+    else {
+      const scan=auditDistGitleaks(project);
+      if(scan==='fail'){
+        console.error('[dist Gitleaks] NG: 未確認の検出またはスキャン失敗（検出値非表示）');
+        process.exitCode=1;
+      }else{
+        console.log(scan==='reviewed'?'[dist Gitleaks] PASS: 検証済みMSALの既知の誤検知1件のみ（完全ハッシュ・検出内容一致）':'[dist Gitleaks] PASS: 検出0件');
+        console.log(`[dist監査] PASS: 配信${result.count}ファイル、許可リスト・完全コピー照合・生成コード・CSP・個人情報`);
+      }
+    }
   }catch(e){console.error('[dist監査] NG: '+e.message);process.exitCode=1;}
 }

@@ -16,8 +16,8 @@ assert.match(main,/現在月より前の未登録給与月は補完しません/
 assert.match(style,/\.registration-grid/);
 assert.equal((upload.match(/id="diagnostic-button"/g)||[]).length,1);
 const actions=upload.match(/<div class="selected-file__actions">([\s\S]*?)<\/div>/)?.[1]??'';
-assert.doesNotMatch(actions,/diagnostic-button/,'ordinary PDF actions must not include diagnostics');
-const details=upload.match(/<details class="upload-troubleshooting">([\s\S]*?)<\/details>/)?.[1]??'';
-assert.match(details,/id="diagnostic-button"/,'diagnostic stays accessible inside collapsed troubleshooting');
-assert.match(details,/個人情報/,'troubleshooting warns about privacy');
-console.log('PASS: 12-month salary registration grid, no retrospective calendar salary forecasts, diagnostic separated');
+assert.match(actions,/id="open-pdf"[\s\S]*id="diagnostic-button"/,'diagnostic follows PDF preview');
+assert.match(actions,/id="diagnostic-button"[^>]*aria-label="詳細診断"/);
+assert.doesNotMatch(upload,/upload-troubleshooting/);
+assert.match(upload,/原文（個人情報を含む）/);
+console.log('PASS: registration grid, calendar forecasts, compact diagnostic entry');

@@ -4,8 +4,12 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {runInNewContext} from 'node:vm';
 const src=readFileSync(new URL('../src/upload.ts',import.meta.url),'utf8');
-const begin=src.indexOf('function yieldSavePaint()'),end=src.indexOf('// PDFの元テキスト',begin);
-assert.ok(begin>=0&&end>begin);
+const begin=src.indexOf('function yieldSavePaint()');
+const handler=src.indexOf('saveButton.addEventListener("click", async () => {',begin);
+// Use the top-level handler's closing delimiter, not the next feature's comment.
+const close=src.indexOf('\n});',handler);
+assert.ok(begin>=0&&handler>begin&&close>handler,'save handler boundaries');
+const end=close+4;
 const recovery=src.slice(src.indexOf("uploadRecoveryRecheck.addEventListener('click'"),begin);
 const code=stripTypeScriptTypes(recovery+src.slice(begin,end),{mode:'transform'});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};

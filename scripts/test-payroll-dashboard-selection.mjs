@@ -67,4 +67,46 @@ ctx.renderForecastExplanation=()=>{};ctx.dashboardStale=false;ctx.forecastToggle
 assert.equal(el('main-gross').textContent,'100000');assert.equal(el('side-gross').textContent,'45000');assert.equal(el('total-gross').textContent,'145000');assert.deepEqual(lists.get('side'),[12,13]);
 ctx.forecastToggle.checked=false;ctx.doRender();assert.equal(el('total-gross').textContent,'125000');
 ctx.forecastToggle.checked=true;bonusToggle.checked=false;ctx.doRender();assert.equal(el('total-gross').textContent,'120000');assert.deepEqual(lists.get('side'),[12,13]);
+// Execute the real detail action: actual records, forecast-only values and the guarded edit route.
+const drilldown=src.slice(src.indexOf('function showMissingRecords('),src.indexOf('function updateSummary('));
+let request,guard,authorized=true;
+const drillCtx={summary,withEstimates,periodMode:'fiscal',yearSelect:{value:'2026'},dashboardLoading:false,dashboardStale:false,deletionBusy:()=>false,
+ captureOperationAuthorization:()=>()=>authorized,employerName:()=>'<synthetic>',pendingDeletion:{has:()=>false},
+ fiscalYearOfTargetMonth:()=>2026,editPeriodQuery:()=> 'mode=fiscal&year=2026',showOperationMessage:(req,g)=>{request=req;guard=g;}};
+runInNewContext(stripTypeScriptTypes(drilldown,{mode:'strip'})+'\nglobalThis.open=showMissingRecords;',drillCtx);
+const trigger={isConnected:true};
+records[2].fileName='synthetic-statement.pdf';
+drillCtx.open('total','taxable',fiscal,[sample,unknown],trigger);
+assert.equal(request.links.length,1);assert.match(request.links[0].href,/#id=3&mode=fiscal&year=2026&hintYear=2026$/);
+assert.equal(request.links[0].label,'synthetic-statement.pdf');assert.match(request.links[0].description,/2026年12月 · 副業 · <synthetic> · 給与/);assert.deepEqual(Array.from(request.details),['未入力の明細：1件']);assert.match(request.afterLinks.join('\n'),/見込みの算出不足：1件/);
+assert.equal(request.afterLinks.length,1);assert.doesNotMatch(request.afterLinks.join('\n'),/0を入力/);
+drillCtx.pendingDeletion.has=()=>true;drillCtx.open('total','taxable',fiscal,[unknown],trigger);assert.match(request.links[0].description,/削除待ち$/);drillCtx.pendingDeletion.has=()=>false;
+assert.equal(guard(),true);trigger.isConnected=false;assert.equal(guard(),false);trigger.isConnected=true;authorized=false;assert.equal(guard(),false);authorized=true;
+drillCtx.open('main','taxable',[records[0]],[unknown],trigger);assert.equal(request.links.length,0);assert.match(request.details[0],/未入力はありません/);assert.match(request.afterLinks[0],/見込みの算出不足：1件/);
+drillCtx.open('side','nonTaxable',[records[2],records[3]],[],trigger);assert.equal(request.links.length,1);assert.match(request.links[0].href,/#id=3&/);assert.equal(request.afterLinks.length,0);
+drillCtx.dashboardStale=true;request=undefined;drillCtx.open('total','taxable',fiscal,[],trigger);assert.equal(request,undefined);
 console.log('PASS: dashboard period/income/list separation, all-period ZIP, actual and forecast taxable amounts, missing values, employer forecast and global switches');
+// Exercise the actual forecast explanation renderer, not a duplicated formatter.
+const explanationSource=src.slice(src.indexOf('function renderForecastExplanation('),src.indexOf('/** Reuse the actual aggregation rules'));
+const domNode=()=>({textContent:'',children:[],append(...nodes){this.children.push(...nodes);},replaceChildren(){this.children=[];}});
+const forecastDetails=domNode();
+const explanationCtx={forecastPanel:{},forecastDetails,forecastStatus:{},periodMode:'fiscal',bonusToggle:{checked:true},SALARY_FORECAST_LABELS:{latest:'latest'},yen:n=>`${n}円`,document:{createElement:domNode}};
+runInNewContext(stripTypeScriptTypes(explanationSource,{mode:'strip'})+'\nglobalThis.renderExplanation=renderForecastExplanation;',explanationCtx);
+const makeEstimate=(gross,i,kind,partial=false)=>({month:`2026-${String(i+10).padStart(2,'0')}`,job:'main',kind,values:{gross,net:null,taxable:null,nonTaxable:null,incomeTax:null,residentTax:null,socialInsurance:null,transportation:0,reimbursedExpenses:0},incomplete:{gross:partial}});
+for(const mode of ['fiscal','calendar']){
+ explanationCtx.periodMode=mode;
+ const period=mode==='fiscal'?'年度':'暦年';
+ for(const [values,partial,expected] of [[[null,null],false,'算出不可'],[[0,0],false,'0円'],[[100,200],false,'300円'],[[null,200],false,'200円 ※'],[[0,null],false,'0円 ※'],[[100,200],true,'300円 ※']]){
+  const estimates=values.map((v,i)=>makeEstimate(v,i,'salary',partial));
+  const bonusEstimates=values.map((v,i)=>makeEstimate(v,i,'bonus',partial));
+  const main={salaryMethod:'latest',sampleMonths:['2026-09'],pendingMonths:estimates.map(e=>e.month),estimates,bonusEstimates,bonusMonths:[10,11],bonusSampleMonth:'2026-09'};
+  const side={salaryMethod:'latest',reason:'対象なし',bonusEstimates:[],bonusMonths:[],estimates:[]};
+  explanationCtx.renderExplanation({jobs:{main,side},estimates:[...estimates,...bonusEstimates]});
+  const rows=forecastDetails.children.filter(e=>e.className==='forecast-job-row');
+  assert.ok(rows[0].children[1].textContent.includes(`${period}への加算 ${expected}｜参照`));
+  assert.ok(rows[1].children[1].textContent.includes(`額面合計 ${expected}｜1回`));
+  if(values[0]===null)assert.match(rows[0].children[1].textContent,/月額総支給額 算出不可/);
+  assert.equal(rows[2].children[1].textContent,'latest｜対象なし');
+ }
+}
+console.log('PASS: actual salary and bonus explanation distinguishes unavailable, zero, known and partial totals in fiscal/calendar modes');

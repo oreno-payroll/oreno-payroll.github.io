@@ -27,8 +27,8 @@ assert.match(upload,/saveProgress\.removeAttribute\('aria-valuenow'\)/,'unknown 
 assert.match(upload,/明細・PDFの書き込みは開始していません/);
 assert.match(upload,/選択したPDFと入力内容は保持しています/);
 assert.match(store,/onProgress\?\:\(stage:string\)=>void/,'metadata-only edit exposes progress callback without fetching PDF');
-assert.match(store,/await vault\.save\(\{\.\.\.record,revision:\(prior\.revision\?\?0\)\+1\},onProgress,/);
-assert.match(edit,/updateRecordMetadata\(updated, conflicts, recordSignature\(record\),stage=>appStatus\.loading\(stage\),employerDirectorySignature\(employerDirectory\)\)/);
+assert.match(store,/await vault\.save\(record,onProgress,/);
+assert.match(edit,/updateRecordMetadata\(updated, conflicts, recordSignature\(record\),stage=>\{[\s\S]*?appStatus\.loading\(stage\);/);
 assert.doesNotMatch(dashboard,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
 assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
 

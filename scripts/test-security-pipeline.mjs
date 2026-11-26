@@ -8,7 +8,30 @@ import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {auditWorkflow} from './audit-ci-workflow.mjs';
-import {auditDist} from './audit-dist.mjs';
+import {auditDist, classifyDistGitleaks} from './audit-dist.mjs';
+// A reviewed false positive must not create a generic rule, path, or line bypass.
+const reviewedHash='7603931c55f5b499f26396b12b627b2aba5c5344ee29d7c658231adc2676eb0e';
+const publicExpression=['uO','y.OIDC_DEFAULT_SCOPES'].join('=');
+const reviewedFinding={RuleID:'generic-api-key',File:'dist/vendor/msal/msal-browser.bundle.js',
+ StartLine:1,EndLine:1,Match:['y.JsonWebTokenTypes',publicExpression].join(',')+';',Secret:publicExpression};
+assert.equal(classifyDistGitleaks(42,[reviewedFinding],reviewedHash),'reviewed');
+assert.equal(classifyDistGitleaks(0,[],reviewedHash),'clean');
+assert.equal(classifyDistGitleaks(0,null,reviewedHash),'clean');
+for(const [status,findings,hash] of [
+ [42,[reviewedFinding],'0'.repeat(64)],
+ [42,[reviewedFinding,{...reviewedFinding}],reviewedHash],
+ [42,[{...reviewedFinding,File:'dist/main.js'}],reviewedHash],
+ [42,[{...reviewedFinding,RuleID:'other-rule'}],reviewedHash],
+ [42,[{...reviewedFinding,StartLine:2}],reviewedHash],
+ [42,[{...reviewedFinding,Match:'different match'}],reviewedHash],
+ [42,[{...reviewedFinding,Secret:'different expression'}],reviewedHash],
+ [1,[reviewedFinding],reviewedHash],
+ [0,[reviewedFinding],reviewedHash],
+ [42,[],reviewedHash],
+ [42,null,reviewedHash],
+ [0,{},reviewedHash],
+])assert.equal(classifyDistGitleaks(status,findings,hash),'fail');
+console.log('PASS: exact MSAL false-positive scope, altered bundle and additional findings fail closed');
 const root=fileURLToPath(new URL('../',import.meta.url));
 const workflow=readFileSync(path.join(root,'.github/workflows/deploy.yml'),'utf8');
 assert.deepEqual(auditWorkflow(workflow),[],'current workflow gates are intact');

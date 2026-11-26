@@ -336,10 +336,34 @@
   font-size: 10px;
   line-height: 1.4;
   font-weight: 650;
-  color: #865c21;
+  color: var(--color-warning);
   white-space: normal;
   letter-spacing: normal;
 }
+button.partial-count {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.partial-count:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.operation-dialog--links[open] { display: flex; flex-direction: column; overflow: hidden; }
+.operation-dialog--links > h2, .operation-dialog--links > .operation-dialog__actions { flex: none; }
+.operation-dialog--links > .operation-dialog__details { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.operation-dialog__links { list-style: none; margin: 0; padding: 4px; display: grid; gap: 8px; min-width: 0; }
+.operation-dialog__links > li { min-width: 0; }
+.operation-dialog__link { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-primary); overflow-wrap: anywhere; text-decoration: none; }
+.operation-dialog__link::after { content: ''; flex: none; width: 7px; height: 7px; border-top: 1.5px solid currentColor; border-right: 1.5px solid currentColor; transform: rotate(45deg); margin-right: 3px; }
+.operation-dialog__link:hover { background: var(--color-primary-soft); text-decoration: none; }
+.operation-dialog__link-content { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.operation-dialog__link-label { font-weight: 650; line-height: 1.45; }
+.operation-dialog__link-description { color: var(--color-muted); font-size: 12px; line-height: 1.5; }
+.operation-dialog__link-note { color: var(--color-muted); font-size: 12px; }
+
 /* 欠損項目がある集計行は通常の金額表示のまま、ラベル下の注記だけを増やす。 */
 .details-list > div.has-missing-data,
 .job-card__footer.has-missing-data { align-items: flex-start; }

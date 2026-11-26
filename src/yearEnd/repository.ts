@@ -473,7 +473,7 @@ export class YearEndRepository {
   const perf=yearEndPerf('yearend-pdf-batch');let perfSuccess=false;
   try{
   const context=await this.yearContext(a,id,year,Boolean(additions.length));
-  if(state)a.graph.markUploadCheckpoint();
+  if(state)await a.graph.markUploadCheckpoint();
   const now=new Date().toISOString();
   let working:YearData={...context.data,documents:[...context.data.documents],estimates:[...context.data.estimates],
    bonusEstimates:[...context.data.bonusEstimates],noPaymentMonths:[...context.data.noPaymentMonths],history:[...context.data.history]};
@@ -585,12 +585,12 @@ export class YearEndRepository {
    const outcomes=await Promise.allSettled(pending.slice(i,i+3).map(uploadAndCheck));
    const failed=outcomes.find((result):result is PromiseRejectedResult=>result.status==='rejected');
    if(failed)throw new Error('PDFの暗号化保存中に問題が発生しました。未参照の暗号化PDFが残った可能性があります。保存状態を確認してください。',{cause:failed.reason});
-   if(state)a.graph.markUploadCheckpoint();
+   if(state)await a.graph.markUploadCheckpoint();
   }
   try{await this.saveYear(a,id,year,context.file,working,context.yearFile,context);}
   catch(error){throw new Error(pending.length?'暗号化PDF原本は保存されましたが、年度データの確定に失敗しました。二重登録せず再読み込みしてください。':'年度データの保存に失敗しました。再読み込みしてください。',{cause:error});}
   // The annual commit is authoritative; keep encrypted originals for recovery.
-  if(state)a.graph.markUploadCheckpoint();
+  if(state)await a.graph.markUploadCheckpoint();
   const cleanupPending=removed.length;
   perfSuccess=true;
   return {data:working,yearFiles:context.profile.value.yearFiles,cleanupPending};

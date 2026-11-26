@@ -8,8 +8,8 @@ for(const page of ['public/upload/index.html','public/edit/index.html']){
   assert.doesNotMatch(read(page),/<nav class="breadcrumb"/,'the header already links to home');
   assert.match(read(page),/ホームへ戻る/);
 }
-assert.match(edit,/saveButton\.disabled = saving \|\| !changed \|\| errors\.length/);
-assert.match(edit,/if \(!record \|\| saving \|\| deletionNeedsReload \|\| !hasUnsavedChanges\(\)\) return/);
+assert.match(edit,/saveButton\.disabled = saving \|\| employerRefreshing \|\| !changed \|\| errors\.length/);
+assert.match(edit,/if \(!record \|\| saving \|\| employerRefreshing \|\| deletionNeedsReload \|\| !hasUnsavedChanges\(\)\) return/);
 assert.match(edit,/subject:`残す明細：\$\{employerDisplayName\(employerDirectory,updated\.employerId,updated\.form\.job\)\}/);
 assert.match(edit,/一覧・収入情報から除外する明細：\$\{conflicts\.length\}件/);
 assert.match(edit,/employerDisplayName\(employerDirectory,c\.employerId,c\.period\.split/);

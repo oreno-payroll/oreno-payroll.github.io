@@ -13,9 +13,8 @@
 .yea-person-option:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .yea-person-chevron{font-weight:600;font-size:24px;line-height:1;color:var(--color-muted);flex-shrink:0}
 .yea-empty{color:var(--color-muted);font-size:12px;line-height:1.6;margin:18px 0 4px}
-.yea-create-form{display:grid;gap:10px;margin-top:17px}
+.yea-create-fields{display:grid;gap:10px}
 .yea-create-form label,.yea-panel label,.yea-context-tools label{font-size:12px;font-weight:750;color:var(--color-text)}
-.yea-create-form .btn{justify-self:start;margin-top:3px}
 .yea-pending{display:grid;gap:9px;margin-top:16px}
 .yea-page button:not(:disabled):focus-visible,.yea-create-dialog button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .yea-main{display:grid;gap:15px;min-width:0}
@@ -60,9 +59,6 @@
 .yea-estimate-actions{display:flex;align-items:center;gap:8px;color:var(--color-muted);font-size:12px;white-space:nowrap;padding-bottom:8px}
 .yea-month input[type=number]:disabled{opacity:.58;background:#f4f6fa;cursor:default}
 .yea-month[data-state="draft"]{border-color:var(--state-selected-border);background:var(--state-selected-bg)}
-.yea-create-dialog:not([open]){display:none}
-.yea-manage-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
-.yea-manage-head h2{font-size:17px;font-weight:800;margin:0}
 .yea-memo-panel{display:grid;gap:10px}
 .yea-page .yea-memo-textarea{display:block;width:100%;max-width:100%;min-height:160px;resize:vertical;border:1px solid var(--color-border-strong);border-radius:10px;background:#fff;color:var(--color-text);padding:13px 14px;font:inherit;font-size:13px;line-height:1.7;overflow-wrap:anywhere}
 .yea-memo-textarea:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
@@ -114,7 +110,8 @@
 .yea-review-edit-actions{display:flex;align-items:center;gap:10px;margin:0 0 14px;flex-wrap:wrap}
 .yea-upload-workspace .selected-file__actions .btn .icon{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .yea-upload-savebar{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:16px}
-.yea-upload-savebar span{margin-right:auto;font-size:12px;color:var(--color-muted);line-height:1.5}
+.yea-upload-savebar > [data-status-inline]{margin-right:auto;min-width:0;flex:1}
+.yea-upload-savebar #yea-upload-progress{font-size:12px;color:var(--color-muted);line-height:1.5}
 .yea-upload-savebar .btn{flex:none;min-width:140px}
 @media(max-width:950px){.yea-upload-workspace{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:640px){

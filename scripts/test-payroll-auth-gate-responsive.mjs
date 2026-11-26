@@ -109,3 +109,10 @@ async function simulate(mode){
 }
 for(const scenario of ['manual','reload','success','failure'])await simulate(scenario);
 console.log('PASS: immediately visible MSAL status, delayed-help copy, manual recovery/reload, late-result protection, success/error routing');
+
+// All application pages use the same keyboard resize policy, without disabling zoom.
+for(const path of ['public/index.html','public/edit/index.html','public/upload/index.html','public/backup/index.html','public/year-end-assist/index.html','public/view/index.html']){
+ const viewport=read(path).match(/<meta name="viewport" content="([^"]+)"/);
+ assert.ok(viewport,path);assert.match(viewport[1],/interactive-widget=resizes-content/);
+ assert.doesNotMatch(viewport[1],/user-scalable=no|maximum-scale/);
+}

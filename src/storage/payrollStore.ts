@@ -245,6 +245,14 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
  // The ordinary upload preflight runs under the batch lock when writing.
  // Skipped-only requests verify originals and repair only stale derived income.
  const uploadPreflight=async(baseline?:readonly CloudRecord[]):Promise<UploadRecoveryEvidence>=>{
+  if(baseline!==undefined){
+   // Only records relevant to the original selection/skip decision must remain
+   // identical at the locked preflight. Unknown legacy hashes are always relevant.
+   const relevant=(list:readonly CloudRecord[])=>physicalRestoreSnapshot(list.filter(item=>!item.fileHash||records.some(record=>record.fileHash===item.fileHash||payrollPeriodRelation(item,record)!=='different')));
+   if(!authorized()||relevant(existing)!==relevant(baseline))
+    throw new Error('保存前の照合後に明細または認証状態が変更されました。再検査してください。');
+   checkLimits(baseline,accepted);
+  }
   report('PDF原本を確認中…');
   let evidence:UploadRecoveryEvidence|undefined;
   const scope=recoverAcrossMonths?undefined:[...new Set(accepted.map(r=>r.form.targetMonth))].sort();
@@ -258,8 +266,8 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
   if(!evidence)throw new Error('PDF原本の照合結果を確認できません。');
   return evidence;
  };
- // The write path compares this complete baseline again under the remote lock,
- // before preflight or any write. A second unlocked refresh adds no protection.
+ // Under the remote lock, recheck the selection/skip decision before adopting
+ // the current complete inventory. Subsequent commit/readback checks stay strict.
  checkLimits(existing,accepted);
  const used=new Set(existing.map(x=>x.id));
  const batch:SavedPayrollRecord[]=accepted.map(item=>{

@@ -71,8 +71,57 @@ export class PayrollGraph {
   private writeSerial=0;
   private uploadCheckpoint=-1;
   /** Called only after an upload batch has authenticated every preceding business write. */
-  markUploadCheckpoint():void {
-    if(this.writeOwner&&!this.writeUncertain)this.uploadCheckpoint=this.writeSerial;
+  async markUploadCheckpoint():Promise<void> {
+    if(this.writeOwner&&!this.writeUncertain){
+      this.uploadCheckpoint=this.writeSerial;
+      await this.publishCheckpointReceipt();
+    }
+  }
+  // Reuse the exact-owner receipt. A Web Lock protects it while the browser
+  // operation is alive. No age, salary, key, account, or pending request is stored.
+  private checkpointReceipt:string|null=null;
+  private checkpointPublished=false;
+  private checkpointRemoval:Promise<void>|null=null;
+  private browserLocks():LockManager|undefined{
+    try{return typeof navigator==='undefined'?undefined:navigator.locks;}catch{return undefined;}
+  }
+  // Unlike localStorage, an explicitly strict IndexedDB transaction can commit
+  // revocation before a remote request is dispatched. A stale marker after a
+  // browser crash must never authorize deleting a lock for an unknown write.
+  // This isolated store contains only the existing opaque owner fingerprint.
+  private async checkpointStorage(receipt:string,action:'read'|'put'|'delete'):Promise<boolean>{
+    if(typeof indexedDB==='undefined')throw new Error('復旧用の保存領域を利用できません。');
+    const db=await new Promise<IDBDatabase>((resolve,reject)=>{
+      const req=indexedDB.open('payroll-lock-checkpoints-v1',1);let blocked=false;
+      req.onupgradeneeded=()=>req.result.createObjectStore('receipts');
+      req.onblocked=()=>{blocked=true;reject(new Error('復旧用の保存領域を開けません。'));};
+      req.onerror=()=>reject(req.error);
+      req.onsuccess=()=>{if(blocked)req.result.close();else resolve(req.result);};
+    });
+    try{return await new Promise<boolean>((resolve,reject)=>{
+      const tx=action==='read'?db.transaction('receipts','readonly'):db.transaction('receipts','readwrite',{durability:'strict'});
+      if(action!=='read'&&tx.durability!=='strict'){tx.abort();reject(new Error('復旧情報の永続化を確認できません。'));return;}
+      const store=tx.objectStore('receipts');let exists=false;
+      tx.oncomplete=()=>resolve(action==='read'?exists:true);
+      tx.onabort=()=>reject(tx.error??new Error('復旧情報の更新が中断されました。'));
+      if(action==='read'){const req=store.get(receipt);req.onsuccess=()=>{exists=req.result===1;};}
+      else if(action==='put')store.put(1,receipt);
+      else store.delete(receipt);
+    });}finally{db.close();}
+  }
+  private async publishCheckpointReceipt():Promise<void>{
+    if(!this.checkpointReceipt||this.checkpointPublished)return;
+    try{await this.checkpointStorage(this.checkpointReceipt,'put');this.checkpointPublished=true;}catch{/* No persistent recovery without a committed strict transaction. */}
+  }
+  private async clearCheckpointBeforeWrite():Promise<void>{
+    if(!this.checkpointReceipt||!this.checkpointPublished)return;
+    const receipt=this.checkpointReceipt;
+    // Parallel original transfers share the same durable revocation. Do not
+    // dispatch ANY business request until it has committed.
+    if(!this.checkpointRemoval)this.checkpointRemoval=this.checkpointStorage(receipt,'delete').then(()=>{this.checkpointPublished=false;});
+    try{await this.checkpointRemoval;}
+    catch{throw new Error('保存ロックの復旧情報を更新できません。ブラウザの保存設定を確認してください。');}
+    finally{this.checkpointRemoval=null;}
   }
   private pendingContentChecks:Array<()=>Promise<boolean>>=[];
   private readonly retainedOwners=new WeakMap<PayrollWriteState,{text:string;owner?:WriteOwner;settled?:boolean;confirm?:()=>Promise<boolean>}>();
@@ -92,9 +141,25 @@ export class PayrollGraph {
     if(!live||!live.id||!live.etag||!(/^[a-f0-9]{64}$/.test(live.text))||live.size!==64)return false;
     const owner={id:live.id,etag:live.etag,text:live.text};
     const receipt=await this.releaseReceipt(owner);
-    try{if(!receipt||localStorage.getItem(receipt)!=='1')return false;}catch{return false;}
-    await this.releaseOwner(owner);
-    return true;
+    if(!receipt)return false;
+    let settled=false;
+    try{settled=localStorage.getItem(receipt)==='1';}catch{}
+    if(settled){
+      await this.releaseOwner(owner);
+      if(this.browserLocks())try{await this.checkpointStorage(receipt,'delete');}catch{}
+      return true;
+    }
+    const locks=this.browserLocks();
+    if(!locks)return false;
+    // Only the same browser storage partition can prove the exact checkpoint
+    // and absence of its active owner. Other tabs/devices cannot steal a lock.
+    return locks.request(receipt,{ifAvailable:true},async lock=>{
+      if(!lock)return false;
+      try{if(!await this.checkpointStorage(receipt,'read'))return false;}catch{return false;}
+      await this.releaseOwner(owner); // fresh identity, ETag and conditional DELETE
+      try{await this.checkpointStorage(receipt,'delete');}catch{}
+      return true;
+    });
   }
   /** A missing lock after a conditional DELETE is evidence of release, not of
    * payroll failure. A different owner is never deleted. */
@@ -114,6 +179,10 @@ export class PayrollGraph {
       // The known item is gone. No data write is retried here.
     }
     try{if(receipt)localStorage.removeItem(receipt);}catch{}
+    if(receipt&&this.checkpointReceipt===receipt&&this.checkpointPublished){
+      try{await this.checkpointStorage(receipt,'delete');}catch{}
+      this.checkpointPublished=false;
+    }
   }
   private markReleased(state?:PayrollWriteState):void{
     if(state){state.lock='released';this.retainedOwners.delete(state);}
@@ -189,32 +258,50 @@ export class PayrollGraph {
       }
       this.writeOwner=evidence.owner!;
       if(state)state.lock='held';
-      const release=async()=>{await this.releaseOwner(this.writeOwner!);this.markReleased(state);};
-      let result:T;
-      try{result=await operation();}
-      catch(error){
-        // Only the verified payroll checkpoint or a derived-data-only operation
-        // may release after a settled failure. Other multi-file mutations retain
-        // the old policy, and an unknown write always retains protection.
-        evidence.settled=!this.writeUncertain&&(state?.payrollSaved===true||releaseSettledFailure||(state!==undefined&&this.uploadCheckpoint===this.writeSerial));
-        // Only a verified payroll checkpoint / derived-only operation can use
-        // delayed positive content proofs. Never treat a partial annual commit as settled.
-        if(state&&(state.payrollSaved||releaseSettledFailure)&&this.uncertainWrites>0&&this.pendingContentChecks.length===this.uncertainWrites){
-          const checks=[...this.pendingContentChecks];
-          evidence.confirm=async()=>{for(const check of checks)if(!await check())return false;return true;};
+      const runOwned=async():Promise<T>=>{
+        const release=async()=>{await this.releaseOwner(this.writeOwner!);this.markReleased(state);};
+        let result:T;
+        try{result=await operation();}
+        catch(error){
+          // Only the verified payroll checkpoint or a derived-data-only operation
+          // may release after a settled failure. Other multi-file mutations retain
+          // the old policy, and an unknown write always retains protection.
+          evidence.settled=!this.writeUncertain&&(state?.payrollSaved===true||releaseSettledFailure||(state!==undefined&&this.uploadCheckpoint===this.writeSerial));
+          // Only a verified payroll checkpoint / derived-only operation can use
+          // delayed positive content proofs. Never treat a partial annual commit as settled.
+          if(state&&(state.payrollSaved||releaseSettledFailure)&&this.uncertainWrites>0&&this.pendingContentChecks.length===this.uncertainWrites){
+            const checks=[...this.pendingContentChecks];
+            evidence.confirm=async()=>{for(const check of checks)if(!await check())return false;return true;};
+          }
+          if(this.writeUncertain||(this.writeAttempted&&!evidence.settled)){
+            if(error instanceof Error){error.message+=' '+LOCK_RETAINED;throw error;}
+            throw new Error(LOCK_RETAINED,{cause:error});
+          }
+          try{await release();}catch(releaseError){if(state)state.lock='unknown';throw new Error('保存ロックの所有権または解除結果を確認できません。'+LOCK_RETAINED,{cause:releaseError});}
+          throw error;
         }
-        if(this.writeUncertain||(this.writeAttempted&&!evidence.settled)){
-          if(error instanceof Error){error.message+=' '+LOCK_RETAINED;throw error;}
-          throw new Error(LOCK_RETAINED,{cause:error});
-        }
-        try{await release();}catch(releaseError){if(state)state.lock='unknown';throw new Error('保存ロックの所有権または解除結果を確認できません。'+LOCK_RETAINED,{cause:releaseError});}
+        if(this.writeUncertain)throw new Error('保存中の通信結果が不明です。'+LOCK_RETAINED);
+        if(state)state.completed=true;
+        try{await release();}catch(error){if(state)state.lock='unknown';throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
+        return result;
+      };
+      const locks=this.browserLocks(),receipt=locks?await this.releaseReceipt(this.writeOwner):null;
+      if(!locks||!receipt)return await runOwned();
+      // The remote lock has already been verified. Hold the browser guard for
+      // the entire operation, including release, before publishing a marker.
+      let callbackStarted=false;
+      try{return await locks.request(receipt,{ifAvailable:true},async lock=>{
+        callbackStarted=true;
+        if(!lock)throw new Error('同じブラウザで保存ロックの確認中です。再試行してください。');
+        this.checkpointReceipt=receipt;await this.publishCheckpointReceipt();
+        return await runOwned();
+      });}catch(error){
+        // Unsupported/disabled Web Locks must not break ordinary saves. Never
+        // retry a callback that has started, and never bypass a busy guard.
+        if(!callbackStarted)return await runOwned();
         throw error;
       }
-      if(this.writeUncertain)throw new Error('保存中の通信結果が不明です。'+LOCK_RETAINED);
-      if(state)state.completed=true;
-      try{await release();}catch(error){if(state)state.lock='unknown';throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
-      return result;
-    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.uncertainWrites=0;this.pendingContentChecks=[];}
+    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.uncertainWrites=0;this.pendingContentChecks=[];this.checkpointReceipt=null;this.checkpointPublished=false;this.checkpointRemoval=null;}
   }
 
   /** Only reconcile a lock belonging to this exact in-memory operation. Positive
@@ -293,7 +380,7 @@ export class PayrollGraph {
       dispatched=false;
       this.assertCurrent();
       if(beforeSend){await beforeSend();this.assertCurrent();}
-      if(!readonly&&!lockControl){await this.verifyWriteOwner();if(this.writeOwner){this.writeAttempted=true;this.writeSerial++;}}
+      if(!readonly&&!lockControl){await this.clearCheckpointBeforeWrite();await this.verifyWriteOwner();if(this.writeOwner){this.writeAttempted=true;this.writeSerial++;}}
       try{dispatched=true;const response=await this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});this.assertCurrent();return response;}
       finally{observeGraphTransfer('graph-api',performance.now()-started);}
     };

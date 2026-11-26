@@ -88,6 +88,7 @@ const employerStatus = $<HTMLElement>("employer-status");
 let employerDirectory:EmployerEntry[]|undefined;
 let employerLoading=false;
 let employerLoadFailed=false;
+let employerRefreshRequested=false;
 function defaultEmployer(entry:Entry):void{
  if(entry.employerChosen||!employerDirectory)return;
  const next=currentEmployer(employerDirectory,entry.form.job);
@@ -105,7 +106,7 @@ async function refreshEmployerChoices(allowPrompt=true):Promise<boolean>{
   const fresh=await vault.readEmployerDirectory();
   if(!authorized())return false;
   const before=entries.map(entry=>entry.employerId??null);
-  employerDirectory=fresh;employerLoadFailed=false;
+  employerDirectory=fresh;employerLoadFailed=false;employerRefreshRequested=false;
   for(const entry of entries){
    if(entry.employerId&&!fresh.some(x=>x.id===entry.employerId&&x.role===entry.form.job)){entry.employerId=undefined;entry.employerChosen=false;setReviewed(entry,false);}
    defaultEmployer(entry);
@@ -115,7 +116,7 @@ async function refreshEmployerChoices(allowPrompt=true):Promise<boolean>{
   render();
   if(allowPrompt&&!saving&&!unchanged)notice('info','勤務先の選択が更新されました。確認して保存してください。');
   return unchanged;
- }catch{employerLoadFailed=true;employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度読み込んでください。';if(allowPrompt&&!saving)notice('error',employerStatus.textContent);return false;}
+ }catch{employerLoadFailed=true;employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度読み込んでください。';if(allowPrompt&&!saving){appStatus.clear();recordNotification('upload','error');}return false;}
  finally{employerLoading=false;updateSaveState();}
 }
 const readResult = $<HTMLDivElement>("read-result");
@@ -131,7 +132,7 @@ const appStatus=createAppStatus(toast,'upload');
 const diagnosticButton = $<HTMLButtonElement>("diagnostic-button");
 const diagnosticDialog = $<HTMLDialogElement>("diagnostic-dialog");
 const diagnosticClose = $<HTMLButtonElement>("diagnostic-close");
-const diagnosticShared = $<HTMLTextAreaElement>("diagnostic-shared");
+const diagnosticShared = $<HTMLPreElement>("diagnostic-shared");
 const diagnosticCopy = $<HTMLButtonElement>("diagnostic-copy");
 const diagnosticModes = $<HTMLFieldSetElement>("diagnostic-modes");
 const diagnosticModeShared = $<HTMLInputElement>("diagnostic-mode-shared");
@@ -764,6 +765,7 @@ employerInput.addEventListener('change',()=>{
  if(entry.employerId===next)return;
  entry.employerId=next;setReviewed(entry,false);renderFileList();updateSaveState();
 });
+$<HTMLAnchorElement>('employer-manage').addEventListener('click',event=>{if(saving||uploadSaveRecoveryChecking){event.preventDefault();return;}employerRefreshRequested=true;updateSaveState();});
 employerLoad.addEventListener('click',()=>{if(!saving&&!employerLoading&&!uploadSaveRecoveryChecking)void refreshEmployerChoices();});
 reviewForm.addEventListener("input", event => {
   const target = event.target;
@@ -847,8 +849,8 @@ function updateSaveState(): void {
   const locked = saving || uploadSaveRecoveryChecking || selectedEntry()?.status === "reading" || selectedEntry()?.status === "queued" || (selectedId !== null && duplicated().has(selectedId));
   for (const control of Array.from(reviewForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input[name],select[name]"))) control.disabled = locked;
   employerInput.disabled=locked||employerLoading||!employerDirectory||!selectedEntry()||!['main','side'].includes(selectedEntry()?.form.job??'');
-  employerLoad.hidden=(employerDirectory!==undefined&&!employerLoadFailed)||employerLoading;
-  employerLoad.textContent=employerLoadFailed?'再読み込み':'保管庫を開く';
+  employerLoad.hidden=(employerDirectory!==undefined&&!employerLoadFailed&&!employerRefreshRequested)||employerLoading;
+  employerLoad.textContent=employerLoadFailed?'再読み込み':employerDirectory?'勤務先一覧を更新':'保管庫を開く';
   employerLoad.disabled=locked||employerLoading||!selectedEntry();
   updateFilePickerState();
   clearButton.disabled = saving || uploadSaveRecoveryChecking;
@@ -882,9 +884,7 @@ function updateSaveState(): void {
   zeroApproval.hidden=blankCount===0||saving||uploadSaveRecoveryRequired;
   zeroCheckbox.disabled=saving||pending||Boolean(badPdf)||Boolean(invalidEntry)||unreviewed.length>0;
   const zeroContradictions=zeroCheckbox.checked?uploadable.filter(entry=>zeroIntroducedWarnings(entry).length>0):[];
-  zeroCount.textContent=zeroContradictions.length
-    ? `${zeroContradictions.length}件で0円補完による検算不一致。該当欄を手動確認するかチェックを外してください。`
-    : `${zeroCounts.length}件・${blankCount}項目（未選択時は空欄）`;
+  zeroCount.textContent=`${zeroCounts.length}件・${blankCount}項目（未選択時は空欄）`;
   saveButton.disabled = saving || uploadSaveRecoveryRequired || uploadSaveRecoveryChecking || employerLoading || entries.length === 0 || pending || Boolean(badPdf) || Boolean(invalidEntry) || unreviewed.length > 0 || zeroContradictions.length > 0;
   saveButtonLabel.textContent = saving ? "保存中…" : "すべて保存";
   const isEmpty=entries.length===0;
@@ -908,7 +908,7 @@ function updateSaveState(): void {
   } else if (unreviewed.length) {
     saveStatus.textContent = `${unreviewed.length}件が未確認です。未確認の明細を選び、原本と照合してください。`;
   } else if (zeroContradictions.length) {
-    saveStatus.textContent = `未取得金額を0円にすると${zeroContradictions.length}件で検算不一致になります。確認して手動入力するか、チェックを外してください。`;
+    saveStatus.textContent = `未入力の金額を0円にすると${zeroContradictions.length}件で検算不一致になります。確認して手動入力するか、チェックを外してください。`;
   } else {
     const duplicateCount = entries.length - uploadable.length;
     saveStatus.textContent = `${uploadable.length}件を保存できます。${duplicateCount ? `同一PDF ${duplicateCount}件を除外。` : ""}`;
@@ -998,7 +998,7 @@ saveButton.addEventListener("click", async () => {
     const approvedAt=new Date().toISOString();
     const records: SavedPayrollRecordInput[] = uploadable.map(entry => {
       if(approveZero&&zeroIntroducedWarnings(entry).length)
-        throw new Error('未取得金額を0円にすると検算不一致が生じます。元のPDFと金額を確認してください。');
+        throw new Error('未入力の金額を0円にすると検算不一致が生じます。元のPDFと金額を確認してください。');
       const prepared=prepareOptionalZeros(
         {...entry.form,workDays:ceilWorkDays(entry.form.workDays)},
         {missingFields:entry.parsed?.missingFields,fields:entry.parsed?.fields,
@@ -1104,11 +1104,15 @@ let diagnosticCopyPending=false;
 function diagnosticCurrent():boolean {
   return Boolean(diagnosticDialog.open&&diagnosticAuthorized?.());
 }
+function clearDiagnosticSelection():void {
+  const selection=window.getSelection();
+  if(selection&&(diagnosticShared.contains(selection.anchorNode)||diagnosticShared.contains(selection.focusNode)))selection.removeAllRanges();
+}
 function closeDiagnostic():void {
   diagnosticGeneration++;
   diagnosticAuthorized=undefined;
   releaseDiagnosticClose?.();releaseDiagnosticClose=undefined;
-  diagnosticRawText="";diagnosticShared.value="";diagnosticState.textContent="";
+  diagnosticRawText="";clearDiagnosticSelection();diagnosticShared.textContent="";diagnosticShared.hidden=true;diagnosticState.textContent="";
   diagnosticModes.disabled=true;diagnosticCopy.disabled=true;diagnosticCopyPending=false;
   diagnosticModeShared.checked=true;diagnosticModeOriginal.checked=false;
   diagnosticModeNote.textContent="文字をすべて伏せ、位置だけを残します。";
@@ -1120,7 +1124,8 @@ function renderDiagnosticMode():void {
   if(!diagnosticCurrent()){closeDiagnostic();return;}
   if(!diagnosticRawText)return;
   const original=diagnosticModeOriginal.checked;
-  diagnosticShared.value=original?diagnosticRawText:redactCoordinateDiagnostic(diagnosticRawText);
+  clearDiagnosticSelection();
+  diagnosticShared.textContent=original?diagnosticRawText:redactCoordinateDiagnostic(diagnosticRawText);diagnosticShared.hidden=false;
   diagnosticModeNote.textContent=original?"氏名・勤務先・金額などを含みます。コピーした内容はアプリを閉じても残る場合があります。共有先に注意してください。":"文字をすべて伏せ、位置だけを残します。読み取り不具合の共有に使用できます。";
   diagnosticModeNote.dataset.private=String(original);
   diagnosticCopy.textContent=original?"個人情報を含む原文をコピー":"共有用データをコピー";
@@ -1167,7 +1172,12 @@ diagnosticCopy.addEventListener("click", async () => {
   } catch {
     if(generation!==diagnosticGeneration)return;
     if(!diagnosticCurrent()){closeDiagnostic();return;}
-    if(!original){diagnosticShared.value=text;diagnosticShared.focus();diagnosticShared.select();}
+    if(!original){
+      // Only masked text may be selected automatically after clipboard failure.
+      diagnosticShared.textContent=text;diagnosticShared.focus({preventScroll:true});
+      const selection=window.getSelection();
+      if(selection){const range=document.createRange();range.selectNodeContents(diagnosticShared);selection.removeAllRanges();selection.addRange(range);}
+    }
     diagnosticState.textContent=original?"コピーできませんでした。もう一度お試しください。":"自動コピーできませんでした。共有用データを選択しました。";
   } finally {
     if(generation===diagnosticGeneration){diagnosticCopyPending=false;diagnosticCopy.disabled=false;diagnosticModes.disabled=false;}

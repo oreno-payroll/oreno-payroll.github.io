@@ -14,7 +14,7 @@ assert.match(edit,/title="削除待ちにする（確定まではPDF原本はOne
 assert.doesNotMatch(edit,/保存済みの明細とPDF原本を削除/);
 assert.match(editor,/暗号化PDF原本は保全します/);
 assert.match(setup,/Finance連携用の収入データ/);
-assert.match(setup,/Financeでの取得・自動同期には、Finance側での初回連携が必要/);
+assert.match(setup,/初回連携はFinanceで行います/);
 assert.match(readme,/### Financeへの収入連携（実装済み）/);
 assert.doesNotMatch(setup,/Finance側での読み込みは未対応/);
 assert.match(upload,/case "error": return \{ label: "読み取り失敗", variant: "error" \}/);

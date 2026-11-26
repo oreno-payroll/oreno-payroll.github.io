@@ -45,7 +45,8 @@ assert.doesNotMatch(history,/innerHTML|localStorage|sessionStorage|from ['"].*cl
 assert.match(history,/\.textContent=text/);
 const settingsHtml=read('public/backup/index.html');
 assert.match(settingsHtml,/<button type="button" id="settings-version"[^>]*>Payroll <span data-build-version>[^<]*<\/span><\/button><span data-build-details><\/span>/);
-assert.match(settingsHtml,/<div class="operation-dialog__actions"><button type="button" class="btn btn--primary" id="release-history-close" autofocus>閉じる<\/button><\/div>/);
+assert.match(settingsHtml,/<div class="operation-dialog__header">[\s\S]*?id="release-history-close" aria-label="閉じる" autofocus>×<\/button><\/div>/);
+assert.equal(notes.find(n=>n.version==='1.3.1').date,'2026-11-26');
 assert.doesNotMatch(settingsHtml,/release-history__header/);
 for(const page of ['index.html','upload/index.html','edit/index.html','year-end-assist/index.html'])assert.doesNotMatch(read('public/'+page),/release-history\.js/);
 console.log('PASS: release history version, generated changelog, safe link validation and isolated UI');

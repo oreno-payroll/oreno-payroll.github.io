@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ja"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content"><meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https://graph.microsoft.com https://login.microsoftonline.com https://my.microsoftpersonalcontent.com https://*.sharepoint.com https://*.1drv.com https://*.onedrive.com https://*.blob.core.windows.net; frame-src 'self' blob: https://login.microsoftonline.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <script src="../frame-guard.js"></script>
 <script src="../theme.js"></script><title>設定 | Payroll</title>
@@ -37,12 +37,12 @@
       <div id="employer-bulk-panel" class="employer-settings__organize" hidden><div><strong id="employer-bulk-total"></strong><p id="employer-bulk-guide" class="vault-info" hidden>先に勤務先を追加してください。</p></div><button type="button" id="employer-bulk-open" class="btn btn--secondary btn--small" disabled>整理する</button></div>
     </section>
     <dialog id="employer-directory-dialog" class="operation-dialog employer-dialog" aria-labelledby="employer-directory-heading">
-      <form id="employer-directory-form" class="employer-settings__form" autocomplete="off">
-        <div class="employer-dialog__head"><h2 id="employer-directory-heading">勤務先を追加</h2><button type="button" class="btn btn--ghost btn--small" id="employer-directory-close" aria-label="閉じる">×</button></div>
-        <div class="employer-dialog__body">
+      <form id="employer-directory-form" class="operation-dialog__form" autocomplete="off">
+        <div class="operation-dialog__header"><h2 id="employer-directory-heading">勤務先を追加</h2><button type="button" class="btn btn--ghost btn--small btn--square operation-dialog__close" id="employer-directory-close" aria-label="閉じる">×</button></div>
+        <div class="operation-dialog__body employer-dialog__body">
           <label class="employer-settings__field" for="employer-directory-name">勤務先名
             <input id="employer-directory-name" class="input" type="text" maxlength="100" required autocomplete="off" spellcheck="false" aria-describedby="employer-directory-error"></label>
-          <fieldset id="employer-directory-role" class="employer-forecast-group"><legend>勤務区分</legend><div class="employer-role-choices">
+          <fieldset id="employer-directory-role" class="employer-forecast-group"><legend>勤務区分</legend><div class="segmented-choice segmented-choice--small">
             <label><input type="radio" name="employer-role" value="main" checked><span>本業</span></label>
             <label><input type="radio" name="employer-role" value="side"><span>副業</span></label>
           </div></fieldset>
@@ -51,9 +51,8 @@
           <fieldset id="employer-forecast-settings" class="employer-forecast-settings">
             <legend>給与・賞与の見込み設定</legend>
             <label class="employer-settings__field" for="employer-salary-method">給与見込み
-              <select id="employer-salary-method" class="input" aria-describedby="employer-salary-hint"><option value="latest">最新の通常給与</option><option value="median" selected>直近最大3件の中央値</option><option value="average">直近最大3件の平均値</option><option value="none">算出しない</option></select>
+              <select id="employer-salary-method" class="input"><option value="latest">最新の通常給与</option><option value="median" selected>直近最大3件の中央値</option><option value="average">直近最大3件の平均値</option><option value="none">算出しない</option></select>
             </label>
-            <p class="vault-info" id="employer-salary-hint"></p>
             <fieldset id="employer-bonus-schedule" class="employer-forecast-group">
               <legend>賞与支給予定月（複数選択可）</legend>
               <div class="employer-bonus-months">
@@ -80,8 +79,8 @@
       </form>
     </dialog>
     <dialog id="employer-bulk-dialog" class="operation-dialog employer-dialog" aria-labelledby="employer-bulk-heading">
-      <div class="employer-dialog__head"><h2 id="employer-bulk-heading">明細の勤務先を一括設定</h2><button type="button" class="btn btn--ghost btn--small" id="employer-bulk-close" aria-label="閉じる">×</button></div>
-      <div class="employer-dialog__body">
+      <div class="operation-dialog__header"><h2 id="employer-bulk-heading">明細の勤務先を一括設定</h2><button type="button" class="btn btn--ghost btn--small btn--square operation-dialog__close" id="employer-bulk-close" aria-label="閉じる">×</button></div>
+      <div class="operation-dialog__body employer-dialog__body">
         <p class="vault-info">同じ勤務区分の未設定明細だけを割り当てます。金額やPDF原本は変更しません。</p>
         <label class="employer-settings__field" for="employer-bulk-target">設定する勤務先
           <select id="employer-bulk-target" class="input" disabled><option value="">勤務先を選択</option></select></label>
@@ -241,7 +240,7 @@
     <div class="card settings-details-grid">
       <section class="settings-details-column settings-finance-income" aria-labelledby="settings-finance-income-title">
         <h3 id="settings-finance-income-title">Finance連携用の収入データ</h3>
-        <p class="settings-note">給与明細の保存・編集・削除時に、Payroll側の暗号化収入データを更新します。Financeでの取得・自動同期には、Finance側での初回連携が必要です。必要な場合だけ再生成してください。</p>
+        <p class="settings-note">通常は明細の保存・編集・削除時に自動更新します。Financeに収入が反映されないときに更新してください。初回連携はFinanceで行います。</p>
         <div class="settings-action-row">
           <button type="button" id="payroll-income-publish" class="btn btn--secondary">連携データを再生成</button>
         </div>
@@ -249,23 +248,25 @@
       </section>
       <section class="settings-details-column settings-orphan-recovery" aria-labelledby="settings-orphan-title">
         <h3 id="settings-orphan-title">年度データの復旧</h3>
-        <p class="settings-note">通信中断などで明細が保存されても索引に登録されなかった年度を検出します。検査は読み取り専用で、復旧には確認が必要です。</p>
+        <p class="settings-note">保存した年度が一覧に表示されない場合に確認します。検査だけでは明細は変更されません。</p>
         <div class="settings-action-row">
-          <button type="button" id="orphan-year-check" class="btn btn--secondary">未登録の年度データを検査</button>
+          <button type="button" id="orphan-year-check" class="btn btn--secondary">表示されない年度を確認</button>
           <button type="button" id="orphan-year-recover" class="btn btn--secondary" hidden disabled>確認した年度を復旧</button>
         </div>
         <p id="orphan-year-status" class="vault-status" role="status" aria-live="polite"></p>
       </section>
       <section class="settings-details-column settings-write-lock-recovery" aria-labelledby="write-lock-recovery-title">
-        <h3 id="write-lock-recovery-title">書き込みロックの復旧</h3>
-        <p class="settings-note">保存が中断され、ロックが残った場合</p>
-        <p class="settings-note">通常は保存完了時に解除します。処理の終了を確認できたロックは、同じブラウザで次に保存するときに自動復旧します。他の端末が保存中の場合や、処理結果が不明な場合は解除しません。</p>
+        <h3 id="write-lock-recovery-title">保存できないとき</h3>
+        <details class="settings-recovery-details"><summary>保存が中断された場合の復旧手順</summary>
+        <p class="settings-note">通常は保存完了時に解除します。書き込み前や保存結果の確認済みの段階で中断したロックは、安全を確認できる場合に限り、同じブラウザで次に保存するときに自動復旧します。他の端末が保存中の場合や、処理結果が不明な場合は解除しません。</p>
         <p class="settings-note">自動復旧できない場合は、すべての端末・タブで保存を終了し、保留中のアップロードも終了または失効したことを確認してください。不明な場合は解除せず調査してください。</p>
         <p class="settings-note">確認済みの場合のみ、OneDriveのアプリ専用フォルダー直下（payrollフォルダーの隣）の <code>payroll-write-lock-v1.bin</code> を個別に削除してください。索引・年度・PDF原本は削除しないでください。</p>
         <p class="settings-note">最新版を読み直し、明細・原本・Finance連携・鍵変更の状態を確認してから作業を再開してください。</p>
+        </details>
       </section>
       <section class="settings-details-column settings-legacy" aria-labelledby="settings-legacy-title">
         <h3 id="settings-legacy-title">旧データの整理・移行</h3>
+        <details class="settings-recovery-details"><summary>以前のバージョンのデータを確認する</summary>
         <div class="settings-legacy-subsection" aria-labelledby="settings-local-legacy-title">
           <h4 id="settings-local-legacy-title">旧ブラウザ保存データ</h4>
           <p class="settings-legacy-caption">削除前にOneDriveの明細とPDF原本を照合し、一致しない場合は削除を中断します。</p>
@@ -286,12 +287,13 @@
           </div>
           <p id="cloud-cleanup-status" class="vault-status" role="status" aria-live="polite"></p>
         </div>
+        </details>
       </section>
       <section class="settings-details-column settings-detached-originals" aria-labelledby="settings-detached-title">
-        <h3 id="settings-detached-title">未参照PDF原本の管理</h3>
+        <h3 id="settings-detached-title">明細に紐付いていないPDF原本</h3>
         <p class="settings-note">明細に紐付いていないPDF原本を確認・整理します。編集済みの明細情報を復元するにはバックアップが必要です。</p>
         <div class="settings-action-row">
-          <button type="button" id="detached-original-check" class="btn btn--secondary">未参照の原本を検査</button>
+          <button type="button" id="detached-original-check" class="btn btn--secondary">PDF原本を確認</button>
           <a href="../upload/" class="btn btn--secondary">PDFを追加</a>
         </div>
         <p id="detached-original-status" class="vault-status" role="status" aria-live="polite"></p>
@@ -301,7 +303,6 @@
   </section>
 </main></div>
 <dialog id="release-history-dialog" class="operation-dialog release-history" aria-labelledby="release-history-title">
-  <h2 id="release-history-title">アップデート履歴</h2>
-  <div id="release-history-content" class="release-history__content" aria-live="polite"></div>
-  <div class="operation-dialog__actions"><button type="button" class="btn btn--primary" id="release-history-close" autofocus>閉じる</button></div>
+  <div class="operation-dialog__header"><h2 id="release-history-title">アップデート履歴</h2><button type="button" class="btn btn--ghost btn--small btn--square operation-dialog__close" id="release-history-close" aria-label="閉じる" autofocus>×</button></div>
+  <div id="release-history-content" class="operation-dialog__body release-history__content" aria-live="polite"></div>
 </dialog><script defer src="../build-info.js"></script></body></html>

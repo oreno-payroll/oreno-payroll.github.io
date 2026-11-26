@@ -1,8 +1,6 @@
 /** Graph read/retry and encrypted cache regression; synthetic HTTP only. */
 import assert from 'node:assert/strict';
-import {build} from 'esbuild';
-const compiled=await build({entryPoints:[new URL('../src/cloud/graph.ts',import.meta.url).pathname],bundle:true,platform:'node',format:'esm',target:'es2022',write:false,logLevel:'silent'});
-const {PayrollGraph,GraphError}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
+import {PayrollGraph,GraphError} from '../src/cloud/graph.ts';
 // Metadata JSON and missing files
 {
 const signed='https://my.microsoftpersonalcontent.com/test-safe-no-credentials';
@@ -251,7 +249,7 @@ console.log('PASS: read-only Graph 401 token refresh and 429 bounded retry conti
 const {readFileSync}=await import('node:fs');
 const src=readFileSync(new URL('../src/cloud/graph.ts',import.meta.url),'utf8');
 assert.match(src,/if\(!readonly&&!lockControl\)\{this\.requireWriteOwner\(\);this\.clearEncryptedReadCache\(\);this\.onMutation\(\);\}/);
-assert.match(src,/if\(!readonly&&!lockControl\)\{await this\.verifyWriteOwner\(\);if\(this\.writeOwner\)\{this\.writeAttempted=true;this\.writeSerial\+\+;\}\}/);
+assert.match(src,/if\(!readonly&&!lockControl\)\{await this\.clearCheckpointBeforeWrite\(\);await this\.verifyWriteOwner\(\);if\(this\.writeOwner\)\{this\.writeAttempted=true;this\.writeSerial\+\+;\}\}/);
 assert.match(src,/if\(name!==PAYROLL_WRITE_LOCK_NAME&&!parts\.includes\('originals'\)\)this\.rememberEncryptedRead\(/);
 assert.match(src,/readonly&&accept304&&r\.status===304/);
 assert.match(src,/await this\.readMetadata<Item>\(metadataPath,'年度暗号ファイル情報の照会',cached\.file\.etag\)/);

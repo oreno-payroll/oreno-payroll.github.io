@@ -252,18 +252,31 @@ h1, h2, h3 { line-height: 1.35; letter-spacing: -.025em; }
 .app-status[data-state="info"]::before{content:"i";color:var(--color-primary);background:var(--color-primary-soft);font-weight:850}
 
 /* Shared operation dialogs. Native modal top-layer supplies focus containment and inert background. */
-.operation-dialog{position:fixed;inset:0;width:min(480px,calc(100% - 32px));max-height:calc(100% - 32px);max-height:calc(100dvh - 32px);margin:auto;padding:20px;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);overflow:auto;overscroll-behavior:contain;box-shadow:0 16px 48px #0003;}
+.operation-dialog{position:fixed;inset:0;width:min(480px,calc(100% - 32px));max-height:calc(100% - 32px);max-height:calc(100dvh - 32px);margin:auto;padding:20px;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);overflow:hidden;box-shadow:0 16px 48px #0003;}
 .operation-dialog::backdrop{background:rgb(9 18 30 / .60);}
-.operation-dialog h2{font-size:18px;line-height:1.4;margin:0 0 14px;overflow-wrap:anywhere;}
+.operation-dialog[open]{display:flex;flex-direction:column;}
+.operation-dialog__form{display:flex;flex-direction:column;flex:0 1 auto;min-height:0;min-width:0;overflow:hidden;}
+.operation-dialog__header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex:none;margin-bottom:12px;}
+.operation-dialog h2{font-size:18px;line-height:1.4;margin:0;overflow-wrap:anywhere;min-width:0;}
+.operation-dialog .operation-dialog__close{flex:none;min-width:36px;min-height:36px;padding:0;font-size:22px;}
+.operation-dialog__body{flex:0 1 auto;min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;padding:3px;}
+.operation-dialog__body > :last-child{margin-bottom:0;}
 .operation-dialog__subject{font-weight:700;margin:0 0 12px;padding:10px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);white-space:pre-wrap;overflow-wrap:anywhere;}
 .operation-dialog__details{display:grid;gap:10px;color:var(--color-text);font-size:14px;line-height:1.65;}
 .operation-dialog__details p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;}
 .operation-dialog[data-tone="danger"] .operation-dialog__subject{background:var(--state-error-bg);border-color:var(--state-error-border);}
 .operation-dialog[data-tone="warning"] .operation-dialog__subject{background:var(--state-warning-bg);border-color:var(--state-warning-border);}
 .operation-dialog__typed{display:grid;gap:6px;margin-top:16px;font-size:14px;overflow-wrap:anywhere;}
-.operation-dialog__actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:20px;}
+.operation-dialog__actions{display:flex;flex:none;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:12px;}
 .operation-dialog__actions .btn{white-space:normal;overflow-wrap:anywhere;}
-@media(max-width:480px){.operation-dialog{padding:16px;}.operation-dialog__actions .btn{flex:1 1 120px;}}
+.operation-dialog__status{flex:1 1 100%;min-width:0;color:var(--color-muted);font-size:13px;line-height:1.6;margin:0;overflow-wrap:anywhere;}
+.operation-dialog__status:empty{display:none;}
+/* One scroll owner: diagnostic text grows with the shared modal body. */
+.operation-dialog__data{white-space:pre-wrap;overflow-wrap:anywhere;min-width:0;padding:12px;margin:10px 0 0;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;line-height:1.6;user-select:text;}
+.operation-dialog__data:focus-visible{outline:2px solid var(--color-primary);outline-offset:1px;}
+@media(max-height:400px){.operation-dialog{padding:12px;max-height:calc(100dvh - 16px);}.operation-dialog__header{margin-bottom:6px;}.operation-dialog__actions{margin-top:6px;gap:6px;}}
+@media(max-width:480px) and (min-height:401px){.operation-dialog{padding:16px;}}
+@media(max-width:480px){.operation-dialog__actions .btn{flex:1 1 120px;}}
 .app-status__message{min-width:0;flex:1;overflow-wrap:anywhere}
 .app-status__dismiss{flex:none;align-self:flex-start;display:grid;place-items:center;min-width:28px;min-height:28px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:20px;line-height:1;cursor:pointer;pointer-events:auto}
 .app-status__dismiss[hidden]{display:none!important}
@@ -272,6 +285,7 @@ h1, h2, h3 { line-height: 1.35; letter-spacing: -.025em; }
 /* Shared page titles, compact controls, unit fields and radio choices. */
 :where(.page-heading, .upload-heading, .vault-heading, .yea-heading) h1 { margin: 0; font-size: var(--page-title-size); font-weight: 800; }
 .btn--small { padding: 7px 10px; min-height: var(--control-height-small); font-size: 11px; }
+.btn--small.btn--square { width:var(--control-height-small);height:var(--control-height-small);padding:0; }
 .btn--small .icon { width: 14px; height: 14px; }
 .unit-field { display: flex; align-items: center; position: relative; min-width: 0; }
 .unit-field input { min-width: 0; padding-right: 30px; font-variant-numeric: tabular-nums; }
@@ -280,7 +294,7 @@ h1, h2, h3 { line-height: 1.35; letter-spacing: -.025em; }
 .field--choice .field__label { display: block; margin-bottom: 6px; }
 .segmented-choice { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; }
 .segmented-choice--three { grid-template-columns: repeat(3, minmax(0,1fr)); }
-.segmented-choice label { cursor: pointer; min-width: 0; }
+.segmented-choice label { position:relative; cursor: pointer; min-width: 0; }
 .segmented-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .segmented-choice span {
   display: flex; align-items: center; justify-content: center; min-height: var(--control-height); padding: 7px 9px;
@@ -316,3 +330,10 @@ h1, h2, h3 { line-height: 1.35; letter-spacing: -.025em; }
 details[open] > .accordion-summary::after { transform:rotate(45deg); }
 .accordion-summary:focus-visible { outline:2px solid var(--color-primary); outline-offset:-3px; }
 @media(prefers-reduced-motion:reduce){.accordion-summary::after{transition:none}}
+
+/* The same live notification can use the existing save area when a floating
+ * card would cover controls. No extra card, history entry or duplicate text. */
+.app-status[data-inline]{position:static;right:auto;bottom:auto;z-index:auto;width:100%;max-width:100%;max-height:none;min-height:0;padding:0;border:0;border-radius:0;box-shadow:none;background:transparent;align-items:flex-start;gap:7px;font-size:12px;pointer-events:auto}
+html[data-theme="dark"] .app-status[data-inline]{background:transparent;box-shadow:none;border:0}
+.app-status[data-inline] .app-status__message{max-height:min(5.5rem,22dvh);overflow-y:auto;white-space:pre-line;scrollbar-width:thin}
+.app-status[data-inline] .app-status__dismiss{min-height:28px;min-width:28px}

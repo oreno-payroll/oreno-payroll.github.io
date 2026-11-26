@@ -74,6 +74,13 @@ test('settings password can be shown and hidden without sending data', async ({ 
   await expect(secret).toHaveAttribute('type', 'text');
   await page.locator('[data-toggle-password="export-password"]').click();
   await expect(secret).toHaveAttribute('type', 'password');
+  const original=page.viewportSize();
+  for(const [width,height] of [[390,430],[320,250]]){
+    await page.setViewportSize({width,height});await secret.focus();await secret.scrollIntoViewIfNeeded();await expect(secret).toBeInViewport();
+    await page.locator('#export-button').scrollIntoViewIfNeeded();await expect(page.locator('#export-button')).toBeInViewport();
+  }
+  if(original)await page.setViewportSize(original);
+
 });
 
 test('upload page displays PDF-only selection and returns home', async ({ page }) => {
@@ -438,9 +445,23 @@ test('employer selection uses names and requires an available directory',async({
  await page.reload();await expect(employer).toHaveValue('');
 });
 
-// Actual nested modal over the PDF diagnostic: cancellation must never reveal the raw text.
+// A long modal scrolls its body only; header and footer stay in the viewport.
+async function assertScrollableModal(dialog){
+ const result=await dialog.evaluate(e=>{
+  const body=e.querySelector('.operation-dialog__body'),header=e.querySelector('.operation-dialog__header'),actions=e.querySelector('.operation-dialog__actions');
+  const bounds=el=>{const r=el.getBoundingClientRect();return [r.top,r.bottom];};
+  const before=[bounds(header),actions?bounds(actions):null];
+  body.scrollTop=body.scrollHeight;
+  const after=[bounds(header),actions?bounds(actions):null];
+  const content=body.querySelector('.operation-dialog__data');
+  return {scrolled:body.scrollTop>0,outer:e.scrollHeight<=e.clientHeight+1&&e.scrollTop===0,visible:after.flat().filter(v=>v!==null).every(v=>v>=0&&v<=innerHeight+1),fixed:JSON.stringify(before)===JSON.stringify(after),single:!content||content.scrollHeight<=content.clientHeight+1};
+ });
+ expect(result).toEqual({scrolled:true,outer:true,visible:true,fixed:true,single:true});
+}
+
+// A single PDF diagnostic dialog: cancellation must never reveal the raw text.
 test('PDF diagnostic uses one dialog and copies only the selected disclosure mode',async({page})=>{
- await page.addInitScript(()=>{window.syntheticCopies=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(text){window.syntheticCopies.push(text);}}});});
+ await page.addInitScript(()=>{window.syntheticCopies=[];window.syntheticClipboardFailure=false;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(text){if(window.syntheticClipboardFailure)throw new Error("synthetic clipboard failure");window.syntheticCopies.push(text);}}});});
  await page.goto('/upload/index.html');
  await (await readyUploadInput(page)).setInputFiles({name:'synthetic-dialog.pdf',mimeType:'application/pdf',buffer:syntheticOnePagePdf()});
  await expect(page.locator('#review-content')).toBeVisible();
@@ -452,17 +473,27 @@ test('PDF diagnostic uses one dialog and copies only the selected disclosure mod
   expect(await current.evaluate(el=>{const s=getComputedStyle(el);return [s.backgroundColor,s.borderTopWidth,s.paddingTop];})).toEqual(['rgba(0, 0, 0, 0)','0px','0px']);
   await trigger.click();
   const outer=page.locator('#diagnostic-dialog'),shared=outer.locator('#diagnostic-shared'),copy=outer.locator('#diagnostic-copy');
-  await expect(copy).toBeEnabled();await expect(shared).toHaveValue(/\[マスク済み\]/);await expect(shared).not.toHaveValue(/"synthetic"/);
-  await expect(outer.locator('#diagnostic-mode-shared')).toBeChecked();await expect(page.locator('dialog[open]')).toHaveCount(1);
+  await expect(copy).toBeEnabled();await expect(shared).toHaveText(/\[マスク済み\]/);await expect(shared).not.toHaveText(/"synthetic"/);
+  await expect(outer.locator('#diagnostic-mode-shared')).toBeChecked();
+  const originalOutput=await shared.textContent();
+  await shared.evaluate(el=>{el.textContent=(el.textContent+'\n').repeat(150);});
+  await assertScrollableModal(outer);
+  await shared.evaluate((el,text)=>{el.textContent=text;},originalOutput);await expect(page.locator('dialog[open]')).toHaveCount(1);
   await copy.click();expect(await page.evaluate(()=>window.syntheticCopies.at(-1))).not.toContain('"synthetic"');
-  await outer.getByText('原文（個人情報を含む）',{exact:true}).click();await expect(shared).toHaveValue(/"synthetic"/);
+  await outer.getByText('原文（個人情報を含む）',{exact:true}).click();await expect(shared).toHaveText(/"synthetic"/);
   await expect(copy).toHaveText('個人情報を含む原文をコピー');await expect(page.locator('dialog[open]')).toHaveCount(1);
   await copy.click();expect(await page.evaluate(()=>window.syntheticCopies.at(-1))).toContain('"synthetic"');
-  await outer.getByText('共有用（文字を伏せる）',{exact:true}).click();await expect(shared).not.toHaveValue(/"synthetic"/);
+  await page.evaluate(()=>{window.syntheticClipboardFailure=true;});
+  await copy.click();await expect(outer.getByRole('status')).toHaveText('コピーできませんでした。もう一度お試しください。');
+  expect(await page.evaluate(()=>window.getSelection().toString())).toBe('');
+  await outer.getByText('共有用（文字を伏せる）',{exact:true}).click();await expect(shared).not.toHaveText(/"synthetic"/);
+  await copy.click();await expect(outer.getByRole('status')).toHaveText('自動コピーできませんでした。共有用データを選択しました。');
+  const selected=await page.evaluate(()=>window.getSelection().toString());expect(selected).toContain('[マスク済み]');expect(selected).not.toContain('"synthetic"');
+  await page.evaluate(()=>{window.syntheticClipboardFailure=false;});
   await copy.click();expect(await page.evaluate(()=>window.syntheticCopies.at(-1))).not.toContain('"synthetic"');
-  await outer.locator('#diagnostic-close').click();await expect(outer).toBeHidden();await expect(shared).toHaveValue('');
-  await trigger.click();await expect(copy).toBeEnabled();await expect(shared).not.toHaveValue(/"synthetic"/);
-  await page.keyboard.press('Escape');await expect(outer).toBeHidden();await expect(shared).toHaveValue('');
+  await outer.locator('#diagnostic-close').click();await expect(outer).toBeHidden();await expect(shared).toHaveText('');expect(await page.evaluate(()=>window.getSelection().toString())).toBe('');
+  await trigger.click();await expect(copy).toBeEnabled();await expect(shared).not.toHaveText(/"synthetic"/);
+  await page.keyboard.press('Escape');await expect(outer).toBeHidden();await expect(shared).toHaveText('');expect(await page.evaluate(()=>window.getSelection().toString())).toBe('');
  }
 });
 
@@ -473,7 +504,16 @@ test('settings migration confirmation cancels without opening the vault',async({
  await expect(page.locator('#backup-cloud-status')).toContainText('Client ID未設定');
  await page.getByRole('button',{name:/^メンテナンス/}).click();
  const migrate=page.locator('#migrate-legacy-cloud');
+ const legacy=page.locator('.settings-legacy > details.settings-recovery-details');
+ const summary=legacy.locator('summary');
  const dialog=page.getByRole('dialog',{name:'旧ブラウザ保存データを移行',exact:true});
+ await expect(summary).toBeVisible();
+ await expect(legacy).not.toHaveAttribute('open','');
+ await expect(migrate).toBeHidden();
+ await summary.click();
+ await expect(legacy).toHaveAttribute('open','');
+ await expect(migrate).toBeVisible();
+ await expect(page.locator('#payroll-cloud-gate')).toHaveCount(0);
  await migrate.click();
  await expect(dialog).toBeVisible();
  await expect(dialog.getByRole('button',{name:'キャンセル',exact:true})).toBeFocused();
@@ -487,6 +527,9 @@ test('settings migration confirmation cancels without opening the vault',async({
  await expect(dialog).toHaveCount(0);
  await expect(migrate).toBeEnabled();
  await expect(page.locator('#payroll-cloud-gate')).toHaveCount(0);
+ await expect(page.locator('#migrate-legacy-cloud-status')).toHaveText('');
+ await summary.click();
+ await expect(migrate).toBeHidden();
 });
 
 // Real category navigation, no account or backup operations are invoked.
@@ -507,14 +550,15 @@ test('settings overview separates categories and retains only in-page drafts',as
  await expect(historyDialog).toBeVisible();
  await expect(historyDialog.locator('.release-history__entry').first().locator('strong').first()).toHaveText(buildVersion);
  await expect(historyDialog.getByText('最新版',{exact:true})).toHaveCount(1);
- const historyClose=historyDialog.locator('.operation-dialog__actions .btn--primary');
- await expect(historyClose).toHaveText('閉じる');
+ const historyClose=historyDialog.locator('.operation-dialog__header #release-history-close');
+ await expect(historyClose).toHaveText('×');
+ await expect(historyClose).toHaveAccessibleName('閉じる');
  await expect(historyClose).toBeFocused();
  const historyBody=historyDialog.locator('#release-history-content');
  await historyBody.evaluate(el=>{el.scrollTop=el.scrollHeight;});
  await expect(historyClose).toBeInViewport();
  const bodyRect=await historyBody.boundingBox(),closeRect=await historyClose.boundingBox();
- expect(closeRect.y).toBeGreaterThanOrEqual(bodyRect.y+bodyRect.height);
+ expect(closeRect.y+closeRect.height).toBeLessThanOrEqual(bodyRect.y+1);
  await expect(historyDialog.getByText('Payroll 初期公開',{exact:true})).toBeVisible();
  await page.keyboard.press('Escape');await expect(historyDialog).toBeHidden();await expect(version).toBeFocused();
  await page.route('**/release-notes.json',route=>route.fulfill({status:503,body:'unavailable'}));
@@ -585,6 +629,8 @@ test('settings overview separates categories and retains only in-page drafts',as
  await expect(page.locator('#employer-bulk-save')).toBeDisabled();
  await expect(page.locator('#payroll-cloud-gate')).toHaveCount(0);
  await menu.getByRole('button',{name:/^メンテナンス/}).click();
+ await expect(page.locator('#legacy-cleanup-delete')).toBeHidden();
+ await page.locator('.settings-legacy > details > summary').click();
  await expect(page.locator('#legacy-cleanup-delete')).toBeVisible();
  await expect(page.locator('#payroll-income-publish')).toBeVisible();
  await expect(page.locator('#settings-auth-panel')).toBeHidden();
@@ -742,7 +788,7 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
     const dialog=document.querySelector('#employer-directory-dialog'),form=document.querySelector('#employer-directory-form');dialog.showModal();
     const bounds=dialog.getBoundingClientRect(),body=form.querySelector('.employer-dialog__body'),actions=form.querySelector('.operation-dialog__actions');
     const inputs=[...form.querySelectorAll('input[name="employer-role"],input[name="employer-bonus-month"]')];
-    const inside=inputs.every(input=>{const b=input.getBoundingClientRect();return b.width>=16&&b.height>=16&&b.left>=bounds.left&&b.right<=bounds.right;});
+    const inside=inputs.every(input=>{const b=input.closest('label').getBoundingClientRect();return b.width>=16&&b.height>=16&&b.left>=bounds.left&&b.right<=bounds.right;});
     const footer=actions.getBoundingClientRect().bottom<=bounds.bottom;
     const overflow=document.documentElement.scrollWidth-innerWidth;
     const horizontal=body.scrollWidth>body.clientWidth;
@@ -770,6 +816,20 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
    expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBe(0);
   }
  }
+ // Keyboard-height layout: check the actual inactive forms as isolated fixtures,
+ // without running the app or invoking any save/authentication operation.
+ const keyboardViewport=page.viewportSize();
+ for(const theme of ['light','dark'])for(const [width,height] of [[390,430],[320,250]]){
+  await page.setViewportSize({width,height});await fixture('backup/index.html');
+  await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;document.getElementById('settings-employers-panel').hidden=false;document.getElementById('employer-directory-dialog').showModal();},theme);
+  const name=page.locator('#employer-directory-name');await name.fill('synthetic');await name.scrollIntoViewIfNeeded();await expect(name).toBeInViewport();await expect(page.locator('#employer-directory-save')).toBeInViewport();
+  await page.evaluate(()=>document.getElementById('employer-directory-dialog').close());
+  await fixture('year-end-assist/index.html');await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;const memo=document.getElementById('yea-year-memo');for(let node=memo;node;node=node.parentElement)node.hidden=false;memo.disabled=false;},theme);
+  const memo=page.locator('#yea-year-memo');await memo.fill('synthetic');await memo.scrollIntoViewIfNeeded();await expect(memo).toBeInViewport();
+  const save=page.locator('#yea-save-memo');await save.scrollIntoViewIfNeeded();await expect(save).toBeInViewport();
+ }
+ if(keyboardViewport)await page.setViewportSize(keyboardViewport);
+
 });
 
 // Actual page markup and CSS, with synthetic states; never access a real vault.
@@ -852,6 +912,16 @@ test('shared loading notification keeps its anchor across save phases',async({pa
    expect(result.reset).toBe('');expect(result.outcome).toBe('success');expect(result.hidden).toBe(true);
   }
  }
+ // No separate region is available: reuse the status slot rather than cover the button.
+ for(const cls of ['save-bar','yea-upload-savebar'])for(const theme of ['light','dark']){
+  await page.setViewportSize({width:390,height:300});
+  await page.setContent(`<main><div class="${cls}" style="position:fixed;inset:5px 10px;display:flex;flex-direction:column;align-items:stretch;justify-content:center"><div data-status-inline></div><button type="button">保存</button></div></main><div id="synthetic-status" hidden></div>`);
+  for(const name of ['ress','style','theme'])await page.addStyleTag({content:readFileSync(new URL(`../public/styles/${name}.css`,import.meta.url),'utf8')});
+  await page.addScriptTag({content:bundle.outputFiles[0].text});
+  const fallback=await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;const status=NoticeFixture.createAppStatus(document.getElementById('synthetic-status'),'edit');status.error('長い合成エラー'.repeat(80));const host=document.querySelector('[data-status-inline]'),a=status.element.getBoundingClientRect(),b=host.nextElementSibling.getBoundingClientRect();const result={inline:host.contains(status.element),separate:status.element.hasAttribute('data-inline'),overlap:a.top<b.bottom&&a.bottom>b.top&&a.left<b.right&&a.right>b.left,button:b.top>=0&&b.bottom<=innerHeight,one:document.querySelectorAll('.app-status:not([hidden])').length===1};status.clear();return {...result,cleared:status.element.hidden&&!host.contains(status.element)};},theme);
+  expect(fallback).toEqual({inline:true,separate:true,overlap:false,button:true,one:true,cleared:true});
+ }
+
 });
 
  test('employer overview, editor and assignment use verified data without writing on cancel',async({page})=>{
@@ -913,7 +983,7 @@ test('shared loading notification keeps its anchor across save phases',async({pa
   const toast=page.locator('.app-status');await expect(toast).toHaveAttribute('data-state','error');
   await page.evaluate(()=>window.fixture.failWrite=false);
   await list.getByRole('button',{name:/架空副業を編集/}).click();await modal.locator('#employer-directory-save').click();await expect(modal).toBeHidden();
-  await expect(toast).toHaveAttribute('data-state','error');
+  await expect(toast).toHaveAttribute('data-state','success');
   await list.getByRole('button',{name:/架空旧勤務先を編集/}).click();await modal.locator('#employer-directory-save').click();await expect(modal).toBeHidden();
   await expect(toast).toHaveAttribute('data-state','success');
   await page.locator('#employer-bulk-open').click();await expect(bulk).toBeVisible();
@@ -939,7 +1009,7 @@ test('missing statement details show one distinct link per record on desktop and
  await page.route('**/*',route=>route.abort('blockedbyclient'));
  await page.setContent('<!doctype html><html lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><button id="trigger">未入力</button></body></html>');
  for(const name of ['ress','style','dashboard','theme'])await page.addStyleTag({content:readFileSync(new URL(`../public/styles/${name}.css`,import.meta.url),'utf8')});
- await page.addScriptTag({content:stripTypeScriptTypes(source,{mode:'strip'})+'\nwindow.openMissingFixture=showOperationMessage;'});
+ await page.addScriptTag({content:stripTypeScriptTypes(source,{mode:'strip'})+'\nwindow.openMissingFixture=showOperationMessage;window.confirmFixture=confirmOperation;'});
  const href='./edit/index.html#id=3&mode=calendar&year=2026&hintYear=2025';
  const label='synthetic-'+ 'longfilename'.repeat(12)+'.pdf';
  const description='2026年2月 · 本業 · <synthetic> · 賞与';
@@ -964,6 +1034,15 @@ test('missing statement details show one distinct link per record on desktop and
   await expect(link.locator('.operation-dialog__link-description')).toHaveCSS('text-decoration-line','none');
   await link.focus();await expect(link).toBeFocused();await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);await expect(trigger).toBeFocused();
  }
+ // Real long confirmation and error dialogs, including short landscape screens.
+ for(const theme of ['light','dark'])for(const [width,height] of [[320,430],[740,320],[1280,800]]){
+  await page.setViewportSize({width,height});
+  await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;window.longResult=null;void window.confirmFixture({title:'確認',subject:'合成の確認',details:['長い確認内容\n'.repeat(400)],acceptLabel:'実行',requiredText:'確認',tone:'danger'},()=>true).then(result=>{window.longResult=result;});},theme);
+  const d=page.locator('dialog');await expect(d).toBeVisible();await expect(d.getByRole('button',{name:'実行'})).toBeDisabled();
+  await assertScrollableModal(d);await d.locator('input').fill('確認');await expect(d.getByRole('button',{name:'実行'})).toBeEnabled();await d.getByRole('button',{name:'キャンセル'}).click();await expect(d).toHaveCount(0);expect(await page.evaluate(()=>window.longResult)).toBe(false);
+  await page.evaluate(()=>{void window.openMissingFixture({title:'エラー',details:['長いエラー内容\n'.repeat(400)],acceptLabel:'閉じる',tone:'danger'},()=>true);});
+  await assertScrollableModal(d);await d.getByRole('button',{name:'閉じる'}).click();await expect(d).toHaveCount(0);
+ }
  // Different records remain different rows; forecast-only rows are not links.
  await page.evaluate(({href,label,description})=>{void window.openMissingFixture({title:'未入力',details:['未入力の明細：2件'],links:[{href,label,description},{href:href.replace('id=3','id=4'),label:'other.pdf',description}],afterLinks:['見込みの算出不足：1件'],acceptLabel:'閉じる'},()=>true);},{href,label,description});
  await expect(page.locator('dialog li')).toHaveCount(2);await expect(page.locator('dialog a')).toHaveCount(2);
@@ -973,7 +1052,7 @@ test('missing statement details show one distinct link per record on desktop and
 });
 
 // Real edit markup, styles and shared notification controller, without auth or cloud I/O.
-test('saved editor scrolls independently and keeps notices above the save controls',async({page})=>{
+test('saved editor scrolls independently and integrates notices into the save controls',async({page})=>{
  const {build}=await import('esbuild');
  const {fileURLToPath}=await import('node:url');
  const bundle=await build({stdin:{contents:"export {createAppStatus} from './src/ui/appStatus.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'ts'},bundle:true,format:'iife',globalName:'NoticeFixture',write:false,logLevel:'silent'});
@@ -1020,26 +1099,32 @@ test('saved editor scrolls independently and keeps notices above the save contro
    const footer=document.querySelector('.edit-page .vault-bottom'),button=document.getElementById('edit-save');
    const notice=window.editorNotice,el=notice.element;
    const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-   notice.clear();region.scrollTop=0;document.getElementById('edit-status').textContent='';await settle();
+   const draft=document.getElementById('edit-status');draft.setAttribute('data-routine','');draft.textContent='未保存の変更があります。';
+   // Each viewport/theme is an independent focus test. Re-focusing the
+   // already focused input does not invoke the browser's focus scrolling.
+   if(document.activeElement instanceof HTMLElement)document.activeElement.blur();
+   notice.clear();region.scrollTop=0;await settle();
    const scope=notice.begin('edit');notice.show('loading','保存処理中…',false,{scope});await settle();
-   const first=el.getBoundingClientRect(),initialFooter=footer.getBoundingClientRect();
-   region.scrollTop=region.scrollHeight;await settle();
-   const moved=region.scrollTop>0,scrollBottom=el.getBoundingClientRect().bottom;
-   notice.show('loading','合成データの保存結果を検証しています。'.repeat(12),false,{scope});await settle();
-   const long=el.getBoundingClientRect();
-   document.getElementById('edit-status').textContent='未保存の変更があります。';await settle();
-   notice.show('error','合成データの保存に失敗しました。',false,{scope});await settle();
+   const initialFooter=footer.getBoundingClientRect();
+   region.scrollTop=region.scrollHeight;await settle();const moved=region.scrollTop>0;
+   notice.show('loading','合成データの保存結果を検証しています。'.repeat(80),false,{scope});await settle();
+   const long=el.querySelector('.app-status__message');const longScrollable=long.scrollHeight>long.clientHeight;
+   notice.show('error','合成データの保存に失敗しました。'.repeat(30),false,{scope});await settle();
    const last=el.getBoundingClientRect(),f=footer.getBoundingClientRect(),b=button.getBoundingClientRect();
    const lastField=document.querySelector('[name="otherDeductions"]');lastField.focus();await settle();
    const field=lastField.getBoundingClientRect(),r=region.getBoundingClientRect();
-   const result={moved,docScroll:document.scrollingElement.scrollHeight-document.scrollingElement.clientHeight,scrollY:window.scrollY,footerDrift:Math.abs(initialFooter.top-f.top),drift:Math.max(Math.abs(first.bottom-scrollBottom),Math.abs(first.bottom-long.bottom),Math.abs(first.bottom-last.bottom)),above:Math.max(first.bottom,long.bottom,last.bottom)<=f.top-10,buttonVisible:b.top>=0&&b.bottom<=innerHeight,fieldVisible:field.top>=r.top-1&&field.bottom<=r.bottom+1,overflow:document.documentElement.scrollWidth>innerWidth,closeVisible:el.querySelector('button').getBoundingClientRect().top>=0};
-   el.querySelector('button').click();return result;
+   const overlap=last.left<b.right&&last.right>b.left&&last.top<b.bottom&&last.bottom>b.top;
+   const result={moved,docScroll:document.scrollingElement.scrollHeight-document.scrollingElement.clientHeight,scrollY:window.scrollY,footerDrift:Math.abs(initialFooter.bottom-f.bottom),inline:el.hasAttribute('data-inline')&&footer.contains(el),longScrollable,overlap,routineHidden:getComputedStyle(draft).display==='none',onlyOne:document.querySelectorAll('.app-status:not([hidden])').length===1&&document.getElementById('edit-error').hidden,buttonVisible:b.top>=0&&b.bottom<=innerHeight,fieldVisible:field.top>=r.top-1&&field.bottom<=r.bottom+1,overflow:document.documentElement.scrollWidth>innerWidth,closeVisible:el.querySelector('button').getBoundingClientRect().top>=0};
+   el.querySelector('button').click();return {...result,draftRestored:getComputedStyle(draft).display!=='none'&&el.hidden};
   },{width,theme});
-  expect(result,`${width}×${height} ${theme}`).toMatchObject({moved:true,scrollY:0,above:true,buttonVisible:true,fieldVisible:true,overflow:false,closeVisible:true});
-  expect(result.docScroll).toBeLessThanOrEqual(1);expect(result.drift).toBeLessThanOrEqual(1);expect(result.footerDrift).toBeLessThanOrEqual(1);
+  expect(result,`${width}×${height} ${theme}`).toMatchObject({moved:true,scrollY:0,inline:true,longScrollable:true,overlap:false,routineHidden:true,onlyOne:true,buttonVisible:true,fieldVisible:true,overflow:false,closeVisible:true,draftRestored:true});
+  expect(result.docScroll).toBeLessThanOrEqual(1);expect(result.footerDrift).toBeLessThanOrEqual(1);
  }
- await page.setViewportSize({width:390,height:430});
- expect(await page.evaluate(()=>{const doc=document.scrollingElement;window.scrollTo(0,doc.scrollHeight);return doc.scrollHeight>innerHeight&&document.getElementById('edit-save').getBoundingClientRect().bottom<=innerHeight+1;})).toBe(true);
+ for(const [width,height] of [[390,430],[740,320],[320,250]])for(const theme of ['light','dark']){
+  await page.setViewportSize({width,height});
+  const short=await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;const button=document.getElementById('edit-save'),notice=window.editorNotice;button.scrollIntoView({block:'end'});notice.error('合成の長文エラー'.repeat(80));button.scrollIntoView({block:'end'});const a=notice.element.getBoundingClientRect(),b=button.getBoundingClientRect();const result={natural:document.scrollingElement.scrollHeight>innerHeight,inline:notice.element.hasAttribute('data-inline'),button:b.top>=0&&b.bottom<=innerHeight+1,overlap:a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top,overflow:document.documentElement.scrollWidth>innerWidth};notice.clear();return result;},theme);
+  expect(short).toEqual({natural:true,inline:true,button:true,overlap:false,overflow:false});
+ }
  // Initial loading or failed authorization must not be clipped by the editor layout.
  await page.evaluate(()=>{document.getElementById('editor').hidden=true;const error=document.getElementById('edit-error');error.hidden=false;error.textContent='合成の読み込みエラー';});
  await expect(page.locator('#edit-error')).toBeVisible();
@@ -1065,10 +1150,70 @@ test('saved record diagnostic has one dialog, contextual action and top close',a
   await expect(d).toBeVisible();await expect(page.locator('dialog[open]')).toHaveCount(1);await expect(d.locator('button')).toHaveCount(2);
   await expect(d.getByRole('button',{name:'閉じる'})).toBeFocused();await expect(d.locator('pre')).toBeHidden();expect(await page.evaluate(()=>window.diagnosticReads)).toBe(0);
   await d.getByRole('button',{name:'診断データを表示'}).click();await expect(d.locator('pre')).toBeVisible();await expect(page.locator('dialog[open]')).toHaveCount(1);await expect(d.locator('button')).toHaveCount(2);
-  expect(await d.evaluate(e=>{const r=e.getBoundingClientRect(),x=e.querySelector('.record-diagnostic__head button').getBoundingClientRect(),h=e.querySelector('h2').getBoundingClientRect(),p=e.querySelector('pre');return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&x.left>=h.right-1&&x.top<p.getBoundingClientRect().top&&e.scrollWidth<=e.clientWidth+1&&p.scrollHeight>p.clientHeight;})).toBe(true);
-  await d.getByRole('button',{name:'診断データをコピー'}).click();await expect(d.getByRole('status')).toHaveText('クリップボードにコピーしました。');expect(await page.evaluate(()=>[window.diagnosticReads,window.diagnosticCopies.length])).toEqual([1,1]);
+  expect(await d.evaluate(e=>{const r=e.getBoundingClientRect(),x=e.querySelector('.operation-dialog__header button').getBoundingClientRect(),h=e.querySelector('h2').getBoundingClientRect(),p=e.querySelector('pre');return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&x.left>=h.right-1&&x.top<p.getBoundingClientRect().top&&e.scrollWidth<=e.clientWidth+1&&e.querySelector('.operation-dialog__body').scrollHeight>e.querySelector('.operation-dialog__body').clientHeight;})).toBe(true);
+  await assertScrollableModal(d);await d.getByRole('button',{name:'診断データをコピー'}).click();await expect(d.getByRole('status')).toHaveText('クリップボードにコピーしました。');expect(await page.evaluate(()=>[window.diagnosticReads,window.diagnosticCopies.length])).toEqual([1,1]);
   await d.getByRole('button',{name:'閉じる'}).click();await expect(d).toHaveCount(0);await expect(page.locator('#trigger')).toBeFocused();
   await page.locator('#trigger').click();await page.keyboard.press('Escape');await expect(d).toHaveCount(0);
   await page.locator('#trigger').click();await d.getByRole('button',{name:'診断データを表示'}).click();await page.evaluate(()=>{window.diagnosticAllowed=false;});await d.getByRole('button',{name:'診断データをコピー'}).click();await expect(d).toHaveCount(0);expect(await page.evaluate(()=>window.diagnosticCopies.length)).toBe(1);
  }
+});
+// Real Web Locks + strict IndexedDB with a synthetic remote transport only.
+test('write lock recovery survives page termination but refuses active and unknown writes',async({page,context})=>{
+ const {build}=await import('esbuild');
+ const {fileURLToPath}=await import('node:url');
+ const bundle=await build({stdin:{contents:"export {PayrollGraph,PAYROLL_WRITE_LOCK_NAME} from './src/cloud/graph.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'ts'},bundle:true,format:'iife',globalName:'LockFixture',write:false,logLevel:'silent'});
+ const origin='http://127.0.0.1:4177',docUrl=origin+'/__e2e__/lock.html',jsUrl=origin+'/__e2e__/lock.js';
+ const name='payroll-write-lock-v1.bin';let owner=null,serial=0,writes=0,loseWrite=false;
+ const reply=(status,body=null)=>({status,body:body===null?null:typeof body==='string'?body:JSON.stringify(body)});
+ const meta=()=>({id:owner.id,eTag:owner.etag,name,size:64,'@microsoft.graph.downloadUrl':'https://storage.example.test/'+owner.id});
+ const install=async p=>{
+  await p.route('**/*',r=>{
+   const q=r.request();if(q.method()==='GET'&&q.url()===docUrl&&q.resourceType()==='document')return r.fulfill({contentType:'text/html',body:'<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'self\'"><title>Lock fixture</title>'});
+   if(q.method()==='GET'&&q.url()===jsUrl&&q.resourceType()==='script')return r.fulfill({contentType:'application/javascript',body:bundle.outputFiles[0].text});
+   return r.abort('blockedbyclient');
+  });
+  await p.exposeFunction('lockFixtureTransport',(raw,method,etag,text)=>{
+   const url=new URL(raw),path=url.pathname;
+   if(url.origin==='https://storage.example.test'&&method==='GET')return owner&&path==='/'+owner.id?reply(200,owner.text):reply(404);
+   if(url.origin!=='https://graph.microsoft.com')throw Error('unexpected synthetic origin');
+   if(method==='GET'&&path.endsWith('/special/approot'))return reply(200,{id:'root'});
+   if(method==='PUT'&&path.endsWith('/root:/'+name+':/content')){
+    expect(url.searchParams.get('@microsoft.graph.conflictBehavior')).toBe('fail');
+    if(owner)return reply(409);
+    expect(text).toMatch(/^[a-f0-9]{64}$/);owner={id:'lock-'+(++serial),etag:'etag-'+serial,text};return reply(201,meta());
+   }
+   if(method==='GET'&&path.endsWith('/root:/'+name))return owner?reply(200,meta()):reply(404);
+   if(method==='DELETE'&&owner&&path.endsWith('/items/'+owner.id)){
+    expect(etag).toBe(owner.etag);owner=null;return reply(204);
+   }
+   if(method==='POST'&&path.endsWith('/synthetic-write')){expect(owner).not.toBeNull();writes++;if(loseWrite)throw Error('synthetic lost mutation reply');return reply(200,{});}
+   throw Error('unexpected synthetic request');
+  });
+  await p.goto(docUrl);await p.addScriptTag({url:jsUrl});
+  await p.evaluate(()=>{
+   const graph=new LockFixture.PayrollGraph('synthetic-only',async(url,init={})=>{
+    if(String(url).endsWith('/synthetic-write')){
+     const receipt=await graph.releaseReceipt(graph.writeOwner);
+     if(await graph.checkpointStorage(receipt,'read'))throw Error('recovery marker was not revoked before dispatch');
+    }
+    const result=await window.lockFixtureTransport(String(url),init.method??'GET',new Headers(init.headers).get('If-Match'),init.body instanceof Uint8Array?new TextDecoder().decode(init.body):null);
+    return new Response(result.body,{status:result.status});
+   });
+   window.tryFixtureWrite=async()=>{try{await graph.withWriteLock(()=>graph.request('/synthetic-write',{method:'POST'}));return 'ok';}catch(error){return error.message;}};
+   window.startFixtureCheckpoint=()=>{void graph.withWriteLock(async()=>{window.fixtureCheckpoint=await graph.checkpointStorage(await graph.releaseReceipt(graph.writeOwner),'read');await new Promise(()=>{});}).catch(()=>{window.fixtureCheckpoint=false;});};
+  });
+ };
+ await install(page);await page.evaluate(()=>window.startFixtureCheckpoint());
+ await expect.poll(()=>page.evaluate(()=>window.fixtureCheckpoint)).toBe(true);
+ const other=await context.newPage();await install(other);
+ expect(await other.evaluate(()=>window.tryFixtureWrite())).toMatch(/他の端末/);expect(writes).toBe(0);
+ // Destroy the execution context, without allowing the original finally block.
+ await page.close();
+ await expect.poll(()=>other.evaluate(async()=> (await navigator.locks.query()).held.filter(x=>x.name.startsWith("payroll-settled-lock-v1:")).length)).toBe(0);
+ expect(await other.evaluate(()=>window.tryFixtureWrite())).toBe('ok');expect(writes).toBe(1);expect(owner).toBeNull();
+ loseWrite=true;expect(await other.evaluate(()=>window.tryFixtureWrite())).toMatch(/ロックが残っている可能性/);expect(writes).toBe(2);expect(owner).not.toBeNull();
+ await other.close();
+ const reopened=await context.newPage();await install(reopened);loseWrite=false;
+ expect(await reopened.evaluate(()=>window.tryFixtureWrite())).toMatch(/他の端末/);expect(writes).toBe(2);expect(owner).not.toBeNull();
+ await reopened.close();
 });

@@ -116,7 +116,7 @@ const parsed={
   [[[],[]],false,false,'0件・0項目（未選択時は空欄）',true],
   [[['a','b'],[],['c']],false,false,'2件・3項目（未選択時は空欄）',false],
   [[['a'],['b']],true,false,'2件・2項目（未選択時は空欄）',false],
-  [[['a']],true,true,'1件で0円補完による検算不一致。該当欄を手動確認するかチェックを外してください。',false],
+  [[['a']],true,true,'1件・1項目（未選択時は空欄）',false],
  ]){
   const approval={},label={},checkbox={checked};
   count(fields.map(form=>({form})),form=>form,checkbox,approval,label,()=>contradiction?['warning']:[]);
@@ -143,8 +143,8 @@ console.log('PASS: Round 4/B zero-resolution and import provenance regression');
  const extract=(start,end)=>{const a=edit.indexOf(start),b=edit.indexOf(end,a);assert.ok(a>=0&&b>a);return stripTypeScriptTypes(edit.slice(a,b),{mode:'strip'});};
  const code=extract('function zeroInputTargets(', 'function updateUI(')+extract('function saveWithOptionalZeros(', 'zeroSaveButton.addEventListener(');
  assert.match(html,/id="edit-save-zero" type="button"[^>]* disabled/);
- assert.match(edit,/zeroSaveButton.hidden=deletionPending\|\|deletionNeedsReload/);
- assert.match(edit,/zeroSaveButton.disabled=saving\|\|deletionPending\|\|deletionConfirming\|\|deletionNeedsReload\|\|errors.length>0/);
+ assert.match(edit,/zeroSaveButton.hidden=deletionPending\|\|deletionNeedsReload\|\|zeroCount===0/);
+ assert.match(edit,/zeroSaveButton.disabled=saving\|\|employerRefreshing\|\|deletionPending\|\|deletionConfirming\|\|deletionNeedsReload\|\|errors.length>0/);
  for(const mode of ['salary','bonus','warning','invalid','locked','saving','deletion','no-target']){
   const values=form(mode==='bonus'?'bonus':'salary');
   values.transportation='100';values.nonTaxable='100';values.taxable='249900';
@@ -152,15 +152,15 @@ console.log('PASS: Round 4/B zero-resolution and import provenance regression');
   if(mode==='warning'){values.taxable='';values.nonTaxable='';}
   if(mode==='no-target')for(const key of emptyOptionalAmounts(values))values[key]='0';
   const controls=PAYROLL_FIELDS.filter(k=>!['job','kind','targetMonth','paymentDate'].includes(k)).map(name=>({name,value:values[name],disabled:false,validity:{badInput:mode==='invalid'&&name==='incomeTax'},closest:()=> (values.kind==='salary'?['bonusBase','performanceBonus']:['workDays','yearEndAdjustment','reimbursedExpenses']).includes(name)?{}:null}));
-  let writes=0,focus=0;
-  const ctx={record:{},saving:mode==='saving',deletionPending:mode==='deletion',deletionConfirming:false,deletionNeedsReload:false,zeroSaveButton:{disabled:false},reviewApproval:'old',form:{querySelectorAll:()=>controls},emptyOptionalAmounts,captureOperationAuthorization:()=>()=>mode!=='locked',getValues:()=>({...values,...Object.fromEntries(controls.map(x=>[x.name,x.value]))}),clearInlineError(){},errorView:{},reviewConfirmation:{hidden:true},confirmDiff:{disabled:false,focus(){focus++;}},saveButton:{disabled:false,click(){writes++;}},updateUI(){const checked=validatePayrollForm(ctx.getValues());ctx.saveButton.disabled=!!(checked.errors.length||checked.warnings.length);ctx.reviewConfirmation.hidden=!checked.warnings.length;}};
+  let writes=0,focus=0;const status={textContent:'',removeAttribute(){}};
+  const ctx={status,record:{},saving:mode==='saving',deletionPending:mode==='deletion',deletionConfirming:false,deletionNeedsReload:false,zeroSaveButton:{disabled:false},reviewApproval:'old',form:{querySelectorAll:()=>controls},emptyOptionalAmounts,captureOperationAuthorization:()=>()=>mode!=='locked',getValues:()=>({...values,...Object.fromEntries(controls.map(x=>[x.name,x.value]))}),clearInlineError(){},errorView:{},reviewConfirmation:{hidden:true},confirmDiff:{disabled:false,focus(){focus++;}},saveButton:{disabled:false,click(){writes++;}},updateUI(){const checked=validatePayrollForm(ctx.getValues());ctx.saveButton.disabled=!!(checked.errors.length||checked.warnings.length);ctx.reviewConfirmation.hidden=!checked.warnings.length;}};
   const run=runInNewContext(code+'\nsaveWithOptionalZeros',ctx);run();
   const changed=ctx.getValues();
   if(['invalid','locked','saving','deletion','no-target'].includes(mode)){assert.equal(writes,0,mode);assert.equal(ctx.reviewApproval,'old',mode);assert.deepEqual(changed,values,mode);continue;}
   assert.equal(changed.gross,values.gross);assert.equal(changed.net,values.net);assert.equal(changed.transportation,'100');assert.equal(changed.workDays,'');assert.equal(changed.residentTax,'0');assert.equal(changed.healthInsurance,'0');assert.equal(ctx.reviewApproval,null);
   if(mode==='bonus'){assert.equal(changed.yearEndAdjustment,'');assert.equal(changed.reimbursedExpenses,'');assert.equal(changed.bonusBase,'0');}
   else{assert.equal(changed.bonusBase,'');assert.equal(changed.performanceBonus,'');assert.equal(changed.yearEndAdjustment,'0');}
-  if(mode==='warning'){assert.equal(writes,0);assert.equal(focus,1);}else assert.equal(writes,1,mode);
+  if(mode==='warning'){assert.equal(writes,0);assert.equal(focus,1);assert.match(status.textContent,/まだ保存されていません.*変更を保存/);}else assert.equal(writes,1,mode);
  }
  console.log('PASS: editor zero-save uses existing write boundary; existing values, hidden fields, warnings and operation guards are preserved');
 }

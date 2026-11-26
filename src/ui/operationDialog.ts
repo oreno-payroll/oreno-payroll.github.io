@@ -23,12 +23,14 @@ function openDialog(request:OperationDialogRequest,guard:Guard,messageOnly:boole
   dialog.className='operation-dialog';dialog.setAttribute('aria-labelledby','operation-dialog-title');
   dialog.setAttribute('aria-describedby','operation-dialog-details');dialog.dataset.tone=request.tone??'normal';
   const heading=document.createElement('h2');heading.id='operation-dialog-title';heading.textContent=request.title;
-  dialog.append(heading);
-  if(request.subject){const subject=document.createElement('p');subject.className='operation-dialog__subject';subject.textContent=request.subject;dialog.append(subject);}
+  const header=document.createElement('div');header.className='operation-dialog__header';header.append(heading);
+  const close=document.createElement('button');close.type='button';close.className='btn btn--ghost btn--small btn--square operation-dialog__close';close.textContent='×';close.setAttribute('aria-label','閉じる');
+  if(messageOnly)header.append(close);
+  const body=document.createElement('div');body.className='operation-dialog__body';dialog.append(header,body);
+  if(request.subject){const subject=document.createElement('p');subject.className='operation-dialog__subject';subject.textContent=request.subject;body.append(subject);}
   const details=document.createElement('div');details.id='operation-dialog-details';details.className='operation-dialog__details';
   for(const text of request.details){const p=document.createElement('p');p.textContent=text;details.append(p);}
   if(messageOnly&&request.links?.length){
-   dialog.className+=' operation-dialog--links';
    const list=document.createElement('ul');list.className='operation-dialog__links';
    for(const entry of request.links){
     // Only the existing same-origin statement edit route; no external URLs or raw HTML.
@@ -48,7 +50,7 @@ function openDialog(request:OperationDialogRequest,guard:Guard,messageOnly:boole
    details.append(list);
   }
   if(messageOnly)for(const text of request.afterLinks??[]){const p=document.createElement('p');p.className='operation-dialog__link-note';p.textContent=text;details.append(p);}
-  dialog.append(details);
+  body.append(details);
   const actions=document.createElement('div');actions.className='operation-dialog__actions';
   const cancel=document.createElement('button');cancel.type='button';cancel.className='btn btn--secondary';cancel.textContent='キャンセル';
   const accept=document.createElement('button');accept.type='button';accept.className=`btn ${request.tone==='danger'?'btn--danger-outline':'btn--primary'}`;accept.textContent=request.acceptLabel;
@@ -56,10 +58,10 @@ function openDialog(request:OperationDialogRequest,guard:Guard,messageOnly:boole
   if(!messageOnly&&request.requiredText!==undefined){
    const label=document.createElement('label');label.className='operation-dialog__typed';label.textContent=`実行するには「${request.requiredText}」と入力してください。`;
    typed=document.createElement('input');typed.type='text';typed.className='input';typed.autocomplete='off';typed.spellcheck=false;
-   label.append(typed);dialog.append(label);accept.disabled=true;
+   label.append(typed);body.append(label);accept.disabled=true;
    typed.addEventListener('input',()=>{accept.disabled=typed!.value!==request.requiredText;});
   }
-  if(!messageOnly)actions.append(cancel);actions.append(accept);dialog.append(actions);
+  if(!messageOnly){actions.append(cancel,accept);dialog.append(actions);}
   const previous=document.activeElement;
   let settled=false;
   const finish=(approved:boolean)=>{
@@ -75,6 +77,7 @@ function openDialog(request:OperationDialogRequest,guard:Guard,messageOnly:boole
   const onPageHide=()=>finish(false);
   activeCancel=onPageHide;
   cancel.addEventListener('click',()=>finish(false));
+  close.addEventListener('click',()=>{let current=false;try{current=guard();}catch{/* Fail closed. */}finish(current);});
   accept.addEventListener('click',()=>{
    if(accept.disabled||!dialog.open)return;
    if(typed&&typed.value!==request.requiredText)return;
@@ -84,7 +87,7 @@ function openDialog(request:OperationDialogRequest,guard:Guard,messageOnly:boole
   dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
   dialog.addEventListener('close',()=>finish(false));
   window.addEventListener('pagehide',onPageHide);
-  try{document.body.append(dialog);dialog.showModal();(messageOnly?accept:cancel).focus();}
+  try{document.body.append(dialog);dialog.showModal();(messageOnly?close:cancel).focus();}
   catch{finish(false);}
  });
 }

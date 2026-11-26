@@ -247,13 +247,25 @@ const verify=(ctx,record)=>inspectUploadRecovery(ctx.vault,[uploadRecoveryAttemp
  assert.equal(ctx.graph.trashed.length,0);assert.ok(ctx.graph.files.has(key));
  console.log('PASS original trash: income changes immediately before DELETE block trash');
 }
-{
+for(const fault of ['corrupt','missing','unavailable']){
  const ctx=await setup();await saveRecordsSkippingDuplicates([await sample(36,A)]);await ctx.reopen();
  const target=ctx.vault.records()[0];const key=[...ctx.graph.files.keys()].find(p=>p.includes('/originals/'));
- const file=ctx.graph.files.get(key);ctx.graph.files.set(key,{...file,text:'synthetic corrupt original'});
- const n=ctx.graph.writes.length;await assert.rejects(deleteRecords([{id:target.id,signature:recordSignature(target)}]));
- assert.equal(ctx.graph.writes.length,n);assert.equal(ctx.graph.trashed.length,0);await ctx.reopen();assert.equal(ctx.vault.records().length,1);
- console.log('PASS original trash: invalid original blocks before metadata mutation');
+ const file=ctx.graph.files.get(key);
+ if(fault==='corrupt')ctx.graph.files.set(key,{...file,text:'synthetic corrupt original'});
+ if(fault==='missing')ctx.graph.files.delete(key);
+ const originalBefore=ctx.graph.files.get(key),read=ctx.graph.read.bind(ctx.graph);let originalReads=0;
+ ctx.graph.read=async(parts,name)=>{if(parts.includes('originals')){originalReads++;if(fault==='unavailable')throw Error('synthetic original unavailable');}return read(parts,name);};
+ await deleteRecords([{id:target.id,signature:recordSignature(target)}]);
+ assert.equal(originalReads,0,'normal statement deletion must not fetch original bytes');
+ assert.deepEqual(ctx.graph.files.get(key),originalBefore,'normal deletion must not modify originals');
+ assert.equal(ctx.graph.trashed.length,0);await ctx.reopen();assert.equal(ctx.vault.records().length,0);
+ assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2027'])),[]);
+ if(fault==='corrupt'){
+  const report=await ctx.vault.inspectDetachedOriginals();
+  await assert.rejects(ctx.vault.trashDetachedOriginal(report,report.originals[0]));
+  assert.equal(ctx.graph.trashed.length,0,'explicit trash still requires an authenticated original');
+ }
+ console.log('PASS deletion without original read: '+fault);
 }
 {
  const ctx=await setup();await saveRecordsSkippingDuplicates([await sample(37,A)]);await ctx.reopen();
@@ -595,24 +607,31 @@ async function assignmentFixture(){
  console.log('PHASE3 COUNTS '+JSON.stringify(counts));
 }
 
-{
+for(const conflict of [false,true]){
  const ctx=await setup();const first=await sample(810,A,'2026-04');first.form.paymentDate='2026-04-27';
  await saveRecordsSkippingDuplicates([first]);
  const file=ctx.graph.files.get('payroll/statements/2026.enc');
  const doc=await decryptJson('year',file.text,ctx.key);
  doc.records[0].form.gross='12000';doc.records[0].revision++;
+ if(conflict)doc.records[0].form.targetMonth='2026-05';
  const text=await encryptJson('year',doc,ctx.key,ctx.vault.sessionKey().salt);
  const next=await sample(811,A,'2026-05');next.form.paymentDate='2026-05-27';
  const writes=ctx.graph.writes.length;
  ctx.graph.withWriteLock=async operation=>{
-  // A client that bypasses the write lock changes the baseline after the
-  // caller's first read. The live check under the lock must reject it.
+  // Another client finishes its write before the new operation acquires the lock.
   ctx.graph.files.set('payroll/statements/2026.enc',{...file,etag:'changed-at-lock',text,size:enc.encode(text).length});
   return operation();
  };
- await assert.rejects(saveRecordsSkippingDuplicates([next]),/保存前の照合後に明細/);
- assert.equal(ctx.graph.writes.length,writes,'changed baseline must be rejected before any original or annual write');
- console.log('PASS Phase 3: concurrent change before lock is rejected with no writes');
+ if(conflict){
+  await assert.rejects(saveRecordsSkippingDuplicates([next]),/保存前の照合後に明細/);
+  assert.equal(ctx.graph.writes.length,writes,'new relevant conflict is rejected before any writes');
+ }else{
+  assert.equal((await saveRecordsSkippingDuplicates([next])).saved,1);
+  await ctx.reopen();assert.equal(ctx.vault.records().length,2);
+  assert.equal(ctx.vault.records().find(r=>r.form.targetMonth==='2026-04').form.gross,'12000','unrelated edit survives merge');
+  assert.deepEqual(await ctx.vault.inspectIncomeConsistency(new Set(['2026'])),[]);
+ }
+ console.log('PASS Phase 3: locked preflight '+(conflict?'rejects related changes':'adopts unrelated changes'));
 }
 
 {

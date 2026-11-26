@@ -977,11 +977,24 @@ test('saved editor scrolls independently and keeps notices above the save contro
  const {build}=await import('esbuild');
  const {fileURLToPath}=await import('node:url');
  const bundle=await build({stdin:{contents:"export {createAppStatus} from './src/ui/appStatus.ts'",resolveDir:fileURLToPath(new URL('../',import.meta.url)),loader:'ts'},bundle:true,format:'iife',globalName:'NoticeFixture',write:false,logLevel:'silent'});
- await page.route('**/*',route=>route.abort('blockedbyclient'));
- const html=readFileSync(new URL('../public/edit/index.html',import.meta.url),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<link\b[^>]*>/gi,'').replace(/<meta\s+http-equiv="Content-Security-Policy"[^>]*>/i,'');
- await page.setContent(html);
- for(const name of ['ress','style','upload','vault','cloud','theme'])await page.addStyleTag({content:readFileSync(new URL(`../public/styles/${name}.css`,import.meta.url),'utf8')});
- await page.addScriptTag({content:bundle.outputFiles[0].text});
+ // Keep the genuine page and its CSP. Only the document, its styles, and the
+ // synthetic notification bundle may load; the actual application never starts.
+ const origin='http://127.0.0.1:4177';
+ const fixtureUrl=origin+'/__e2e__/editor-notice.js';
+ const styles=new Map(['ress','style','upload','vault','cloud','theme'].map(name=>[origin+`/styles/${name}.css`,fileURLToPath(new URL(`../public/styles/${name}.css`,import.meta.url))]));
+ await page.route('**/*',async route=>{
+  const request=route.request(),url=request.url(),type=request.resourceType();
+  if(request.method()==='GET'){
+   if(type==='script'&&url===fixtureUrl)return route.fulfill({contentType:'application/javascript',body:bundle.outputFiles[0].text});
+   if(type==='document'&&url===origin+'/edit/index.html')return route.fulfill({contentType:'text/html; charset=utf-8',path:fileURLToPath(new URL('../public/edit/index.html',import.meta.url))});
+   if(type==='stylesheet'&&styles.has(url))return route.fulfill({contentType:'text/css; charset=utf-8',path:styles.get(url)});
+  }
+  return route.abort('blockedbyclient');
+ });
+ await page.goto('/edit/index.html');
+ await expect(page.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveCount(1);
+ await expect(page.locator('#editor')).toBeHidden();
+ await page.addScriptTag({url:fixtureUrl});
  await page.evaluate(()=>{
   document.getElementById('record-name').textContent='synthetic-statement.pdf';
   document.getElementById('record-details').textContent='2026-01 / synthetic';

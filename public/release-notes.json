@@ -22,6 +22,14 @@
         "単一PDFの確認時に全明細の不要な複製・スナップショット生成を減らし、年末調整の他年度氏名照合を必要な操作へ遅延しました。",
         "重複する回帰検査を整理し、重要なデータ保護・互換性の検証を維持しました。"
       ]
+    },
+    "date": "2026-11-28",
+    "dateKind": "published",
+    "link": "https://github.com/oreno-payroll/oreno-payroll.github.io/pull/21",
+    "stats": {
+      "files": 61,
+      "additions": 960,
+      "deletions": 572
     }
   },
   {

@@ -274,8 +274,8 @@
 .settings-page .employer-settings {padding:16px 20px;gap:12px;container-type:inline-size;}
 .employer-settings__header h3 {margin:0;font-size:15px;font-weight:780;}
 .employer-settings__actions {gap:6px;}
-.employer-settings__actions .employer-refresh {font-size:0;min-width:36px;padding:6px 8px;}
-.employer-settings__actions .employer-refresh::before {content:"↻";font-size:15px;line-height:1;}
+.employer-settings__actions .employer-refresh {font-size:0;gap:0;flex:none;}
+.employer-settings__actions .employer-refresh::before {content:"↻";font-size:18px;line-height:1;}
 .employer-settings__list {display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start;}
 .employer-settings__group {min-width:0;display:grid;gap:2px;}
 .employer-settings__group h4 {font-size:12px;color:var(--color-muted);margin:0;}
@@ -373,10 +373,12 @@
 @media(max-width:480px){.release-history__entry:not(:first-child){padding-top:16px}.release-history__entry:not(:last-child){padding-bottom:16px}}
 .notification-history__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .notification-history__head h2{font-size:16px;margin:0}
-.notification-unread{font-size:12px;color:var(--color-danger);font-weight:700;white-space:nowrap}
+.notification-history__head #notification-filter{width:auto;max-width:100%;min-width:0;min-height:var(--control-height-small);padding:5px 32px 5px 10px;line-height:1.4}
 .notification-history__list{list-style:none;padding:0;margin:0;min-width:0}
 .notification-history__list li{padding:12px 0;border-top:1px solid var(--color-border);overflow-wrap:anywhere}
-.notification-history__list li[data-unread="true"] strong{color:var(--color-danger)}
+.notification-history__list li[data-kind="success"] strong{color:var(--color-success)}
+.notification-history__list li[data-kind="error"] strong{color:var(--color-danger)}
+.notification-history__list li[data-kind="warning"] strong,.notification-history__list li[data-kind="partial"] strong{color:var(--color-warning)}
 .notification-history__meta{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:12px}
 .notification-history__meta time{color:var(--color-muted)}
 .notification-history__list p{margin:5px 0 0;font-size:14px}
@@ -412,3 +414,6 @@
 .settings-recovery-details{min-width:0;font-size:13px}
 .settings-recovery-details summary{cursor:pointer;color:var(--color-primary);line-height:1.6}
 .settings-recovery-details[open] > :not(summary){margin-top:10px!important}
+
+.edit-save-actions .zero-approval__choice[hidden]{display:none}
+.edit-save-actions .zero-approval__choice{font-size:13px}

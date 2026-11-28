@@ -6,7 +6,7 @@ const edit=read('src/edit.ts'),upload=read('src/upload.ts'),html=read('public/up
 const dashboard=read('public/styles/dashboard.css'),theme=read('public/styles/theme.css'),css=read('public/styles/style.css');
 for(const page of ['public/upload/index.html','public/edit/index.html']){
   assert.doesNotMatch(read(page),/<nav class="breadcrumb"/,'the header already links to home');
-  assert.match(read(page),/ホームへ戻る/);
+  assert.match(read(page),/<nav class="site-nav"[\s\S]*?<a class="site-nav__link" href="\.\.\/index\.html">ホーム<\/a>/);
 }
 assert.match(edit,/saveButton\.disabled = saving \|\| employerRefreshing \|\| !changed \|\| errors\.length/);
 assert.match(edit,/if \(!record \|\| saving \|\| employerRefreshing \|\| deletionNeedsReload \|\| !hasUnsavedChanges\(\)\) return/);

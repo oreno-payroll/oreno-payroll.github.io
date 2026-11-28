@@ -12,7 +12,15 @@
 <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m14 7-5 5 5 5"/></symbol>
 <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5"/><path d="M4 17v3h16v-3"/></symbol>
 </svg>
-<div class="app-shell"><header class="site-header"><a class="brand" href="../index.html" aria-label="Payroll ホーム"><span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span><span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span></a><div class="header-actions"><button type="button" class="theme-toggle" data-theme-toggle aria-label="ダークモードに切り替える" title="ダークモードに切り替える" aria-pressed="false"><svg class="icon theme-icon--moon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.6 8.6 0 1 0 20.2 15.2Z"/></svg><svg class="icon theme-icon--sun" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button><a class="btn btn--secondary header-back" href="../index.html"><svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg><span>ホームへ戻る</span></a></div></header>
+<div class="app-shell"><header class="site-header">
+  <a class="brand" href="../index.html" aria-label="Payroll ホーム"><span class="brand__icon"><svg class="icon" aria-hidden="true"><use href="#icon-ledger"></use></svg></span><span class="brand__wordmark">Payroll<span class="brand__subname">給与明細管理</span></span></a>
+  <nav class="site-nav" aria-label="メインナビゲーション">
+    <a class="site-nav__link" href="../index.html">ホーム</a>
+    <a class="site-nav__link" href="../year-end-assist/index.html">年末調整</a>
+    <a class="site-nav__link" href="../backup/index.html" aria-current="page">設定</a>
+  </nav>
+  <div class="header-actions"><button type="button" class="theme-toggle" data-theme-toggle aria-label="ダークモードに切り替える" title="ダークモードに切り替える" aria-pressed="false"><svg class="icon theme-icon--moon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.6 8.6 0 1 0 20.2 15.2Z"/></svg><svg class="icon theme-icon--sun" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button></div>
+</header>
 <main class="vault-page backup-page settings-page">
   <div class="vault-heading settings-heading"><h1 id="settings-page-title" tabindex="-1">設定</h1></div>
   <aside class="settings-sidebar">
@@ -21,7 +29,7 @@
     <button type="button" class="settings-menu__item" data-settings-open="employers" aria-controls="settings-employers-panel" disabled><span><strong>勤務先管理</strong></span></button>
     <button type="button" class="settings-menu__item" data-settings-open="backup" aria-controls="settings-backup-panel" disabled><span><strong>バックアップ</strong></span></button>
     <button type="button" class="settings-menu__item" data-settings-open="maintenance" aria-controls="settings-details-panel" disabled><span><strong>メンテナンス</strong></span></button>
-    <button type="button" class="settings-menu__item" data-settings-open="notifications" aria-controls="settings-notifications-panel" disabled><span><strong>通知履歴</strong></span><span id="notification-unread" class="notification-unread" hidden></span></button>
+    <button type="button" class="settings-menu__item" data-settings-open="notifications" aria-controls="settings-notifications-panel" disabled><span><strong>通知履歴</strong></span></button>
   </nav>
   <div class="build-info"><button type="button" id="settings-version" aria-haspopup="dialog" title="アップデート履歴を開く">Payroll <span data-build-version>バージョン確認中</span></button><span data-build-details></span></div>
   </aside>
@@ -228,7 +236,7 @@
 
   <section class="settings-group" id="settings-notifications-panel" aria-labelledby="settings-notifications-title" hidden>
     <section class="card vault-section" aria-labelledby="settings-notifications-title">
-      <div class="notification-history__head"><div class="vault-section__head"><h2 id="settings-notifications-title">通知履歴</h2><p class="vault-info">このタブの操作結果を表示します。確認済みは復旧完了を意味しません。</p></div><button type="button" id="notification-confirm-all" class="btn btn--secondary btn--small" disabled>すべて確認済みにする</button></div>
+      <div class="notification-history__head"><div class="vault-section__head"><h2 id="settings-notifications-title">通知履歴</h2><p class="vault-info">このタブの操作結果を表示します。</p></div><select id="notification-filter" class="select" aria-label="通知の絞り込み"><option value="all">すべて</option><option value="success">成功</option><option value="error">エラー</option><option value="warning">警告</option><option value="partial">一部完了</option></select></div>
       <p id="notification-empty" class="vault-info">通知はありません</p>
       <p id="notification-omitted" class="vault-info" hidden></p>
       <ol id="notification-list" class="notification-history__list" aria-label="操作結果"></ol>

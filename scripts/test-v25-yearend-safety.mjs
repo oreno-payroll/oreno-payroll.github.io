@@ -1,3 +1,4 @@
+import {noticeReason} from '../src/ui/notificationHistory.ts';
 /** Synthetic UI policy checks. No real employee PDF, name, or token is used. */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -57,7 +58,7 @@ const preserved={id:4,hash:'b'.repeat(64),status:'ready',file:{name:'other.pdf'}
 const list=[next,last,preserved];
 let parsed=0;
 let asynchronous;
-const promotionContext={fileQueue:list,data:{documents:[]},pendingDeletions:new Map(),updateDrafts:()=>{},parseAssistedPdf:async file=>{parsed++;return {fileName:file.name}},action:(_label,callback)=>{asynchronous=callback();return asynchronous;},Error};
+const promotionContext={captureOperationAuthorization:()=>()=>true,selected:'synthetic',activeYear:2026,loadOtherYearNames:undefined,fileQueue:list,data:{documents:[]},pendingDeletions:new Map(),updateDrafts:()=>{},parseAssistedPdf:async file=>{parsed++;return {fileName:file.name}},action:(_label,callback)=>{asynchronous=callback();return asynchronous;},Error};
 const promote=runInNewContext(stripTypeScriptTypes(promotion,{mode:'strip'})+'\npromoteRemainingDuplicate',promotionContext);
 promote(oldest);
 assert.equal(next.status,'reading');
@@ -99,7 +100,7 @@ console.log('PASS: committed addition/edit/deletion reconciliation, untouched dr
 const recoverSource=source.slice(source.indexOf('async function recoverDocuments()'),source.indexOf('function bind()'));
 const workspace=(remote,authorization=true)=>{
  const queue=items.map(q=>({...q})),draftEdits=new Map(edits),draftDeletes=new Map(deletions),writeState={lock:'unknown'};
- const ctx={busy:false,selected:'synthetic',activeYear:2026,data:before,saveRecoveryRequired:writeState,captureOperationAuthorization:()=>()=>authorization,
+ const ctx={noticeReason,busy:false,selected:'synthetic',activeYear:2026,data:before,saveRecoveryRequired:writeState,captureOperationAuthorization:()=>()=>authorization,
   fileQueue:queue,savedEdits:draftEdits,pendingDeletions:draftDeletes,activeDraft:1,activeSavedId:'delete',memoDirty:true,forecastDirty:true,bonusDirty:true,
   people:[{id:'synthetic',yearFiles:{}}],saveRecoveryStatus:{},uploadAccordion:{},planDocumentRecovery:plan,
   repo:{async recoverDocumentsBatch(id,year,state,files){assert.equal(id,'synthetic');assert.equal(year,2026);assert.equal(state,writeState);assert.deepEqual([...files],[file,pendingFile]);return {data:remote,confirmed:verified,yearFiles:{2026:'synthetic-year'}};}},

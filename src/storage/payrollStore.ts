@@ -3,7 +3,7 @@ import {payrollPeriodKey,payrollPeriodRelation,PayrollEmployerConfirmationError,
 import {isValidPayrollSemantics,type PayrollStatementSemantics} from './payrollSemantics';
 import {isValidPayrollZeroResolution,type PayrollZeroResolutionV1} from './payrollZeroResolution';
 import {validEmployerId} from './employerIdentity';
-import {employerDirectorySignature,mergeEmployerDirectories,type EmployerEntry} from './employerDirectory';
+import {employerDirectorySignature,employerAssignmentSignature,mergeEmployerDirectories,type EmployerEntry} from './employerDirectory';
 import {cloudVault} from '../cloud/auth';
 import type {CloudRecord} from '../cloud/vault';
 import type {PayrollWriteState} from '../cloud/graph';
@@ -130,13 +130,13 @@ function originalReferenceSignature(record:CloudRecord):string {
 export async function getOriginalForVerifiedEdit(id:number,expectedSignature:string):Promise<Blob> {
  if(!Number.isSafeInteger(id)||id<=0||!expectedSignature)throw new Error('原本の取得条件が不正です。');
  const vault=await cloudVault();
- const current=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
+ const current=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,recordId:id});
  const record=current.find(r=>r.id===id);
  if(!record||recordSignature(record)!==expectedSignature)
   throw new Error('明細が別の画面で更新されました。再読み込みして原本を開いてください。');
  const reference=originalReferenceSignature(record);
  const pdf=await vault.original(record); // size + SHA-256 authenticated
- const after=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});
+ const after=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,recordId:id});
  const latest=after.find(r=>r.id===id);
  if(!latest||recordSignature(latest)!==expectedSignature||originalReferenceSignature(latest)!==reference)
   throw new Error('PDF取得中に明細が更新されました。再読み込みしてください。');
@@ -145,13 +145,13 @@ export async function getOriginalForVerifiedEdit(id:number,expectedSignature:str
 export async function getRecord(id:number):Promise<SavedPayrollRecord|undefined> {
  if(!Number.isSafeInteger(id)||id<=0)throw new Error('明細IDが不正です。');
  const vault=await cloudVault();
- const list=await vault.refresh(freshReadOnlyOptions);
+ const list=await vault.refresh({...freshReadOnlyOptions,recordId:id});
  const rec=list.find(r=>r.id===id);
  if(!rec)return undefined;
  const signature=recordSignature(rec),reference=originalReferenceSignature(rec);
  const {originalId:_,originalMonth:__,pdfSize:___,pdfType:____,...rest}=rec;
  const pdf=await vault.original(rec);
- const after=await vault.refresh(freshReadOnlyOptions);
+ const after=await vault.refresh({...freshReadOnlyOptions,recordId:id});
  const latest=after.find(r=>r.id===id);
  if(!latest||recordSignature(latest)!==signature||originalReferenceSignature(latest)!==reference)
   throw new Error('PDF取得中に明細が更新されました。再読み込みしてください。');
@@ -255,7 +255,7 @@ export async function saveRecordsSkippingDuplicates(records:SavedPayrollRecordIn
   }
   report('PDF原本を確認中…');
   let evidence:UploadRecoveryEvidence|undefined;
-  const scope=recoverAcrossMonths?undefined:[...new Set(accepted.map(r=>r.form.targetMonth))].sort();
+  const scope=recoverAcrossMonths?undefined:[...new Set((baseline===undefined?records:accepted).map(r=>r.form.targetMonth))].sort();
   const preflight=await inspectUploadRecovery(vault,records.map(uploadRecoveryAttempt),recordSignature,report,baseline,value=>{evidence=value;},baseline===undefined,scope);
   if(baseline===undefined&&preflight.incomeUnsyncedYears.length){
    if(!authorized())throw new Error('認証状態が変更されました。');
@@ -332,20 +332,20 @@ async function planEmployerAssignment(vault:Awaited<ReturnType<typeof cloudVault
  let directory:EmployerEntry[]=[];
  const onEmployerDirectory=(value:EmployerEntry[])=>{directory=value;};
  const options={forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,onEmployerDirectory} as const;
- const live=await vault.refresh(options);
- const entry=directory.find(e=>e.id===employerId);
- if(!entry||employerDirectorySignature(directory)!==directorySignature||!authorized())throw new Error('勤務先一覧が変更されました。');
+ const approved=employerAssignmentSignature(JSON.parse(directorySignature),employerId);
  const selected=new Map(targets.map(t=>[t.id,t.signature]));
- const items=live.filter(r=>selected.has(r.id));
- if(items.length!==targets.length||items.some(r=>r.employerId!==undefined||r.form.job!==entry.role||recordSignature(r)!==selected.get(r.id)))throw new Error('対象明細が変更されました。最新データを確認してください。');
- const final=live.map(r=>selected.has(r.id)?{...r,employerId}:r);
- for(const item of final.filter(r=>selected.has(r.id)))if(final.some(r=>r.id!==item.id&&payrollPeriodRelation(r,item)!=='different'))throw new Error(`${item.form.targetMonth}の${item.form.kind==='bonus'?'賞与':'給与'}が重複するか勤務先を確定できません。対象を確認してください。`);
- const physical=physicalRestoreSnapshot(live);
- // Execution immediately rechecks the exact approved baseline inside the remote
- // write lock. Only the read-only preview needs its own second remote boundary.
- if(preview&&(physicalRestoreSnapshot(await vault.refresh(options))!==physical||employerDirectorySignature(directory)!==directorySignature||!authorized()))throw new Error('検査中に明細または勤務先が変更されました。');
- const signature=JSON.stringify([physical,directorySignature,employerId,[...selected.keys()].sort((a,b)=>a-b)]);
- return {preview:{signature,count:items.length,employerId},live};
+ const validate=(live:readonly CloudRecord[])=>{
+  const entry=directory.find(e=>e.id===employerId);
+  if(!approved||!entry||employerAssignmentSignature(directory,employerId)!==approved||!authorized())throw new Error('勤務先一覧が変更されました。');
+  const items=live.filter(r=>selected.has(r.id));
+  if(items.length!==targets.length||items.some(r=>r.employerId!==undefined||r.form.job!==entry.role||recordSignature(r)!==selected.get(r.id)))throw new Error('対象明細が変更されました。最新データを確認してください。');
+  vault.assertEmployerAssignmentConsistency([...selected.keys()],employerId);
+  return physicalRestoreSnapshot(items);
+ };
+ const live=await vault.refresh(options),physical=validate(live);
+ if(preview&&validate(await vault.refresh(options))!==physical)throw new Error('検査中に対象明細が変更されました。');
+ const signature=JSON.stringify([physical,approved,employerId,[...selected.keys()].sort((a,b)=>a-b)]);
+ return {preview:{signature,count:targets.length,employerId},live};
 }
 export async function inspectEmployerAssignment(targets:readonly EmployerAssignmentTarget[],employerId:string,directorySignature:string,authorized:()=>boolean):Promise<EmployerAssignmentPlan>{
  return (await planEmployerAssignment(await cloudVault(),targets,employerId,directorySignature,authorized)).preview;

@@ -14,7 +14,46 @@ export const NOTICE_LABELS={
 } as const;
 export type NoticeCode=keyof typeof NOTICE_LABELS;
 export type ResultKind='success'|'warning'|'partial'|'error';
-export interface NoticeEntry {code:NoticeCode;kind:ResultKind;at:number;seen:boolean}
+const REASONS={
+ network:'通信状態を確認して再試行してください。',auth:'Microsoftアカウントを再接続してください。',lock:'保存ロックの状態を確認してください。',unknown:'保存結果が不明です。再保存せず保存状態を確認してください。',input:'入力内容を確認してください。',finance:'給与明細への変更は確定済みです。Finance連携の状態を確認してください。',
+ 'auth-timeout':'Microsoftの認証処理が時間内に完了しませんでした。', 'auth-network':'Microsoftの認証通信が失敗しました。', 'auth-service':'Microsoft側の認証サービスが一時的に利用できません。', 'auth-temporary':'Microsoftの認証処理を完了できませんでした。',
+ 'graph-auth':'Graphへの照会前の認証処理に失敗しました。', 'graph-transport':'Graph APIの応答を取得できませんでした（通信・ブラウザによる遮断等。HTTP状態は不明）。', 'graph-timeout':'Graph APIの応答が時間内に完了しませんでした。', 'graph-json':'Graph APIのメタデータが有効なJSONではありませんでした。', 'graph-body':'Graph APIの応答本文を取得できませんでした。', 'graph-response-size':'Graph APIの応答が許容サイズを超えました。', 'graph-item':'Graph APIの項目情報にIDまたはETagがありません。', 'graph-version':'読み込み中に保存先の状態が変わったため中断しました。',
+ 'download-timeout':'OneDriveのファイル配信応答が時間内に完了しませんでした。', 'download-transport':'OneDriveのファイル配信応答を取得できませんでした（HTTP状態は不明）。', 'download-html':'OneDriveの配信先が暗号ファイルではなくHTMLを返しました。', 'download-size':'OneDriveのファイルが許容サイズを超えました。', 'download-size-mismatch':'OneDriveの項目情報と実際に取得したファイルのサイズが一致しません。', 'download-encoding':'暗号ファイルの文字コードが不正です。', 'download-url':'OneDriveから有効なダウンロード先を取得できませんでした。', 'index-read':'暗号索引の取得に失敗しました（詳細原因を特定できません）。', 'employer-changed':'勤務先一覧の確認中にデータまたは認証状態が変更されました。'
+} as const;
+type BaseReason=keyof typeof REASONS|`graph-http:${number}`|`download-http:${number}`;
+export type NoticeReason=BaseReason|`index:${BaseReason}`;
+const validBaseReason=(v:unknown):v is BaseReason=>typeof v==='string'&&(Object.hasOwn(REASONS,v)||/^(?:graph|download)-http:[1-5][0-9]{2}$/.test(v));
+const validReason=(v:unknown):v is NoticeReason=>typeof v==='string'&&(validBaseReason(v)||(v.startsWith('index:')&&validBaseReason(v.slice(6))));
+function baseReasonText(reason:BaseReason):string{
+ if(Object.hasOwn(REASONS,reason))return REASONS[reason as keyof typeof REASONS];
+ const [source,status]=reason.split(':');
+ const meaning:Record<string,string>={'304':'条件なし照会に対する未変更応答','400':'要求不正','401':'認証エラー','403':'アクセス拒否','404':'項目が見つからない','409':'競合','412':'事前条件不一致','429':'要求数制限','500':'サーバーエラー','502':'上流サーバーエラー','503':'サービス一時停止','504':'上流応答タイムアウト'};
+ return `${source==='graph-http'?'Graph API':'OneDriveファイル配信先'}：HTTP ${status}${meaning[status]?`（${meaning[status]}）`:''}。`;
+}
+function reasonText(reason:NoticeReason):string{return reason.startsWith('index:')?`暗号索引 index.enc の取得：${baseReasonText(reason.slice(6) as BaseReason)}`:baseReasonText(reason as BaseReason);}
+/** Only fixed diagnostic codes and bounded HTTP status cross the history boundary. */
+export function noticeReason(error:unknown):NoticeReason|undefined {
+ let result:BaseReason|undefined,priority:BaseReason|undefined,index=false;
+ for(let depth=0;depth<8&&error&&typeof error==='object';depth++){
+  const e=error as {name?:unknown;stage?:unknown;reason?:unknown;status?:unknown;code?:unknown;diagnostic?:unknown;cause?:unknown};
+  if(e.name==='GraphWriteUncertainError')return 'unknown';
+  if(e.name==='PayrollPartialSuccessError'&&e.stage==='income-sync')priority='finance';
+  else if(e.name==='GraphLockError'&&priority!=='finance')priority='lock';
+  else if(e.name==='VaultIndexReadError')index=true;
+  else if(e.name==='EmployerSnapshotChangedError')result='employer-changed';
+  else if(e.name==='GraphDiagnosticError'&&validBaseReason(e.diagnostic))result=e.diagnostic;
+  else if(e.name==='GraphError'&&typeof e.status==='number'&&Number.isInteger(e.status)&&e.status>=100&&e.status<=599)result=`graph-http:${e.status}`;
+  else if(e.name==='MicrosoftSignInRequiredError'&&!result)result='auth';
+  else if(e.name==='MicrosoftTemporaryError'&&!result)result=e.reason==='timeout'?'auth-timeout':e.reason==='network'?'auth-network':e.reason==='service'?'auth-service':'auth-temporary';
+  else if(e.name==='GraphReadStageError'&&!result)result=e.stage==='auth'?'graph-auth':'graph-transport';
+  else if(e.name==='GraphTimeoutError'&&(!result||result==='graph-auth'||result==='graph-transport'))result=result==='graph-auth'?'auth-timeout':'graph-timeout';
+  error=e.cause;
+ }
+ if(priority)return priority;
+ if(index)return result?`index:${result}`:'index-read';
+ return result;
+}
+export interface NoticeEntry {code:NoticeCode;kind:ResultKind;at:number;reason?:NoticeReason}
 export const NOTICE_HISTORY_KEY='payroll-notification-history-v1';
 const AUTH='payroll-navigation-identity-epoch-v1',LOCK='payroll-global-vault-lock-epoch-v1';
 const LIMIT=200,MAX_BYTES=40_000;
@@ -34,7 +73,7 @@ function persist(){if(!active||!bound||blocked||suspended)return;try{sessionStor
 function validEntry(x:unknown):x is NoticeEntry{
  if(!x||typeof x!=='object'||Array.isArray(x))return false;
  const v=x as NoticeEntry;
- return Object.keys(v).length===4&&typeof v.code==='string'&&Object.hasOwn(NOTICE_LABELS,v.code)&&kinds.includes(v.kind)&&Number.isSafeInteger(v.at)&&v.at>0&&v.at<=Date.now()&&typeof v.seen==='boolean'&&(v.kind!=='success'||v.seen);
+ return Object.keys(v).every(k=>['code','kind','at','seen','reason'].includes(k))&&(!Object.hasOwn(v,'reason')||validReason(v.reason))&&typeof v.code==='string'&&Object.hasOwn(NOTICE_LABELS,v.code)&&kinds.includes(v.kind)&&Number.isSafeInteger(v.at)&&v.at>0&&v.at<=Date.now()&&(!Object.hasOwn(v,'seen')||typeof (v as NoticeEntry & {seen?:unknown}).seen==='boolean');
 }
 function restore():boolean{
  if(!bound)return false;
@@ -43,10 +82,11 @@ function restore():boolean{
   if(raw.length>MAX_BYTES)throw Error();
   const value=JSON.parse(raw);
   if(!value||Object.keys(value).length!==5||value.v!==1||!equal(value,bound)||!Number.isSafeInteger(value.omitted)||value.omitted<0||!Array.isArray(value.entries)||value.entries.length>LIMIT||!value.entries.every(validEntry))throw Error();
-  entries=value.entries.sort((a:NoticeEntry,b:NoticeEntry)=>b.at-a.at);omitted=value.omitted;persisted=true;return true;
+  // Older snapshots may contain a confirmation flag. Restore only the current fields.
+  entries=value.entries.map(({code,kind,at,reason}:NoticeEntry):NoticeEntry=>({code,kind,at,...(reason!==undefined?{reason}:{})})).sort((a:NoticeEntry,b:NoticeEntry)=>b.at-a.at);omitted=value.omitted;persisted=true;return true;
  }catch{drop();return false;}
 }
-function trim(){while(entries.length>LIMIT){let confirmed=entries.length-1;while(confirmed>=0&&!entries[confirmed].seen)confirmed--;entries.splice(confirmed<0?entries.length-1:confirmed,1);omitted=Math.min(Number.MAX_SAFE_INTEGER,omitted+1);}}
+function trim(){while(entries.length>LIMIT){entries.pop();omitted=Math.min(Number.MAX_SAFE_INTEGER,omitted+1);}}
 /** Called only after the existing vault/authentication path has succeeded. */
 export function activateNotificationHistory(authorized:()=>boolean):void{
  if(active&&notificationAllowed())return;
@@ -74,17 +114,16 @@ export function notificationAllowed():boolean{
 export function notificationGeneration():number{return generation;}
 export function subscribeNotificationReset(fn:()=>void):void{resets.add(fn);}
 export function subscribeNotificationHistory(fn:()=>void):void{listeners.add(fn);}
-export function recordNotification(code:NoticeCode,kind:ResultKind):void{
+export function recordNotification(code:NoticeCode,kind:ResultKind,reason?:NoticeReason):void{
  if(!notificationAllowed()||!kinds.includes(kind))return;
- entries.unshift({code:noticeCode(code),kind,at:Date.now(),seen:kind==='success'});trim();persist();emit();
+ const fixed=reason??(code==='edit-income-partial'||code==='delete-income-partial'?'finance':undefined);
+ entries.unshift({code:noticeCode(code),kind,at:Date.now(),...(kind!=='success'&&validReason(fixed)?{reason:fixed}:{})});trim();persist();emit();
 }
 export function notificationHistory(){
  const allowed=notificationAllowed();return {entries:allowed?entries.map(x=>({...x})):[],omitted:allowed?omitted:0};
 }
-export function confirmNotificationHistory():void{
- if(!notificationAllowed())return;entries=entries.map(x=>({...x,seen:true}));persist();emit();
-}
 export function noticeSummary(entry:NoticeEntry):string{
+ if(entry.reason&&validReason(entry.reason))return `${NOTICE_LABELS[entry.code]}${entry.kind==='partial'?'（一部完了）':''}：${reasonText(entry.reason)}`;
  return NOTICE_LABELS[entry.code]+({success:'が完了しました。',warning:'に確認が必要です。',partial:'は一部完了しました。必要な確認を行ってください。',error:'が完了しませんでした。状態を確認してください。'}[entry.kind]);
 }
 if(typeof window!=='undefined'){

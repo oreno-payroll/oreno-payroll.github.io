@@ -22,6 +22,11 @@ export function validateEmployerDirectory(value:unknown):EmployerEntry[] {
 export function employerDirectorySignature(value:readonly EmployerEntry[]):string {
  return JSON.stringify(validateEmployerDirectory(value));
 }
+/** Bulk assignment consent concerns the chosen identity, role and displayed name only. */
+export function employerAssignmentSignature(directory:readonly EmployerEntry[],id:string):string {
+ const entry=validateEmployerDirectory(directory).find(e=>e.id===id);
+ return entry?JSON.stringify([entry.id,entry.role,entry.name]):'';
+}
 /** Restore missing identities without overwriting live labels or current defaults. */
 export function mergeEmployerDirectories(live:readonly EmployerEntry[],backup:readonly EmployerEntry[]):EmployerEntry[] {
  const result=validateEmployerDirectory(live),incoming=validateEmployerDirectory(backup);

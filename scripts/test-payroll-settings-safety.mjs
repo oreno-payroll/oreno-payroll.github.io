@@ -102,7 +102,7 @@ assert.ok(transition.startsWith('function reportStatusTransition(){'));
 function testTransition(result){
  const shown=[];
  const appStatus={clear:()=>shown.push(['clear']),loading:m=>shown.push(['loading',m]),success:m=>shown.push(['success',m]),error:m=>shown.push(['error',m]),show:(kind,m)=>shown.push([kind,m])};
- const context={busy:false,wasBusy:true,currentOperation:{label:'旧DBを削除',result:'legacy-cleanup-status'},operationResult:result,operationCancelled:false,notificationScope:undefined,appStatus,operationFeedback};
+ const context={busy:false,wasBusy:true,currentOperation:{label:'旧DBを削除',result:'legacy-cleanup-status'},operationResult:result,operationReason:undefined,operationCancelled:false,notificationScope:undefined,appStatus,operationFeedback};
  vm.runInNewContext(transition+'\nglobalThis.fire=reportStatusTransition;',context);
  context.fire();return shown;
 }

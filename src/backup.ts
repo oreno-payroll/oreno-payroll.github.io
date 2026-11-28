@@ -1,5 +1,5 @@
 import {mountNotificationHistory} from './ui/notificationHistoryView';
-import {noticeCode,recordNotification} from './ui/notificationHistory';
+import {noticeCode,recordNotification,noticeReason,type NoticeReason} from './ui/notificationHistory';
 import {confirmOperation,type OperationDialogRequest} from './ui/operationDialog';
 import {mountSettingsNavigation} from './ui/settingsNavigation';
 import { createAppStatus } from './ui/appStatus';
@@ -12,7 +12,7 @@ import {employerDirectorySignature,upsertEmployer,type EmployerEntry} from './st
 import {defaultEmployerForecast,validateEmployerForecast,SALARY_FORECAST_LABELS,type EmployerForecastPreferences} from './storage/employerForecast';
 import {PayrollPartialSuccessError} from './storage/operationError';
 import {createEmployerId} from './storage/employerIdentity';
-import {legacyEmployers,employerDisplayName,type LegacyEmployer} from './ui/employerSelection';
+import {legacyEmployers,employerDisplayName,employerNumber,type LegacyEmployer} from './ui/employerSelection';
 import { createBackup, readBackup, type LoadedBackup } from './storage/payrollBackup';
 import { encryptBackup, decryptBackup, isEncryptedBackup } from './storage/encryptedBackup';
 import {captureOperationAuthorization,cloudVault,tryResumeCloudVault,refreshSessionAfterKeyRotation,cloudConnectionState,saveCloudClientId,chooseMicrosoftAccount,signOutMicrosoftAccount,reconnectMicrosoftAccount,cloudRedirectUri,currentBrowserRememberState,rememberCurrentBrowser,forgetCurrentBrowser} from './cloud/auth';
@@ -228,9 +228,9 @@ function renderEmployerDirectory():void{
  if(!employers){renderBulkPanel();return;}
  const sorted=[...employers].sort((a,b)=>a.role.localeCompare(b.role)||Number(b.current)-Number(a.current)||a.name.localeCompare(b.name,'ja')||a.id.localeCompare(b.id));
  const makeRow=(entry:EmployerEntry,showRole:boolean)=>{
-  const sameName=employers!.filter(x=>x.role===entry.role&&x.name===entry.name);
+  const number=employerNumber(employers!,entry);
   const li=document.createElement('li'),identity=document.createElement('div'),name=document.createElement('strong'),edit=document.createElement('button');
-  identity.className='employer-settings__identity';name.textContent=entry.name+(sameName.length>1?`（${sameName.findIndex(x=>x.id===entry.id)+1}）`:'');
+  identity.className='employer-settings__identity';name.textContent=entry.name+(number?`（${number}）`:'');
   edit.type='button';edit.className='btn btn--secondary btn--small';edit.textContent='編集';edit.setAttribute('aria-label',`${roleLabel(entry.role)} ${name.textContent}を編集`);
   edit.addEventListener('click',()=>openEmployerDraft(entry.id,edit));employerEditButtons.set(entry.id,edit);identity.append(name,edit);li.append(identity);
   if(showRole){const meta=document.createElement('p');meta.className='employer-settings__meta';meta.textContent=`${roleLabel(entry.role)}・現在の勤務先ではない`;li.append(meta);}
@@ -268,8 +268,9 @@ let encryptedFile = false;
 const appStatus=createAppStatus(undefined,'settings');
 type Operation = {label:string;result:string};
 let operationResult:OperationResult|null=null;
+let operationReason:NoticeReason|undefined;
 let operationCancelled=false;
-function finishOperation(status:OperationResult['status'],message?:string):void{operationResult={status,message:message??''};}
+function finishOperation(status:OperationResult['status'],message?:string,reason?:NoticeReason):void{operationResult={status,message:message??''};operationReason=reason??(status==='success'?undefined:operationReason);}
 function cancelOperation():void{operationCancelled=true;}
 let currentOperation: Operation|null=null;
 let wasBusy=false;
@@ -333,9 +334,9 @@ function reportStatusTransition(){
   if(operationCancelled||!operation)appStatus.clear(notificationScope);
   else {
    const notification=operationFeedback(operation.label,operationResult);
-   appStatus.show(notification.kind,notification.message,false,{scope:notificationScope});
+   appStatus.show(notification.kind,notification.message,false,{scope:notificationScope,reason:operationReason});
   }
-  currentOperation=null;operationResult=null;operationCancelled=false;notificationScope=undefined;
+  currentOperation=null;operationResult=null;operationReason=undefined;operationCancelled=false;notificationScope=undefined;
  }
  wasBusy=busy;
 }
@@ -420,10 +421,10 @@ function updateButtons(): void {
   addInspect.disabled=busy||!preview;
   addButton.disabled=busy||!preview||!addPlan||!addPlanAuthorized?.()||!(addPlan.add||addPlan.employersAdded);
 }
-function info(message: string, isError = false, detail = false): void {
+function info(message: string, isError = false, detail = false, reason?:NoticeReason): void {
   status.textContent = isError||detail ? message : "";
   status.style.color = isError ? 'var(--color-danger)' : 'var(--color-success)';
-  if(isError){if(busy&&currentOperation)finishOperation('error',message);else appStatus.error(message);}
+  if(isError){if(busy&&currentOperation)finishOperation('error',message,reason);else appStatus.show('error',message,false,{reason});}
   else if(busy&&!detail)appStatus.show('loading',message,false,{scope:notificationScope});
   else if(!busy&&message&&!detail)appStatus.success(message);
 }
@@ -444,8 +445,8 @@ async function refreshCount(): Promise<void> {
 }
 exportButton.addEventListener('click', async () => {
   if (busy || !loadedDb) return;
-  if (exportPassword.value !== exportConfirm.value) { info('2つのパスワードが一致しません。', true); return; }
-  if ([...exportPassword.value].length < 12) { info('パスワードは12文字以上にしてください。', true); return; }
+  if (exportPassword.value !== exportConfirm.value) { info('2つのパスワードが一致しません。',true,false,'input'); return; }
+  if ([...exportPassword.value].length < 12) { info('パスワードは12文字以上にしてください。',true,false,'input'); return; }
   selectSettingsOperation('export-button');busy = true; updateButtons(); info('暗号化バックアップを作成しています…');
   const started = performance.now();
   let step='OneDriveの原本PDFを確認しています…';
@@ -478,7 +479,7 @@ exportButton.addEventListener('click', async () => {
     exportPassword.value = '';
     exportConfirm.value = '';
     info(`暗号化バックアップを作成しました（${sizes(blob.size)}）。保存先でファイルがあることを確認してください。`,false,true);finishOperation('success');
-  } catch (error) { info(`バックアップに失敗しました: ${error instanceof Error ? error.message : String(error)}`, true); }
+  } catch (error) { info(`バックアップに失敗しました: ${error instanceof Error ? error.message : String(error)}`,true,false,noticeReason(error)); }
   finally { if(timer)clearInterval(timer);busy = false;updateButtons(); }
 });
 
@@ -495,7 +496,7 @@ async function verifyRestore(file: File, password?: string): Promise<void> {
   } catch (error) {
     preview = undefined;
     restorePreview.textContent = '検証失敗。既存データは変更されていません。';
-    info(`復元ファイルを検証できませんでした: ${error instanceof Error ? error.message : String(error)}`, true);
+    info(`復元ファイルを検証できませんでした: ${error instanceof Error ? error.message : String(error)}`,true,false,noticeReason(error));
   } finally { busy = false; updateButtons(); }
 }
 filePicker.addEventListener('change', async () => {
@@ -515,7 +516,7 @@ filePicker.addEventListener('change', async () => {
       restorePreview.textContent = '旧ZIPバックアップ。パスワードは不要です。「ファイルを検証」を押してください。';
     }
   } catch (error) {
-    info(`ファイルを読み取れませんでした: ${error instanceof Error ? error.message : String(error)}`, true);
+    info(`ファイルを読み取れませんでした: ${error instanceof Error ? error.message : String(error)}`,true,false,noticeReason(error));
     return;
   } finally { busy = false; updateButtons(); }
 });
@@ -543,7 +544,7 @@ restoreButton.addEventListener('click', async () => {
     resetPreview();
     restorePreview.textContent = '復元を中断しました。バックアップの検証からやり直してください。';
     try { await refreshCount(); } catch { /* データの読み込み失敗は以下の詳細エラーを優先 */ }
-    info(`復元が途中で停止しました。OneDriveの明細を確認してください: ${error instanceof Error ? error.message : String(error)}`, true);finishOperation('partial');
+    info(`復元が途中で停止しました。OneDriveの明細を確認してください: ${error instanceof Error ? error.message : String(error)}`,true,false,noticeReason(error));finishOperation('partial');
     busy = false; updateButtons();
   }
 });
@@ -564,7 +565,7 @@ addInspect.addEventListener('click',async()=>{
   const plan=await inspectAdditiveRestore(data.records,data.employers);
   if(!authorized()||preview!==data)throw new Error('バックアップが変更されました。');
   addPlan=plan;addPlanAuthorized=authorized;addPreview.textContent=describeAddPlan(plan);status.textContent='';finishOperation('success');
- }catch(error){addPreview.textContent='追加復元の検査を中断しました。';info(error instanceof Error?error.message:String(error),true);}
+ }catch(error){addPreview.textContent='追加復元の検査を中断しました。';info(error instanceof Error?error.message:String(error),true,false,noticeReason(error));}
  finally{busy=false;updateButtons();}
 });
 addButton.addEventListener('click',async()=>{
@@ -581,7 +582,7 @@ addButton.addEventListener('click',async()=>{
   addPlan=undefined;addPlanAuthorized=undefined;ack.checked=false;
   addPreview.textContent='追加復元を中断しました。既に追加された明細がある可能性があります。最新の対象を確認してください。未参照PDFやFinance未同期がある場合は設定から復旧してください。';
   try{await refreshCount();}catch{ /* retain the original failure */ }
-  info(`${addPreview.textContent} ${error instanceof Error?error.message:String(error)}`,true);finishOperation('partial');
+  info(`${addPreview.textContent} ${error instanceof Error?error.message:String(error)}`,true,false,noticeReason(error));finishOperation('partial');
  }finally{busy=false;updateButtons();}
 });
 browserKeyRegister.addEventListener('click',()=>{void(async()=>{
@@ -692,7 +693,7 @@ cloudLoad.addEventListener('click',()=>{void(async()=>{
  try{await refreshCount();cloudLoad.hidden=true;finishOperation('success');}
  catch(error){
   exportSummary.textContent='OneDrive明細を読み込めませんでした。';
-  info(error instanceof Error?error.message:String(error),true);
+  info(error instanceof Error?error.message:String(error),true,false,noticeReason(error));
  }finally{busy=false;updateButtons();}
 })()});
 appStatus.loading('設定を確認しています…');
@@ -712,7 +713,7 @@ void(async()=>{
  await refreshCount();updateButtons();if(!busy&&appStatus.element.dataset.state==='loading')appStatus.clear();
 })().catch(error=>{
  exportSummary.textContent='保存済みデータを確認できませんでした。';
- info(error instanceof Error?error.message:'OneDriveのデータを取得できませんでした。',true);
+ info(error instanceof Error?error.message:'OneDriveのデータを取得できませんでした。',true,false,noticeReason(error));
  updateButtons();
 });
 
@@ -727,7 +728,7 @@ orphanCheck.addEventListener('click',()=>{void(async()=>{
    ? `孤立した年度：${orphanYears.map(v=>`${v.year}年度（${v.records}件${v.records===0?"・空の年度ファイル":""}）`).join('、')}。内容を確認してから復旧してください。`
    : '索引未登録の明細データは見つかりませんでした。';
   orphanRecover.hidden=!orphanYears.length;finishOperation('success');
- }catch(error){finishOperation('error');orphanStatus.textContent=`検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('error',undefined,noticeReason(error));orphanStatus.textContent=`検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 orphanRecover.addEventListener('click',()=>{void(async()=>{
@@ -741,7 +742,7 @@ orphanRecover.addEventListener('click',()=>{void(async()=>{
   orphanYears=undefined;orphanRecover.hidden=true;
   orphanStatus.textContent=`${count}年度を復旧しました。最新の明細一覧を確認してください。`;
   loadedDb=false;await refreshCount();finishOperation('success');
- }catch(error){finishOperation('partial');orphanYears=undefined;orphanRecover.hidden=true;orphanStatus.textContent=`復旧を完了できませんでした。年度索引が一部更新済みの可能性があります：${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));orphanYears=undefined;orphanRecover.hidden=true;orphanStatus.textContent=`復旧を完了できませんでした。年度索引が一部更新済みの可能性があります：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 $<HTMLButtonElement>('payroll-income-publish').addEventListener('click',()=>{void(async()=>{
@@ -753,7 +754,7 @@ $<HTMLButtonElement>('payroll-income-publish').addEventListener('click',()=>{voi
   const vault=await cloudVault();
   await vault.syncIncome();
   label.textContent='全年度のFinance連携データを更新・読み戻し照合しました。';finishOperation('success');
- }catch(error){finishOperation('error');label.textContent=`連携データの更新に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;}
+ }catch(error){finishOperation('error',undefined,noticeReason(error));label.textContent=`連携データの更新に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;}
  finally{busy=false;updateButtons();}
 })()});
 
@@ -781,7 +782,7 @@ migrateButton?.addEventListener('click',()=>{void(async()=>{
   const result=await migrateFromLegacyIndexedDb(message=>{migrateStatus.textContent=message;});
   migrateStatus.textContent=`旧データ ${result.found}件中、新規に${result.migrated}件を移行しました。旧ブラウザ保存データは保持しています。`;
   await refreshCount();finishOperation('success');
- }catch(error){finishOperation('partial');migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));migrateStatus.textContent=`移行を中断しました：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
  })();});
 
@@ -815,7 +816,7 @@ changeButton.addEventListener('click',()=>{void(async()=>{
    'パスフレーズを変更しました。次回の解除には新しいパスフレーズを使用してください。';
   finishOperation(remembered==='storage-warning'?'partial':'success');
   await refreshBrowserKeyState();
- }catch(error){finishOperation('partial');changeStatus.textContent=`変更を完了できませんでした: ${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));changeStatus.textContent=`変更を完了できませんでした: ${error instanceof Error?error.message:String(error)}`;}
  finally{clearInterval(timer);busy=false;updateButtons();}
 })()});
 
@@ -828,7 +829,7 @@ cloudCheck.addEventListener('click',()=>{void(async()=>{
   oldCloudPlan=plan;
   cloudStatus.textContent=plan.targets.length?`旧暗号フォルダー ${plan.targets.length}件 / 暗号ファイル ${plan.files}件（約${sizes(plan.bytes)}）。現行の保存世代は対象外です。`:'整理できる旧暗号データはありません。';
   cloudDelete.hidden=!plan.targets.length;finishOperation('success');
- }catch(error){finishOperation('error');const message=error instanceof Error?error.message:String(error);cloudStatus.textContent=message.includes('が現行世代にありません')?`${message} 直前に原本をごみ箱へ移動した場合は、OneDriveで現行原本を復元し、未参照PDFを再検査してください。`:message;}
+ }catch(error){finishOperation('error',undefined,noticeReason(error));const message=error instanceof Error?error.message:String(error);cloudStatus.textContent=message.includes('が現行世代にありません')?`${message} 直前に原本をごみ箱へ移動した場合は、OneDriveで現行原本を復元し、未参照PDFを再検査してください。`:message;}
  finally{busy=false;updateButtons();}
 })()});
 cloudDelete.addEventListener('click',()=>{void(async()=>{
@@ -840,7 +841,7 @@ cloudDelete.addEventListener('click',()=>{void(async()=>{
   const vault=await cloudVault();
   const count=await vault.cleanupOldEncryptedData(plan,text=>{cloudStatus.textContent=text;});
   cloudStatus.textContent=`旧暗号フォルダー ${count}件をごみ箱に移動しました。完全に消す場合はOneDriveのごみ箱も空にしてください。`;finishOperation('success');
- }catch(error){finishOperation('partial');cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));cloudStatus.textContent=`途中で停止しました。残りの対象を再確認してください：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 // 暗号化原本の管理は本人用のみ。どの操作も最新年度・索引・原本ETagを再検証する。
@@ -907,7 +908,7 @@ detachedCheck.addEventListener('click',()=>{void(async()=>{
     detachedStatus.textContent=report.originals.length
       ?`未参照の暗号化PDF原本 ${report.originals.length}件（${sizes(report.originals.reduce((sum,item)=>sum+item.size,0))}）。削除済み明細・中断した保存の区別はできません。${report.originals.length>200?'200件ずつ表示します。':''}`
       :'未参照の暗号化PDF原本はありません。';finishOperation('success');
-  }catch(error){finishOperation('error');clearDetachedReport();detachedStatus.textContent=`原本を検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
+  }catch(error){finishOperation('error',undefined,noticeReason(error));clearDetachedReport();detachedStatus.textContent=`原本を検査できませんでした：${error instanceof Error?error.message:String(error)}`;}
   finally{busy=false;updateButtons();}
 })()});
 // 旧DBは任意検査可能。削除時はOneDriveの全件照合に成功した場合のみ実行する。
@@ -917,7 +918,7 @@ localCheck.addEventListener('click',()=>{void(async()=>{
  try{
   const result=await inspectLegacyIndexedDb();
   finishOperation('success');localStatus.textContent=result.exists?`旧ブラウザ保存データ：${result.count}件。削除前にOneDriveの全明細・PDF原本を照合します。`:'旧ブラウザ保存データはありません。';
- }catch(error){finishOperation('error');localStatus.textContent=`旧データを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('error',undefined,noticeReason(error));localStatus.textContent=`旧データを確認できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 localDelete.addEventListener('click',()=>{void(async()=>{
@@ -931,7 +932,7 @@ localDelete.addEventListener('click',()=>{void(async()=>{
   if(!authorized()){cancelOperation();return;}
   const deleted=await deleteLegacyIndexedDb(result.count,text=>{localStatus.textContent=text;});
   localStatus.textContent=`旧ブラウザ保存データを削除しました（${deleted}件）。OneDriveやMicrosoftの接続情報は変更していません。`;finishOperation('success');
- }catch(error){finishOperation('partial');localStatus.textContent=`旧データは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));localStatus.textContent=`旧データは削除できませんでした：${error instanceof Error?error.message:String(error)}`;}
  finally{busy=false;updateButtons();}
 })()});
 
@@ -988,7 +989,7 @@ yearEndExport.addEventListener('click',()=>{void(async()=>{
   document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30_000);
   yearEndPassword.value='';yearEndConfirm.value='';
   reportYearEnd(`従業員 ${data.persons.length}名、原本 ${data.persons.reduce((n,p)=>n+p.originals.length,0)}件の暗号化バックアップを生成しました（${sizes(encrypted.size)}）。ファイルが保存されたことを確認してください。`);finishOperation('success');
- }catch(error){finishOperation('error');yearEndError(error);}
+ }catch(error){finishOperation('error',undefined,noticeReason(error));yearEndError(error);}
  finally{busy=false;updateButtons();}
 })()});
 yearEndVerify.addEventListener('click',()=>{void(async()=>{
@@ -1012,7 +1013,7 @@ yearEndVerify.addEventListener('click',()=>{void(async()=>{
    (plan.sameNameCollisions?`同名の別データが${plan.sameNameCollisions}名追加されます。従業員別一覧を確認してください。`:'');
   if(!plan.canRestore){yearEndRecheck.hidden=false;await diagnoseIncompleteYearEndRestore(data);}
   reportYearEnd(plan.canRestore?'バックアップの完全性検査が完了しました。':'バックアップは検証済みです。OneDriveの保存状態を確認してください。');finishOperation(plan.canRestore?'success':'partial');
- }catch(error){finishOperation('error');yearEndError(error);invalidateYearEndPreview('バックアップの検証に失敗しました。OneDriveのデータは変更していません。');}
+ }catch(error){finishOperation('error',undefined,noticeReason(error));yearEndError(error);invalidateYearEndPreview('バックアップの検証に失敗しました。OneDriveのデータは変更していません。');}
  finally{busy=false;updateButtons();}
 })()});
 yearEndCommit.addEventListener('click',()=>{void(async()=>{
@@ -1025,7 +1026,7 @@ yearEndCommit.addEventListener('click',()=>{void(async()=>{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd);
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
   yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名を復元しました（既存の ${result.skipped}名は変更なし）。`);finishOperation('success');
- }catch(error){finishOperation('partial');
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));
   yearEndRecheck.hidden=false;yearEndPlan=undefined;
   yearEndPreviewLabel.textContent='復元は完了していません。下の保存状況を確認してください。';
   yearEndError(error);
@@ -1042,7 +1043,7 @@ yearEndResume.addEventListener('click',()=>{void(async()=>{
   const result=await yearEndRepo.restoreBackupSnapshot(data,reportYearEnd,{resumeVerifiedOrphans:true});
   invalidateYearEndPreview('復元完了。年末調整画面から内容を確認してください。');
   yearEndFile.value='';reportYearEnd(`従業員 ${result.restored}名の復元を完了しました（既存の ${result.skipped}名は変更なし）。`);finishOperation('success');
- }catch(error){finishOperation('partial');yearEndRecheck.hidden=false;yearEndError(error);await diagnoseIncompleteYearEndRestore(data);}
+ }catch(error){finishOperation('partial',undefined,noticeReason(error));yearEndRecheck.hidden=false;yearEndError(error);await diagnoseIncompleteYearEndRestore(data);}
  finally{busy=false;updateButtons();}
 })()});
 
@@ -1081,12 +1082,13 @@ employerForecastSettings.addEventListener('change',updateEmployerButtons);
 function setEmployerLoadLabel(label:string):void{
  employerDirectoryLoad.textContent=label;employerDirectoryLoad.setAttribute('aria-label',label==='更新'?'勤務先一覧を更新':label);
  employerDirectoryLoad.classList.toggle('employer-refresh',label==='更新');
+ employerDirectoryLoad.classList.toggle('btn--square',label==='更新');
 }
 // Use the directory from the same authenticated index as the annual records.
 async function readEmployerSnapshot(vault:Awaited<ReturnType<typeof cloudVault>>,authorized:()=>boolean){
  let list:EmployerEntry[]|undefined;
  const records=await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true,onEmployerDirectory:value=>{list=value;}});
- if(!list||!authorized()||employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(list)||!authorized())throw new Error('勤務先一覧の確認中に状態が変更されました。');
+ if(!list||!authorized()||employerDirectorySignature(await vault.readEmployerDirectory())!==employerDirectorySignature(list)||!authorized())throw Object.assign(new Error('勤務先一覧の確認中に状態が変更されました。'),{name:'EmployerSnapshotChangedError'});
  return {list,records};
 }
 // Never replay the failed write or its consent. Restore controls only from a
@@ -1110,21 +1112,20 @@ async function recoverEmployerDirectory(authorized:()=>boolean,detail:string):Pr
 }
 async function loadEmployerDirectory(allowPrompt:boolean):Promise<void>{
  if(busy)return;
- if(allowPrompt)selectSettingsOperation('employer-directory-load');
- else {currentOperation=null;operationResult=null;operationCancelled=false;}
+ selectSettingsOperation('employer-directory-load');
  const authorized=captureOperationAuthorization();
  busy=true;employers=undefined;legacyDirectory=[];bulkRecords=[];bulkAuthorized=undefined;renderEmployerDirectory();updateButtons();
  try{
   employerDirectoryStatus.hidden=false;employerDirectoryStatus.textContent='勤務先一覧を読み込んでいます…';
   const vault=allowPrompt?await cloudVault():await tryResumeCloudVault();
   if(!authorized())throw new Error('認証状態が変更されました。');
-  if(!vault){setEmployerLoadLabel('保管庫を開く');employerDirectoryStatus.textContent='勤務先を管理するには保管庫を開いてください。';return;}
+  if(!vault){operationCancelled=true;setEmployerLoadLabel('保管庫を開く');employerDirectoryStatus.textContent='勤務先を管理するには保管庫を開いてください。';return;}
   const {list,records}=await readEmployerSnapshot(vault,authorized);
   if(!authorized())throw new Error('認証状態が変更されました。');
   employers=list;legacyDirectory=legacyEmployers(records,list);bulkRecords=records;bulkAuthorized=authorized;renderEmployerDirectory();
   setEmployerLoadLabel('更新');
-  employerDirectoryStatus.textContent='';employerDirectoryStatus.hidden=true;finishOperation('success');
- }catch{setEmployerLoadLabel('再読み込み');employerDirectoryStatus.textContent='勤務先一覧を読み込めませんでした。もう一度お試しください。';finishOperation('error');}
+  employerDirectoryStatus.textContent='';employerDirectoryStatus.hidden=true;if(!allowPrompt)operationCancelled=true;else finishOperation('success');
+ }catch(error){setEmployerLoadLabel('再読み込み');employerDirectoryStatus.textContent='勤務先一覧を読み込めませんでした。通知履歴で原因を確認できます。';finishOperation('error','勤務先一覧を読み込めませんでした。詳細は通知履歴をご確認ください。',noticeReason(error));}
  finally{busy=false;updateButtons();}
 }
 employerDirectoryLoad.addEventListener('click',()=>{void loadEmployerDirectory(true);});
@@ -1153,10 +1154,10 @@ employerDirectoryForm.addEventListener('submit',async event=>{
   if(!authorized())throw new Error('認証状態が変わりました。');
   employers=saved;legacyDirectory=legacyDirectory.filter(x=>!saved.some(y=>y.id===x.id));employerFocusTarget=id;renderEmployerDirectory();
   employerDirectoryStatus.hidden=true;employerDirectoryStatus.textContent='';finishOperation('success');
- }catch{
+ }catch(error){
   if(writing||!authorized()||legacy){employerFocusTarget=selected;await recoverEmployerDirectory(authorized,'勤務先の保存結果を確認できませんでした。');}
   else setEmployerError('勤務先を保存できませんでした。通信状態を確認し、再試行してください。');
-  finishOperation('error');
+  finishOperation('error',undefined,noticeReason(error));
  }finally{busy=false;updateButtons();}
 });
 
@@ -1170,8 +1171,8 @@ bulkSave.addEventListener('click',async()=>{
  if(busy||!bulkDialog.open||bulkSave.disabled||!employers||!bulkAuthorized?.())return;
  const authorized=bulkAuthorized,entry=employers.find(e=>e.id===bulkTarget.value);
  if(!entry)return;
- const directory=employerDirectorySignature(employers),targets=bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)}));
- const selectedSignature=JSON.stringify(targets),guard=()=>authorized()&&busy&&bulkTarget.value===entry.id&&!!employers&&employerDirectorySignature(employers)===directory&&JSON.stringify(bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)})))===selectedSignature;
+ const directory=employerDirectorySignature([entry]),targets=bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)}));
+ const selectedSignature=JSON.stringify(targets),guard=()=>authorized()&&busy&&bulkTarget.value===entry.id&&!!employers&&employerDirectorySignature(employers.filter(e=>e.id===entry.id))===directory&&JSON.stringify(bulkCandidates().filter(r=>bulkSelected.has(r.id)).map(r=>({id:r.id,signature:recordSignature(r)})))===selectedSignature;
  selectSettingsOperation('employer-bulk-save');
  busy=true;bulkStatus.textContent='選択した明細を確認しています…';updateButtons();let writing=false;
  try{
@@ -1188,7 +1189,7 @@ bulkSave.addEventListener('click',async()=>{
   const detail=authorized()&&error instanceof Error?`${error.message}${error instanceof PayrollPartialSuccessError&&error.cause instanceof Error?` 原因: ${error.cause.message}`:''}`:'認証状態または通信状態を確認してください。';
   if(writing||!authorized()){bulkRestoreFocus=true;await recoverEmployerDirectory(authorized,detail);}
   else {if(!bulkDialog.open)bulkDialog.showModal();bulkStatus.textContent=detail;}
-  finishOperation(error instanceof PayrollPartialSuccessError?'partial':'error');
+  finishOperation(error instanceof PayrollPartialSuccessError?'partial':'error',undefined,noticeReason(error));
  }finally{busy=false;updateButtons();}
 });
 

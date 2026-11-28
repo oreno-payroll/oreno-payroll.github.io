@@ -25,17 +25,22 @@ for (const page of pages) {
   assert.ok(html.indexOf('theme.css') > html.indexOf('style.css'), `${page}: dark rules override base CSS`);
   assert.ok(html.indexOf('theme.css') < html.indexOf('</head>'), `${page}: palette loaded in head`);
   assert.ok(!/\bonclick\s*=/.test(html), `${page}: no inline handler`);
-  // Navigation actions remain rightmost, rather than the theme control.
-  const header = html.match(/<(?:div class="header-actions"|header class="reader-toolbar")[^>]*>([\s\S]*?)<\/(?:div|header)>/);
-  assert.ok(header, `${page}: header action container exists`);
-  const toggleAt = header[1].indexOf('data-theme-toggle');
-  assert.ok(toggleAt >= 0, `${page}: theme control in header`);
-  if (page === 'public/index.html') {
-    assert.ok(header[1].indexOf('href="./backup/index.html"') < toggleAt, 'Home: theme immediately after settings');
-    assert.ok(toggleAt < header[1].indexOf('href="./year-end-assist/index.html"'), 'Home: year-end navigation follows theme');
-    assert.ok(header[1].indexOf('href="./upload/index.html"') > toggleAt, 'Home: upload CTA remains rightmost');
+  const header = html.match(/<header class="(?:site-header|reader-toolbar)">([\s\S]*?)<\/header>/);
+  assert.ok(header, `${page}: header exists`);
+  assert.ok(header[1].includes('data-theme-toggle'), `${page}: theme control in header`);
+  if (page !== 'public/view/index.html') {
+    const nav = header[1].match(/<nav class="site-nav"[^>]*>([\s\S]*?)<\/nav>/);
+    assert.ok(nav, `${page}: shared navigation`);
+    const prefix = page === 'public/index.html' ? './' : '../';
+    const links = [...nav[1].matchAll(/<a class="site-nav__link" href="([^"]+)"(?: aria-current="page")?>([^<]+)<\/a>/g)];
+    assert.deepEqual(links.map(m=>[m[1],m[2]]), [[prefix+'index.html','ホーム'],[prefix+'year-end-assist/index.html','年末調整'],[prefix+'backup/index.html','設定']]);
+    const current = links.filter(m=>m[0].includes('aria-current'));
+    const active = links.find(m=>page === 'public/'+m[1].replace(/^\.\.?\//,''));
+    assert.deepEqual(current.map(m=>m[1]), active ? [active[1]] : []);
+    assert.ok(header[1].indexOf('</nav>') < header[1].indexOf('data-theme-toggle'));
+    assert.doesNotMatch(header[1], /href="[^"]*upload\/|header-back/);
   } else {
-    assert.ok(toggleAt < header[1].lastIndexOf('href="../index.html"'), `${page}: back/home navigation remains rightmost`);
+    assert.ok(header[1].indexOf('data-theme-toggle') < header[1].indexOf('href="../index.html"'));
   }
 }
 const theme = read('src/theme.ts');
@@ -54,4 +59,4 @@ for (const expected of ['color-scheme:dark', '.site-header .header-actions', '.a
 assert.match(css, /html\[data-theme="dark"\] select\.select \{[\s\S]*?background-repeat:no-repeat;/);
 assert.match(css, /html\[data-theme="dark"\] select\.select \{[\s\S]*?background-position:right 11px center;/);
 assert.match(css, /html\[data-theme="dark"\] \.settings-page \.vault-info \{ background:transparent;/, 'Settings metadata stays unboxed in dark mode');
-console.log('PASS: theme control order, 6 pages, CSP, persistence, select arrow, backup metadata');
+console.log('PASS: shared navigation, theme control, 6 pages, CSP, persistence, select arrow, backup metadata');

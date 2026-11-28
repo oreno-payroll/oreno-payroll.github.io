@@ -1,4 +1,4 @@
-import {notificationAllowed,notificationGeneration,recordNotification,subscribeNotificationReset,type NoticeCode,type ResultKind} from './notificationHistory.ts';
+import {notificationAllowed,notificationGeneration,recordNotification,subscribeNotificationReset,type NoticeCode,type ResultKind,type NoticeReason} from './notificationHistory.ts';
 /** All Payroll pages use the same bottom-right, non-blocking operation status card. */
 export type AppStatusKind = 'loading'|'success'|'info'|'warning'|'partial'|'error';
 // Auth and page code may refer to the same status node. Share its timer/controller.
@@ -103,7 +103,7 @@ function makeStatus(element:HTMLElement,defaultCode:NoticeCode){
   loadingDismissed=false;loadingActive=true;
   const scope:Scope={generation:notificationGeneration(),code,target,dismissed:false};latestScope=scope;return scope;
  }
- function show(kind:AppStatusKind,message:string,persistent=false,options:{scope?:Scope;code?:NoticeCode;record?:boolean}={}) {
+ function show(kind:AppStatusKind,message:string,persistent=false,options:{scope?:Scope;code?:NoticeCode;record?:boolean;reason?:NoticeReason}={}) {
   if(!notificationAllowed())return;
   const scope=options.scope;
   if(scope&&scope.generation!==notificationGeneration())return;
@@ -117,7 +117,7 @@ function makeStatus(element:HTMLElement,defaultCode:NoticeCode){
    if(kind!=='info'){
     if(scope?.result===kind)return; // the same typed result from the same operation
     if(scope)scope.result=kind as ResultKind;
-    if(options.record!==false)recordNotification(options.code??scope?.code??defaultCode,kind as ResultKind);
+    if(options.record!==false)recordNotification(options.code??scope?.code??defaultCode,kind as ResultKind,options.reason);
    }
   }
   const sticky=kind==='error'||kind==='partial'||(kind==='warning'&&persistent);

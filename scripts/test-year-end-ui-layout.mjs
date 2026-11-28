@@ -19,15 +19,11 @@ for(const id of ['yea-current-name','yea-calendar-year','yea-pdfs','yea-year-mem
 assert.doesNotMatch(detail,/yea-open-manage/);
 assert.match(ts,/row\.append\(button,rename,remove\)/);
 assert.match(ts,/requiredText:name,acceptLabel:'従業員を削除'/);
-assert.match(html,/<a[^>]*id="yea-back-home"[^>]*href="\.\.\/index\.html"[^>]*>[\s\S]*?<span>ホームへ戻る<\/span><\/a>/);
-const headerActions=between(html,'<div class="header-actions">','</div></header>');
-assert.match(headerActions, /data-theme-toggle/,'theme toggle is in the shared header actions');
-assert.match(headerActions, /id="yea-back-directory" hidden>[\s\S]*?<span>従業員一覧へ<\/span><\/button>/);
-assert.ok(headerActions.indexOf('data-theme-toggle')<headerActions.indexOf('id="yea-back-home"')&&
- headerActions.indexOf('id="yea-back-home"')<headerActions.indexOf('id="yea-back-directory"'),
- 'theme switch and both navigation actions keep the existing header order');
-for(const id of ['yea-back-home','yea-back-directory']){const i=html.indexOf(`id="${id}"`),part=html.slice(i,html.indexOf(id==='yea-back-home'?'</a>':'</button>',i));assert.match(part,/<svg class="icon"[^>]*viewBox="0 0 24 24"/);}
-assert.match(ts,/backHome\.hidden=false/);assert.match(ts,/backHome\.hidden=true/);
+const header=between(html,'<header class="site-header">','</header>');
+assert.match(header, /href="\.\.\/index\.html">ホーム<\/a>/);
+assert.doesNotMatch(header, /yea-back-directory|yea-back-home/);
+assert.match(detail, /class="yea-detail-navigation">[\s\S]*?id="yea-back-directory" hidden>[\s\S]*?<span>従業員一覧へ<\/span><\/button>/);
+assert.match(ts,/backDirectory\.hidden=false/);assert.match(ts,/backDirectory\.hidden=true/);
 assert.match(ts,/yearContent\.dataset\.empty=data\.documents\.length===0\?'true':'false'/);
 assert.doesNotMatch(css,/\.yea-main\[data-empty="true"\] >/);
 assert.match(ts,/function showYearPlaceholders\(\)/);
@@ -57,7 +53,8 @@ assert.match(ts,/uploadAccordion\.open=data\.documents\.length===0/);
 assert.match(ts,/repo\.createPerson\(name,''\)/);assert.match(ts,/repo\.renamePerson\(id,name,p\.alias,p\.displayName\)/);
 assert.match(ts,/const displayPerson=.*p\.alias/);
 assert.doesNotMatch(ts,/\.\/storage\/payrollStore/);
-const first=home.indexOf('href="./backup/index.html"');const second=home.indexOf('href="./year-end-assist/index.html"');const third=home.indexOf('href="./upload/index.html"');assert.ok(first>=0&&second>first&&third>second);
+assert.match(home, /<nav class="site-nav"[\s\S]*?href="\.\/year-end-assist\/index\.html"[\s\S]*?href="\.\/backup\/index\.html"[\s\S]*?<\/nav>/);
+assert.match(home, /class="dashboard-upload"|class="btn btn--primary dashboard-upload"/);
 assert.doesNotMatch(home,/class="card yea-entry"/);assert.doesNotMatch(dash,/\.yea-entry/);
 console.log('PASS: directory, empty-state importer, always-visible unified list, header navigation, single collapsible editor, no redundant monthly table or PDF iframe');
 

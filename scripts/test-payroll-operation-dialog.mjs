@@ -1,5 +1,6 @@
 /** Execute the real dialog controller against a minimal synthetic DOM. Native focus and modal behavior are separately covered by Chromium E2E. */
 import assert from 'node:assert/strict';
+import {noticeReason} from '../src/ui/notificationHistory.ts';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
@@ -89,7 +90,7 @@ const restore=backup.slice(backup.indexOf("restoreButton.addEventListener('click
 assert.ok(helper.startsWith('async function approveSettings('));
 async function restoreScenario(change,approve=true){
  let click,request,release,writes=0,nav=0,valid=true;
- const context={busy:false,preview:{records:[{id:1}]},ack:{checked:true},initialSnapshot:{physical:'synthetic-record',directory:'[]',count:1,bytes:1},currentCount:1,
+ const context={noticeReason,busy:false,preview:{records:[{id:1}]},ack:{checked:true},initialSnapshot:{physical:'synthetic-record',directory:'[]',count:1,bytes:1},currentCount:1,
   restoreButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
   selectSettingsOperation(code){assert.equal(code,'restore-button');},updateButtons(){},info(){},finishOperation(){},recordNotification(){},replaceAllRecords:async()=>{writes++;},window:{location:{assign(){nav++;}}},
@@ -136,7 +137,7 @@ const addHandler=backup.slice(backup.indexOf("addButton.addEventListener('click'
 async function addScenario(change,approve=true){
  let click,request,release,writes=0,valid=true;
  const plan={signature:'synthetic-plan',add:1,samePdf:2,sameId:0,samePeriod:0,ambiguous:0,backupConflict:0,employersAdded:0};
- const context={busy:false,preview:{records:[{id:1}],unreviewedWarnings:0},ack:{checked:false},addPlan:plan,addPlanAuthorized:()=>valid,
+ const context={noticeReason,busy:false,preview:{records:[{id:1}],unreviewedWarnings:0},ack:{checked:false},addPlan:plan,addPlanAuthorized:()=>valid,
   addButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
   selectSettingsOperation(code){assert.equal(code,'restore-add-button');},updateButtons(){},info(){},finishOperation(){},restoreAdditiveRecords:async(_records,signature)=>{assert.equal(signature,plan.signature);writes++;return plan;},
@@ -159,7 +160,7 @@ const employeeHandler=backup.slice(backup.indexOf("yearEndCommit.addEventListene
 async function employeeScenario(change,approve=true){
  let click,request,release,writes=0,valid=true;
  const plan={canRestore:true,restorable:1,skipped:2,sameNameCollisions:1};
- const context={busy:false,yearEndPreview:{persons:[{id:'fixture'}]},yearEndPlan:plan,
+ const context={noticeReason,busy:false,yearEndPreview:{persons:[{id:'fixture'}]},yearEndPlan:plan,
   yearEndCommit:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
   selectSettingsOperation(code){assert.equal(code,'ye-restore-commit');},updateButtons(){},reportYearEnd(){},finishOperation(){},invalidateYearEndPreview(){},yearEndFile:{},

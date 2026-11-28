@@ -1,5 +1,6 @@
 /** Phase 5: deterministic UX regressions, no personal records or Microsoft access. */
 import assert from 'node:assert/strict';
+import {noticeReason} from '../src/ui/notificationHistory.ts';
 import {runInNewContext} from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
@@ -45,18 +46,19 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  const radios=[{disabled:false},{disabled:false},{disabled:false}];
  const periodControls=[yearSelect,bonusToggle,forecastToggle,fiscalModeButton,calendarModeButton,...radios];
  let tries=0,failInitial=true,renders=0;
- const notifications=[];const toastElement={dataset:{}};let nextNotice={operation:'upload-saved',count:3};
- const ctx={
+ const notifications=[];const toastElement={dataset:{}};let activeScope,generation=0,pauseRead,releaseRead;let nextNotice={operation:'upload-saved',count:3};
+ const ctx={noticeReason,notificationGeneration:()=>generation,
   dashboardFreshnessLabel,registrationPanel,periodLabel,yearSelect,bonusToggle,forecastToggle,sideZipButton,fiscalModeButton,calendarModeButton,
   selectedPeriodRecords:()=>[{form:{job:'side'}}],exportingSideZip:false,
   deletionBusy:()=>false,renderPendingDeletion(){},renderList(){},initialYear:2026,currentPeriodYear:()=>2026,
   saved:[],employerDirectory:[],legacyDirectory:[],legacyEmployers:()=>[],employerFilter:{disabled:true},mutatingSnapshot:null,
   document:{getElementById:()=>indicator,querySelector:()=>refresh,querySelectorAll:selector=>selector.includes("statement-kind")?radios:[button]},
-  appStatus:{element:toastElement,clear(){if(['partial','error'].includes(toastElement.dataset.state))return;delete toastElement.dataset.state;notifications.push(['clear']);},dismiss(){delete toastElement.dataset.state;},loading(m){toastElement.dataset.state='loading';notifications.push(['loading',m]);},success(m){toastElement.dataset.state='success';notifications.push(['success',m]);},error(m){toastElement.dataset.state='error';notifications.push(['error',m]);},show(k,m){toastElement.dataset.state=k;notifications.push([k,m]);}},
+  appStatus:{element:toastElement,begin(){return {generation,dismissed:false};},clear(scope){if(activeScope!==scope)return;delete toastElement.dataset.state;activeScope=undefined;notifications.push(['clear']);},dismiss(){if(activeScope)activeScope.dismissed=true;delete toastElement.dataset.state;activeScope=undefined;},show(k,m,_persistent,options){const scope=options?.scope;if(scope&&(scope.dismissed||scope.generation!==generation))return;activeScope=scope;toastElement.dataset.state=k;notifications.push([k,m]);}},
   authEpoch:()=> 'fixture-epoch',takeNavigationNotice:()=>{const n=nextNotice;nextNotice=null;return n;},navigationFeedback,
   loadRecordSummaries:async opts=>{
    if(failInitial)throw new Error('synthetic initial failure');
    tries++;opts.onProgress?.('模擬: OneDrive読込中');
+   if(pauseRead)await new Promise(resolve=>{releaseRead=resolve;});
    if(tries===2)throw new Error('synthetic HTTP 503');
    opts.onEmployerDirectory?.([{id:'fixture',name:tries===1?'Synthetic old':'Synthetic new',role:'side',current:true}]);
    return [{id:17,form:{job:'side'}}];
@@ -100,8 +102,14 @@ assert.doesNotMatch(upload,/localStorage\.setItem\(|sessionStorage\.setItem\(/);
  ctx.appStatus.dismiss();
  await ctx.phase5Refresh(true);
  assert.deepEqual(notifications.at(-1),['clear'],'ordinary read completion must not show a success toast');
- assert.ok(!notifications.some(([kind])=>kind==='loading'),'dashboard progress must stay inline');
+ assert.ok(notifications.some(([kind,message])=>kind==='loading'&&message==='模擬: OneDrive読込中'),'dashboard progress uses shared toast');
+ assert.equal(toastElement.dataset.state,undefined,'successful read clears progress only');
  assert.equal(tries,5,'each explicit refresh performs exactly one load');
+ pauseRead=true;const pending=ctx.phase5Refresh(true);
+ assert.equal(toastElement.dataset.state,'loading');assert.equal(registrationPanel.hidden,false,'refresh preserves previous screen');
+ ctx.appStatus.dismiss();releaseRead();await pending;assert.equal(toastElement.dataset.state,undefined);
+ pauseRead=false;await ctx.phase5Refresh(true);assert.equal(toastElement.dataset.state,undefined);
+ assert.equal(notifications.at(-1)[0],'clear');
 }
 
 console.log('PASS: phase 5 actual-stage UX, partial-sync truth, recheck preserving view, stale mutation lock, no new storage or network');

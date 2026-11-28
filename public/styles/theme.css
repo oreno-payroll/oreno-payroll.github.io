@@ -11,11 +11,6 @@
 .theme-toggle:hover { background:var(--color-primary-soft); border-color:var(--color-primary); color:var(--color-primary); }
 .theme-toggle:active { transform:scale(.96); }
 .theme-toggle .icon { width:19px; height:19px; }
-/* The dashboard hides its other action icons on small screens; this control is always icon-only. */
-.site-header .header-actions .theme-icon--moon { display:block; }
-.site-header .header-actions .theme-icon--sun { display:none; }
-html[data-theme="dark"] .site-header .header-actions .theme-icon--sun { display:block; }
-html[data-theme="dark"] .site-header .header-actions .theme-icon--moon { display:none; }
 .theme-icon--sun { display:none; }
 html[data-theme="dark"] .theme-icon--sun { display:block; }
 html[data-theme="dark"] .theme-icon--moon { display:none; }

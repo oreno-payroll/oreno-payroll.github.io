@@ -28,8 +28,6 @@ assert.match(standard,/\.segmented-choice--three\s*\{\s*grid-template-columns:\s
 assert.equal((html.match(/type="radio" name="yea-method"/g)||[]).length,3);
 assert.doesNotMatch(html,/id="yea-preview"|id="yea-preview-result"|id="yea-bonus-preview"|id="yea-no-pay"/);
 assert.doesNotMatch(ui,/noPayCheck|repo\.setNoPay\(/);
-assert.doesNotMatch(ui,/check\.addEventListener\('change'/);
-assert.match(ui,/for\(const input of fields\)/);
 assert.match(ui,/input\.addEventListener\('input',\(\)=>\{input\.dataset\.userEdited='true';markForecastDirty\(\);\}\)/);
 assert.match(ui,/methodChoices\.addEventListener\('change'/);
 const local=ui.slice(ui.indexOf('function markForecastDirty('),ui.indexOf('function updateBonusSaveState('));

@@ -20,7 +20,7 @@ assert.doesNotMatch(setup,/Finance側での読み込みは未対応/);
 assert.match(upload,/case "error": return \{ label: "読み取り失敗", variant: "error" \}/);
 assert.match(upload,/case "no-text": return isReviewed/);
 assert.match(upload,/label: "要確認", variant: "warning"/);
-assert.match(html,/id="upload-guide"/);
+assert.doesNotMatch(html,/id="upload-guide"/);
 assert.match(html,/class="workspace is-empty"/);
 assert.match(html,/class="save-bar is-empty"/);
 assert.match(upload,/workspace\.classList\.toggle\('is-empty',isEmpty\)/);

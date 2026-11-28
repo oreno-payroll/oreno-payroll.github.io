@@ -161,14 +161,18 @@ async function token(forceRefresh=false):Promise<string> {
  }
  const operation=(async()=>{
   let result:Token;
-  try{result=await app.acquireTokenSilent({scopes:SCOPES,account:user,...(forceRefresh?{forceRefresh:true}:{})});}
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try{
+   result=await Promise.race([app.acquireTokenSilent({scopes:SCOPES,account:user,...(forceRefresh?{forceRefresh:true}:{})}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new MicrosoftTemporaryError('Microsoftの認証処理が時間内に完了しませんでした。','timeout')),30_000);})]);
+  }
   catch(error){
    requireCurrentLockEpoch(startLockEpoch);
    if(authEpoch()!==startAuthEpoch||clientId()!==id||account(app)?.homeAccountId!==user.homeAccountId)throw new MicrosoftSignInRequiredError();
    invalidateTokenCache();
    if(needsMicrosoftInteraction(error))throw new MicrosoftSignInRequiredError();
+   if(error instanceof MicrosoftTemporaryError)throw error;
    throw microsoftSilentTemporaryError(error,offline());
-  }
+  }finally{if(timer!==undefined)clearTimeout(timer);}
   requireCurrentLockEpoch(startLockEpoch);
   if(authEpoch()!==startAuthEpoch||clientId()!==id||account(app)?.homeAccountId!==user.homeAccountId)
    throw new MicrosoftSignInRequiredError('接続アカウントが変更されました。もう一度接続を確認してください。');

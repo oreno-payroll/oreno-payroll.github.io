@@ -22,6 +22,35 @@ function retryWaitMs(response:Response, retry:number):number|null {
   return 350*2**retry;
 }
 const pause=(ms:number):Promise<void>=>new Promise(resolve=>setTimeout(resolve,ms));
+const READ_TIMEOUT_MS=30_000,WRITE_TIMEOUT_MS=60_000,TRANSFER_TIMEOUT_MS=120_000;
+const MAX_GRAPH_RESPONSE_BYTES=1_048_576;
+export class GraphTimeoutError extends Error {
+ constructor(){super('OneDriveとの通信が時間内に完了しませんでした。通信状態を確認してください。');this.name='GraphTimeoutError';}
+}
+/** Only fixed diagnostic identifiers (never raw service responses) enter notification history. */
+class GraphDiagnosticError extends Error {
+ constructor(readonly diagnostic:string,message:string,options?:ErrorOptions){super(message,options);this.name='GraphDiagnosticError';}
+}
+/** Deadline covers headers AND the body; cancel the real fetch, not just the UI. */
+async function withinGraphDeadline<T>(ms:number,operation:(signal:AbortSignal)=>Promise<T>):Promise<T>{
+ const controller=new AbortController();
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ const timeout=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{const error=new GraphTimeoutError();reject(error);controller.abort(error);},ms);});
+ try{return await Promise.race([operation(controller.signal),timeout]);}
+ finally{if(timer!==undefined)clearTimeout(timer);}
+}
+async function responseBytes(response:Response,limit:number,signal:AbortSignal,diagnostic='download-size'):Promise<Uint8Array>{
+ if(Number(response.headers.get('content-length')??0)>limit){void response.body?.cancel().catch(()=>{});throw new GraphDiagnosticError(diagnostic,'ダウンロードサイズ超過。');}
+ if(!response.body){const bytes=new Uint8Array(await response.arrayBuffer());signal.throwIfAborted();if(bytes.length>limit)throw new GraphDiagnosticError(diagnostic,'ダウンロードサイズ超過。');return bytes;}
+ const reader=response.body.getReader(),chunks:Uint8Array[]=[];let size=0;
+ const abort=()=>{void reader.cancel().catch(()=>{});};
+ signal.addEventListener('abort',abort,{once:true});
+ try{
+  for(;;){signal.throwIfAborted();const {value,done}=await reader.read();signal.throwIfAborted();if(done)break;size+=value.byteLength;if(size>limit)throw new GraphDiagnosticError(diagnostic,'ダウンロードサイズ超過。');chunks.push(value);}
+ }catch(error){abort();throw error;}
+ finally{signal.removeEventListener('abort',abort);reader.releaseLock();}
+ const bytes=new Uint8Array(size);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.length;}return bytes;
+}
 // The cache contains only encrypted JSON text in RAM. It never stores PDF originals,
 // a plaintext payroll record, an OAuth token, or a decryption key.
 const MAX_CACHED_ENCRYPTED_BYTES=1_048_576;
@@ -36,6 +65,7 @@ interface Item { parentReference?:{id?:string}; id?: string; name?: string; fold
 export class GraphError extends Error {
   constructor(readonly status: number, readonly code: string) {
     super(status===403?'OneDriveへのアクセス権限がありません。Microsoftの接続権限を確認してください（HTTP 403）。':status===401?'Microsoft認証が無効です。再接続後にOneDriveの状態を確認してください（HTTP 401）。':`OneDrive通信エラー HTTP ${status}${code ? ` (${code})` : ''}`);
+    this.name='GraphError';
   }
 }
 /** Distinguish an explicit mutation rejection from a failed read with the same status. */
@@ -51,8 +81,10 @@ type WriteOwner={id:string;etag:string;text:string};
 /** Per-operation, in-memory evidence. Lock-file writes are not payroll data writes. */
 export interface PayrollWriteState {attempted:boolean;uncertain:boolean;completed:boolean;payrollSaved?:boolean;lock:'none'|'held'|'released'|'unknown'}
 class GraphReadStageError extends Error {
-  constructor(readonly stage:'auth'|'transport',cause:unknown){super(stage,{cause});}
+  constructor(readonly stage:'auth'|'transport',cause:unknown){super(stage,{cause});this.name='GraphReadStageError';}
 }
+class GraphLockError extends Error {constructor(message:string,options?:ErrorOptions){super(message,options);this.name='GraphLockError';}}
+class GraphWriteUncertainError extends Error {constructor(options?:ErrorOptions){super('保存結果を確認できません。',options);this.name='GraphWriteUncertainError';}}
 const LOCK_RETAINED='書き込みロックが残っている可能性があります。再保存せず、設定の書き込みロック復旧手順を確認してください。';
 export class PayrollGraph {
   private writeLockBusy=false;
@@ -70,7 +102,7 @@ export class PayrollGraph {
   private markRejected():void{this.writeSerial--;this.writeAttempted=this.writeSerial>0;}
   private writeSerial=0;
   private uploadCheckpoint=-1;
-  /** Called only after an upload batch has authenticated every preceding business write. */
+  /** Called only after every preceding business write has been authenticated. */
   async markUploadCheckpoint():Promise<void> {
     if(this.writeOwner&&!this.writeUncertain){
       this.uploadCheckpoint=this.writeSerial;
@@ -167,8 +199,8 @@ export class PayrollGraph {
     const receipt=await this.releaseReceipt(owner);
     try{if(receipt)localStorage.setItem(receipt,'1');}catch{/* Storage may be disabled; same-tab recovery remains available. */}
     const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
-    if(!live||!this.matchesOwner(live,owner))throw new Error('書き込みロックの所有権が変化しました。解除しません。');
-    try{
+    if(live&&!this.matchesOwner(live,owner))throw new Error('書き込みロックの所有権が変化しました。解除しません。');
+    if(live)try{
       const response=await this.request(`/me/drive/items/${encodeURIComponent(owner.id)}`,{
         method:'DELETE',headers:{'If-Match':owner.etag},
       },false,undefined,true);
@@ -203,7 +235,7 @@ export class PayrollGraph {
    * Hold across the complete multi-file operation and its readbacks, not per PUT. */
   async withWriteLock<T>(operation:()=>Promise<T>,state?:PayrollWriteState,releaseSettledFailure=false):Promise<T> {
     this.assertCurrent();
-    if(this.writeLockBusy)throw new Error('この画面で別の保存処理を実行中です。完了後に読み直してください。');
+    if(this.writeLockBusy)throw new GraphLockError('この画面で別の保存処理を実行中です。完了後に読み直してください。');
     this.writeLockBusy=true;this.writeAttempted=false;this.uncertainWrites=0;this.writeSerial=0;this.uploadCheckpoint=-1;this.pendingContentChecks=[];
     try {
       const parent=await this.root();
@@ -233,7 +265,7 @@ export class PayrollGraph {
               if(state){state.lock='unknown';this.retainedOwners.set(state,evidence);}
               continue;
             }
-            throw new Error('他の端末・タブで保存中か、前回の書き込みロックが残っています。設定の書き込みロック復旧手順を確認してください。');
+            throw new GraphLockError('他の端末・タブで保存中か、前回の書き込みロックが残っています。設定の書き込みロック復旧手順を確認してください。');
           }
           throw error;
         }
@@ -241,7 +273,7 @@ export class PayrollGraph {
         // establish that this was a newly created lock. Never delete it here.
         if(creationStatus!==undefined&&creationStatus!==201){
           if(state)this.retainedOwners.delete(state);
-          throw new Error('書き込みロックの新規作成を確認できません。'+LOCK_RETAINED,{cause:error});
+          throw new GraphLockError('書き込みロックの新規作成を確認できません。'+LOCK_RETAINED,{cause:error});
         }
         // No business write was started. The random body can prove that a
         // lost creation reply belongs to this operation, but a 404 cannot.
@@ -251,7 +283,7 @@ export class PayrollGraph {
           evidence.owner={id:live.id,etag:live.etag,text};
           await this.releaseOwner(evidence.owner);
           this.markReleased(state);
-        }catch(recovery){throw new Error('書き込みロックの取得を確認できません。'+LOCK_RETAINED,{cause:recovery});}
+        }catch(recovery){throw new GraphLockError('書き込みロックの取得を確認できません。'+LOCK_RETAINED,{cause:recovery});}
         throw new Error('保存ロックの取得を完了できませんでした。ロックは解除しました。そのまま再試行できます。',{cause:error});
       }
       break;
@@ -274,15 +306,17 @@ export class PayrollGraph {
             evidence.confirm=async()=>{for(const check of checks)if(!await check())return false;return true;};
           }
           if(this.writeUncertain||(this.writeAttempted&&!evidence.settled)){
-            if(error instanceof Error){error.message+=' '+LOCK_RETAINED;throw error;}
-            throw new Error(LOCK_RETAINED,{cause:error});
+            if(error instanceof Error){error.message+=' '+LOCK_RETAINED;
+              if(this.writeUncertain)error.cause=new GraphWriteUncertainError({cause:error.cause});
+              throw error;}
+            throw new GraphLockError(LOCK_RETAINED,{cause:this.writeUncertain?new GraphWriteUncertainError({cause:error}):error});
           }
-          try{await release();}catch(releaseError){if(state)state.lock='unknown';throw new Error('保存ロックの所有権または解除結果を確認できません。'+LOCK_RETAINED,{cause:releaseError});}
+          try{await release();}catch(releaseError){if(state)state.lock='unknown';throw new GraphLockError('保存ロックの所有権または解除結果を確認できません。'+LOCK_RETAINED,{cause:releaseError});}
           throw error;
         }
-        if(this.writeUncertain)throw new Error('保存中の通信結果が不明です。'+LOCK_RETAINED);
+        if(this.writeUncertain)throw new GraphLockError('保存中の通信結果が不明です。'+LOCK_RETAINED,{cause:new GraphWriteUncertainError()});
         if(state)state.completed=true;
-        try{await release();}catch(error){if(state)state.lock='unknown';throw new Error('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
+        try{await release();}catch(error){if(state)state.lock='unknown';throw new GraphLockError('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
         return result;
       };
       const locks=this.browserLocks(),receipt=locks?await this.releaseReceipt(this.writeOwner):null;
@@ -292,7 +326,7 @@ export class PayrollGraph {
       let callbackStarted=false;
       try{return await locks.request(receipt,{ifAvailable:true},async lock=>{
         callbackStarted=true;
-        if(!lock)throw new Error('同じブラウザで保存ロックの確認中です。再試行してください。');
+        if(!lock)throw new GraphLockError('同じブラウザで保存ロックの確認中です。再試行してください。');
         this.checkpointReceipt=receipt;await this.publishCheckpointReceipt();
         return await runOwned();
       });}catch(error){
@@ -314,18 +348,18 @@ export class PayrollGraph {
     try{
       const evidence=this.retainedOwners.get(state);
       if(!evidence||(state.uncertain&&!evidence.confirm)||(state.attempted&&!state.completed&&!evidence.settled&&!evidence.confirm))
-        throw new Error('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
+        throw new GraphLockError('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
       const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
       if(!live){
         // A creation that may still arrive is not resolved by a single 404.
-        if(!evidence.owner)throw new Error('保存ロックの作成結果がまだ不明です。再保存せず確認してください。');
-        if(state.uncertain)throw new Error('書き込み結果がまだ不明です。再保存せず確認してください。');
+        if(!evidence.owner)throw new GraphLockError('保存ロックの作成結果がまだ不明です。再保存せず確認してください。');
+        if(state.uncertain)throw new GraphLockError('書き込み結果がまだ不明です。再保存せず確認してください。');
         this.markReleased(state);return;
       }
       if(live.text!==evidence.text||live.size!==evidence.text.length||(evidence.owner&&!this.matchesOwner(live,evidence.owner)))
-        throw new Error('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
+        throw new GraphLockError('安全に解除できない保存ロックがあります。設定の書き込みロック復旧手順を確認してください。');
       if(state.uncertain){
-        if(!evidence.confirm||!await evidence.confirm())throw new Error('書き込み結果がまだ不明です。再保存せず確認してください。');
+        if(!evidence.confirm||!await evidence.confirm())throw new GraphLockError('書き込み結果がまだ不明です。再保存せず確認してください。');
         state.uncertain=false;evidence.settled=true;delete evidence.confirm;
       }
       evidence.owner={id:live.id,etag:live.etag,text:live.text};
@@ -364,15 +398,24 @@ export class PayrollGraph {
   }
 
   constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>},private readonly assertCurrent:()=>void=()=>{},private readonly enforceOperationLock=true) {}
+  /** Graph API replies contain only small metadata/receipts. Signed downloads use the same deadline with their own size limit. */
+  private async fetchGraphResponse(url:string,init:RequestInit,ms:number):Promise<Response>{
+    return withinGraphDeadline(ms,async signal=>{
+      const response=await this.http(url,{...init,signal});signal.throwIfAborted();
+      if(!response.body)return response;
+      const bytes=await responseBytes(response,MAX_GRAPH_RESPONSE_BYTES,signal,'graph-response-size');
+      return new Response(bytes.buffer as ArrayBuffer,{status:response.status,statusText:response.statusText,headers:response.headers});
+    });
+  }
   private async request(path: string, init: RequestInit = {}, accept304=false,beforeSend?:()=>Promise<void>,lockControl=false,proof?:{uncertain:boolean}): Promise<Response> {
     this.assertCurrent();
     const method=(init.method??'GET').toUpperCase();
     const readonly=method==='GET'||method==='HEAD';
     if(!readonly&&!lockControl){this.requireWriteOwner();this.clearEncryptedReadCache();this.onMutation();}
     let bearer:string;
-    try{bearer=typeof this.token==='function'?await this.token():this.token;}
+    try{bearer=typeof this.token==='function'?await withinGraphDeadline(READ_TIMEOUT_MS,()=>typeof this.token==='function'?this.token():Promise.resolve(this.token)):this.token;}
     catch(error){if(readonly&&!(error instanceof MicrosoftSignInRequiredError)&&!(error instanceof MicrosoftTemporaryError))throw new GraphReadStageError('auth',error);throw error;}
-    let dispatched=false;
+    let dispatched=false,conditional=accept304;
     this.assertCurrent();
     const graphUrl=`${BASE}${path}`;
     const send=async()=>{
@@ -381,7 +424,9 @@ export class PayrollGraph {
       this.assertCurrent();
       if(beforeSend){await beforeSend();this.assertCurrent();}
       if(!readonly&&!lockControl){await this.clearCheckpointBeforeWrite();await this.verifyWriteOwner();if(this.writeOwner){this.writeAttempted=true;this.writeSerial++;}}
-      try{dispatched=true;const response=await this.http(graphUrl,{...init,headers:{Authorization:`Bearer ${bearer}`,...init.headers},redirect:'error'});this.assertCurrent();return response;}
+      try{dispatched=true;const headers={Authorization:`Bearer ${bearer}`,...init.headers} as Record<string,string>;
+        if(accept304&&!conditional)delete headers['If-None-Match'];
+        const response=await this.fetchGraphResponse(graphUrl,{...init,headers,redirect:'error'},readonly?READ_TIMEOUT_MS:WRITE_TIMEOUT_MS);this.assertCurrent();return response;}
       finally{observeGraphTransfer('graph-api',performance.now()-started);}
     };
     let retries=0,renewed=false;
@@ -392,7 +437,12 @@ export class PayrollGraph {
         if(!readonly&&!lockControl&&this.writeOwner&&dispatched)this.markUncertain(proof);
         this.assertCurrent(); // A retired session is not a transient network failure.
         // GET/HEAD だけ、通信中断にも限定回数のバックオフを適用。
-        if(readonly&&dispatched&&retries<READ_RETRIES){observeGraphRetry();await pause(350*2**retries++);continue;}
+        if(readonly&&dispatched&&retries<READ_RETRIES){
+          // A browser may reject a conditional cross-origin reply (including 304).
+          // Try an ordinary GET inside the existing retry budget, never stale ciphertext.
+          if(conditional&&error instanceof TypeError)conditional=false;
+          observeGraphRetry();await pause(350*2**retries++);continue;
+        }
         if(readonly&&dispatched)throw new GraphReadStageError('transport',error);
         throw error;
       }
@@ -401,7 +451,7 @@ export class PayrollGraph {
         if(readonly){
           // 期限切れ認証は別系統の一回限りの再取得。書き込みは再送しない。
           observeGraphRetry();renewed=true;
-          try{bearer=await this.unauthorized.refresh();}catch(error){if(error instanceof MicrosoftSignInRequiredError||error instanceof MicrosoftTemporaryError)throw error;throw new GraphReadStageError('auth',error);}
+          try{bearer=await withinGraphDeadline(READ_TIMEOUT_MS,()=>this.unauthorized!.refresh());}catch(error){if(error instanceof MicrosoftSignInRequiredError||error instanceof MicrosoftTemporaryError)throw error;throw new GraphReadStageError('auth',error);}
           this.assertCurrent();
           continue;
         }
@@ -414,7 +464,7 @@ export class PayrollGraph {
         }
       }
       // HTTP 304 is allowed only by an explicitly conditional, read-only caller.
-      if (!r.ok && !(readonly&&accept304&&r.status===304)) {
+      if (!r.ok && !(readonly&&conditional&&r.status===304)) {
         if(!readonly&&!lockControl&&this.writeOwner){
           if(rejectedWriteStatus(r.status))this.markRejected();else this.markUncertain(proof);
         }
@@ -429,25 +479,36 @@ export class PayrollGraph {
     }
   }
   /** 署名付き原本ダウンロードURLもBearerなしのGETだけ再試行する。 */
-  private async download(url:string):Promise<Response> {
+  private async download(url:string,limit:number):Promise<Uint8Array> {
     for(let retry=0;;){
       this.assertCurrent();
-      let response:Response;
-      try {
-        const started=performance.now();
-        try{response=await this.http(url,{credentials:'omit',cache:'no-store'});this.assertCurrent();}
-        finally{observeGraphTransfer('encrypted-download',performance.now()-started);}
-      }
-      catch(error){this.assertCurrent();if(retry>=READ_RETRIES)throw error;observeGraphRetry();await pause(350*2**retry++);continue;}
-      if(TEMPORARY_READ_STATUSES.has(response.status)&&retry<READ_RETRIES){
-        const delay=retryWaitMs(response,retry);
-        if(delay!==null){
-          try{await response.body?.cancel();}catch{}
-          observeGraphRetry();retry++;await pause(delay);continue;
+      let response:Response|undefined,bytes:Uint8Array|undefined;
+      const started=performance.now();
+      try{
+        await withinGraphDeadline(TRANSFER_TIMEOUT_MS,async signal=>{
+          response=await this.http(url,{credentials:'omit',cache:'no-store',signal});
+          signal.throwIfAborted();this.assertCurrent();
+          if(!response.ok){void response.body?.cancel().catch(()=>{});return;}
+          const mime=(response.headers.get('content-type')??'').split(';')[0].trim().toLowerCase();
+          if(mime==='text/html'||mime==='application/xhtml+xml'){
+            void response.body?.cancel().catch(()=>{});
+            throw new GraphDiagnosticError('download-html',`OneDriveのファイル配信先がHTMLを返しました (HTTP ${response.status}, MIME: ${mime})。暗号化データとして扱わず、クラウドは変更していません。`);
+          }
+          bytes=await responseBytes(response,limit,signal);
+        });
+      }catch(error){
+        this.assertCurrent();if(retry>=READ_RETRIES||(response&&!(error instanceof GraphTimeoutError)&&!(error instanceof TypeError))){
+          if(error instanceof GraphDiagnosticError)throw error;
+          throw new GraphDiagnosticError(error instanceof GraphTimeoutError?'download-timeout':'download-transport','OneDriveの配信応答を取得できませんでした。',{cause:error});
         }
-      }
+        observeGraphRetry();await pause(350*2**retry++);continue;
+      }finally{observeGraphTransfer('encrypted-download',performance.now()-started);}
       this.assertCurrent();
-      return response;
+      if(bytes)return bytes;
+      if(response&&TEMPORARY_READ_STATUSES.has(response.status)&&retry<READ_RETRIES){
+        const delay=retryWaitMs(response,retry);if(delay!==null){observeGraphRetry();retry++;await pause(delay);continue;}
+      }
+      throw new GraphDiagnosticError(response?`download-http:${response.status}`:'download-transport',`OneDriveの取得に失敗しました (HTTP ${response?.status??0})。`);
     }
   }
 
@@ -476,13 +537,13 @@ export class PayrollGraph {
       const contentType=(response.headers.get('content-type')??'unknown').split(';')[0].trim().toLowerCase();
       const contentLength=response.headers.get('content-length');
       if(contentLength && Number(contentLength)>1_048_576)
-        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。`);
+        throw new GraphDiagnosticError('graph-response-size',`${stage}：Graphのメタデータ応答が大きすぎます。`);
       let body:string;
       try {body=await response.text();}
-      catch(error){throw new Error(`${stage}：Graphの応答本文を取得できません。`,{cause:error});}
+      catch(error){throw new GraphDiagnosticError('graph-body',`${stage}：Graphの応答本文を取得できません。`,{cause:error});}
       this.assertCurrent();
       if(new TextEncoder().encode(body).byteLength>1_048_576)
-        throw new Error(`${stage}：Graphのメタデータ応答が大きすぎます。`);
+        throw new GraphDiagnosticError('graph-response-size',`${stage}：Graphのメタデータ応答が大きすぎます。`);
       try {
         const parsed:unknown=JSON.parse(body.replace(/^\uFEFF/,''));
         if(!parsed || typeof parsed!=='object' || Array.isArray(parsed))
@@ -496,7 +557,7 @@ export class PayrollGraph {
         const encoding=response.headers.get('content-encoding');
         // Content-Length は転送時（圧縮前後）の数値の場合がある。圧縮中は不一致を破損と断定しない。
         const lengthStatus=declaredBytes===null?'Content-Length不明':`Content-Length ${declaredBytes}バイト、取得後 ${actualBytes}バイト${encoding?'（転送圧縮あり・直接比較不可）':declaredBytes!==actualBytes?'（サイズ不一致）':''}`;
-        throw new Error(`${stage}：Graph APIのメタデータJSONが不正です（HTTP ${response.status}、MIME ${contentType}、本文 ${body.length}文字、${lengthStatus}、3回試行）。`,{cause:error});
+        throw new GraphDiagnosticError('graph-json',`${stage}：Graph APIのメタデータJSONが不正です（HTTP ${response.status}、MIME ${contentType}、本文 ${body.length}文字、${lengthStatus}、3回試行）。`,{cause:error});
       }
     }
     throw new Error(`${stage}：Graphのメタデータ取得に失敗しました。`);
@@ -603,7 +664,7 @@ export class PayrollGraph {
     let item:Item;
     try{item=await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}`,'暗号ファイル情報の照会');}
     catch(e){if(e instanceof GraphError&&e.status===404)return null;throw e;}
-    if(!item.id||!item.eTag)throw new Error('クラウドファイルのIDまたはETagがありません。');
+    if(!item.id||!item.eTag)throw new GraphDiagnosticError('graph-item','クラウドファイルのIDまたはETagがありません。');
     this.assertCurrent();
     return {id:item.id,etag:item.eTag,size:item.size};
   }
@@ -615,7 +676,7 @@ export class PayrollGraph {
     if(running?.epoch===this.readCacheEpoch){
       const result=await running.promise;
       this.assertCurrent();
-      if(this.readCacheEpoch!==running.epoch)throw new Error('読み込み中に保存操作が完了しました。再読み込みしてください。');
+      if(this.readCacheEpoch!==running.epoch)throw new GraphDiagnosticError('graph-version','読み込み中に保存操作が完了しました。再読み込みしてください。');
       return result?{...result}:null;
     }
     const operation=this.readEncryptedUnshared(parts,name,limit,directChild);
@@ -626,7 +687,7 @@ export class PayrollGraph {
       this.assertCurrent();
       // Also guard the final promise handoff, including a concurrent 404 and a
       // completed read whose result was waiting for the caller's continuation.
-      if(this.readCacheEpoch!==entry.epoch)throw new Error('読み込み中に保存操作が完了しました。再読み込みしてください。');
+      if(this.readCacheEpoch!==entry.epoch)throw new GraphDiagnosticError('graph-version','読み込み中に保存操作が完了しました。再読み込みしてください。');
       return result?{...result}:null;
     }
     finally{if(this.encryptedReadPending.get(pendingKey)===entry)this.encryptedReadPending.delete(pendingKey);}
@@ -660,54 +721,40 @@ export class PayrollGraph {
     this.assertCurrent();
     if(item===null){
       if(!cached||this.readCacheEpoch!==startEpoch||this.encryptedReadCache.get(cacheKey)!==cached)
-        throw new Error('読み込み中に保存先の状態が変更されました。再読み込みしてください。');
+        throw new GraphDiagnosticError('graph-version','読み込み中に保存先の状態が変更されました。再読み込みしてください。');
       this.encryptedReadCache.delete(cacheKey);this.encryptedReadCache.set(cacheKey,cached);
       return {...cached.file};
     }
     this.discardEncryptedRead(cacheKey);
-    if (!item.id || !item.eTag) throw new Error('クラウドファイルのIDまたはETagがありません。');
-    if (item.size !== undefined && item.size > limit) throw new Error('OneDriveファイルの容量が上限を超えています。');
+    if (!item.id || !item.eTag) throw new GraphDiagnosticError('graph-item','クラウドファイルのIDまたはETagがありません。');
+    if (item.size !== undefined && item.size > limit) throw new GraphDiagnosticError('download-size','OneDriveファイルの容量が上限を超えています。');
     let url = item['@microsoft.graph.downloadUrl'];
-    if (!url) { const refreshed = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(item.id)}`,'ダウンロード情報の照会'); if(refreshed.id!==item.id||refreshed.eTag!==item.eTag||refreshed.size!==item.size)throw new Error('ダウンロード情報の取得中に保存先の世代が変更されました。'); url = refreshed['@microsoft.graph.downloadUrl']; }
-    if (!url || new URL(url).protocol !== 'https:') throw new Error('OneDriveのダウンロード先URLが不正です。');
+    if (!url) { const refreshed = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(item.id)}`,'ダウンロード情報の照会'); if(refreshed.id!==item.id||refreshed.eTag!==item.eTag||refreshed.size!==item.size)throw new GraphDiagnosticError('graph-version','ダウンロード情報の取得中に保存先の世代が変更されました。'); url = refreshed['@microsoft.graph.downloadUrl']; }
+    if (!url || new URL(url).protocol !== 'https:') throw new GraphDiagnosticError('download-url','OneDriveのダウンロード先URLが不正です。');
     // 署名付きダウンロードURLにBearerトークンを付けてはいけない。
-    const response = await this.download(url);
-    if (!response.ok) {try{await response.body?.cancel();}catch{}throw new Error(`OneDriveの取得に失敗しました (HTTP ${response.status})。`);}
-    // Graph のダウンロード先が成功応答でログインHTMLなどを返しても、暗号ファイルと誤認しない。
-    const mime = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
-    if (mime === 'text/html' || mime === 'application/xhtml+xml') {
-      try{await response.body?.cancel();}catch{}
-      throw new Error(`OneDriveのファイル配信先がHTMLを返しました (HTTP ${response.status}, MIME: ${mime})。暗号化データとして扱わず、クラウドは変更していません。`);
-    }
-    if (Number(response.headers.get('content-length') ?? 0) > limit) {try{await response.body?.cancel();}catch{}throw new Error('ダウンロードサイズが大きすぎます。');}
+    const bytes = await this.download(url,limit);
     const checked = async (text: string, byteLength: number): Promise<RemoteFile> => {
       this.assertCurrent();
       // HTMLのエラーページを成功レスポンスとして読み込む等の取り違えを検出する。
       if (item.size !== undefined && item.size !== byteLength)
-        throw new Error(`OneDriveのファイルサイズが一致しません (メタデータ ${item.size}バイト、取得 ${byteLength}バイト)。クラウドは変更していません。`);
+        throw new GraphDiagnosticError('download-size-mismatch',`OneDriveのファイルサイズが一致しません (メタデータ ${item.size}バイト、取得 ${byteLength}バイト)。クラウドは変更していません。`);
       if(this.readCacheEpoch!==startEpoch)
-        throw new Error('読み込み中に保管庫の保存操作が始まりました。再読み込みしてください。');
+        throw new GraphDiagnosticError('graph-version','読み込み中に保管庫の保存操作が始まりました。再読み込みしてください。');
       // Bind the downloaded bytes to the same item/version at the requested path.
       // A size match alone is not proof: two versions can have identical lengths.
       const latest=await this.readMetadata<Item>(metadataPath,'暗号ファイル取得後の世代確認');
       this.assertCurrent();
       if(latest.id!==item.id||latest.eTag!==item.eTag||latest.size!==item.size)
-        throw new Error('暗号ファイルの取得中に保存先の世代が変更されました。再読み込みしてください。');
+        throw new GraphDiagnosticError('graph-version','暗号ファイルの取得中に保存先の世代が変更されました。再読み込みしてください。');
       if(this.readCacheEpoch!==startEpoch)
-        throw new Error('読み込み中に保管庫の保存操作が始まりました。再読み込みしてください。');
+        throw new GraphDiagnosticError('graph-version','読み込み中に保管庫の保存操作が始まりました。再読み込みしてください。');
       const file={id:item.id!,etag:item.eTag!,text,size:item.size};
       // Profile, annual and income ciphertext only. Never cache encrypted PDFs.
       if(name!==PAYROLL_WRITE_LOCK_NAME&&!parts.includes('originals'))this.rememberEncryptedRead(cacheKey,file,byteLength);
       return file;
     };
-    const body = response.body;
-    if (!body) { const text=await response.text();const size=new TextEncoder().encode(text).length;if(size>limit)throw new Error('ダウンロードサイズ超過。');return checked(text,size); }
-    const reader=body.getReader();const chunks:Uint8Array[]=[];let size=0;
-    try { for (;;) { const {value,done}=await reader.read();this.assertCurrent();if(done)break;size+=value.byteLength;if(size>limit)throw new Error('ダウンロードサイズ超過。');chunks.push(value); } }
-    catch(error){try{await reader.cancel();}catch{}throw error;}
-    finally {reader.releaseLock();}
-    const bytes=new Uint8Array(size);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.length;}
-    return checked(new TextDecoder('utf-8',{fatal:true}).decode(bytes),size);
+    let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch(error){throw new GraphDiagnosticError('download-encoding','暗号ファイルをUTF-8として読み取れません。',{cause:error});}
+    return checked(text,bytes.byteLength);
   }
   /** 旧暗号領域の整理用。指定したPayroll配下だけを一覧化し、名前・ID・ETagを返す。 */
   async listFolder(parts:string[],reuseChildFolderIds=false):Promise<CloudFolderItem[]|null> {
@@ -908,9 +955,9 @@ export class PayrollGraph {
       const end=Math.min(start+size,bytes.length);
       await this.verifyWriteOwner();
       chunkDispatched=true;finalDispatched=end===bytes.length;
-      const response=await this.http(session.uploadUrl,{
+      const response=await this.fetchGraphResponse(session.uploadUrl,{
         method:'PUT',credentials:'omit',headers:{'Content-Range':`bytes ${start}-${end-1}/${bytes.length}`},body:bytes.slice(start,end),
-      });
+      },TRANSFER_TIMEOUT_MS);
       this.assertCurrent();
       if (!response.ok) {
         if(rejectedWriteStatus(response.status)){chunkDispatched=false;finalDispatched=false;if(this.writeOwner)this.markRejected();throw new GraphWriteRejectedError(response.status,'upload-rejected');}

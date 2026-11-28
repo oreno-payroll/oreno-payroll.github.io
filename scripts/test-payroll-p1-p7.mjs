@@ -513,6 +513,14 @@ async function assignmentFixture(){
  console.log('PASS B2: stale selection refused without writing');
 }
 {
+ const {ctx,dir,targets,signature}=await assignmentFixture();const chosen=targets.slice(0,1),plan=await inspectEmployerAssignment(chosen,A,signature,()=>true);
+ const other=ctx.vault.records().find(r=>r.id!==chosen[0].id);await ctx.vault.save({...other,form:{...other.form,gross:'12000',net:'12000'},revision:(other.revision??0)+1},undefined,()=>true);
+ await ctx.vault.writeEmployerDirectory(dir,dir.map(x=>x.id===B?{...x,name:'Synthetic unrelated rename'}:x));
+ await assignEmployers(chosen,A,signature,plan.signature,()=>true);await ctx.reopen();
+ assert.equal(ctx.vault.records().find(r=>r.id===other.id).form.gross,'12000');assert.equal(ctx.vault.records().find(r=>r.id===chosen[0].id).employerId,A);
+ console.log('PASS B2: unrelated amount and directory changes survive selected assignment');
+}
+{
  const {ctx,dir,targets,signature}=await assignmentFixture();const plan=await inspectEmployerAssignment(targets,A,signature,()=>true);
  await ctx.vault.writeEmployerDirectory(dir,dir.map(x=>x.id===A?{...x,name:'Synthetic renamed'}:x));
  const before=ctx.graph.writes.length;await assert.rejects(assignEmployers(targets,A,signature,plan.signature,()=>true),/勤務先一覧/);assert.equal(ctx.graph.writes.length,before);
@@ -781,6 +789,8 @@ for(const operation of ['edit','move','remove','batch']){
   real.read=async()=>lock?{...lock}:null;
   real.metadata=async()=>lock?{id:lock.id,etag:lock.etag,size:lock.size}:null;
   g.withWriteLock=real.withWriteLock.bind(real);
+  let verifiedCheckpoint=0;
+  g.markUploadCheckpoint=async()=>{await real.markUploadCheckpoint();verifiedCheckpoint++;};
   const write=g.write.bind(g),read=g.read.bind(g);
   g.write=async(parts,name,...args)=>{
    if(parts.includes('statements')){
@@ -809,6 +819,7 @@ for(const operation of ['edit','move','remove','batch']){
   assert.equal([...g.files.keys()].filter(p=>p.includes('/originals/')).length,2);
   if(fault==='finance-read'){
    assert.equal(financeWrites,0);
+   assert.ok(verifiedCheckpoint>0,'verified payroll must publish a safe interruption checkpoint before Finance');
    await ctx.reopen();
    const live=ctx.vault.records();
    if(operation==='edit'||operation==='move'){

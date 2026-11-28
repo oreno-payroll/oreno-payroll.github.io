@@ -1,9 +1,7 @@
 /** Settings categories are presentation-only; switching does not create history entries. */
 type View='employers'|'auth'|'backup'|'maintenance'|'notifications';
 const views:readonly View[]=['employers','auth','backup','maintenance','notifications'];
-const stateKey='payrollSettingsView';
-function readView(state:unknown):View|undefined{
- const value=(state as Record<string,unknown>|null)?.[stateKey];
+function readView(value:unknown):View|undefined{
  return typeof value==='string'&&views.includes(value as View)?value as View:undefined;
 }
 export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean,onOpen?:(view:View)=>void):{setBusy:(busy:boolean)=>void} {
@@ -37,14 +35,14 @@ export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean
  }
  function open(button:HTMLButtonElement):void{
   if(busy||!canNavigate())return;
-  const key=readView({[stateKey]:button.dataset.settingsOpen});
+  const key=readView(button.dataset.settingsOpen);
   if(!key||key===current)return;
-  render(key);onOpen?.(key);
+  render(key);window.history.replaceState(window.history.state,'',`#${key}`);onOpen?.(key);
  }
  window.addEventListener('pagehide',remask);
- const initial=window.location?.hash==='#employers'?'employers':'auth';
+ const initial=readView(window.location.hash.slice(1))??'auth';
  render(initial);
- if(initial==='employers')onOpen?.(initial);
+ if(initial!=='auth')onOpen?.(initial);
  for(const button of buttons)button.addEventListener('click',()=>open(button));
  renderButtons();
  return {setBusy(value){busy=value;renderButtons();}};

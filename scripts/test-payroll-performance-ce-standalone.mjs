@@ -13,7 +13,7 @@ const enc=new TextEncoder(),pdf=enc.encode('%PDF-1.7\nSynthetic data\n%%EOF');
 const hash=Buffer.from(await webcrypto.subtle.digest('SHA-256',pdf)).toString('hex');
 const make=(id,year,revision=1)=>({id,revision,form:{targetMonth:`${year}-05`,paymentDate:`${year}-06-01`,job:'main',kind:'salary'},savedAt:'2026-01-01',fileName:'test.pdf',originalId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',originalMonth:'2026-05',pdfSize:pdf.length,pdfType:'application/pdf',fileHash:hash,pages:1,warningsAcknowledged:true});
 const index={format:'payroll-index-v1',years:[...years],incomeYears:[]};
-const files=new Map();let serial=0,cache=null;
+const files=new Map();let serial=0,cache=null,snapshotWrites=0;
 const doc=records=>({format:'payroll-annual-v1',records,deleted:[]});
 const put=(p,obj)=>{const text=typeof obj==='string'?obj:JSON.stringify(obj);files.set(p,{id:p,etag:`r-${++serial}`,size:enc.encode(text).length,text})};
 put('payroll/index.enc',index);
@@ -29,7 +29,7 @@ const graph={
 };
 const common={crypto:webcrypto,structuredClone,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Map,Set,WeakMap,Promise,console,performance,
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_,t)=>JSON.parse(t),encryptJson:async(_,v)=>JSON.stringify(v),decryptBytes:async()=>pdf,
- isCollision:()=>false,SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{cache=null},rememberNavigationSnapshot:async(_scope,_salt,_key,data)=>{cache=data},
+ isCollision:()=>false,SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{cache=null},rememberNavigationSnapshot:async(_scope,_salt,_key,data)=>{cache=data;snapshotWrites++},
  restoredNavigationSnapshot:async(_scope,_salt,_key)=>cache?{data:cache,expires:Date.now()+600000}:null,
  fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),payrollPeriodKey:rec=>rec.form.paymentDate,
  beginPerfOperation:()=>({measure:async(_,fun)=>fun(),finish(){}}),
@@ -51,12 +51,14 @@ const after=new PayrollVault(graph);after.setNavigationScope('client:synthetic')
 reset();const record=await api.getRecordSummary(2026,'2026');assert.equal(record.id,2026);
 assert.equal(calls.read.filter(p=>p.includes('statements')).length,0);
 assert.equal(calls.list.length,1);assert.equal(calls.read.filter(p=>p.includes('index.enc')).length,1);
+const beforeTargetReads=snapshotWrites;
 reset();const b=await api.getOriginalForVerifiedEdit(2026,api.recordSignature(record));
 assert.equal(b.size,pdf.length);assert.equal(calls.list.length,2);assert.equal(calls.read.filter(p=>p.includes('statements')).length,0);
 console.log('PASS: fresh index/list before and after PDF; warm edit zero year downloads');
 reset();const direct=await api.getRecord(2026);assert.equal(direct.pdf.size,pdf.length);
 assert.equal(calls.list.length,2);assert.equal(calls.read.filter(p=>p.includes('statements')).length,0);
-console.log('PASS: warm direct viewer performs two fresh inventories with zero year body downloads');
+assert.equal(snapshotWrites,beforeTargetReads,'targeted PDF reads do not serialize the full snapshot');
+console.log('PASS: warm direct viewer performs two fresh inventories with zero year body downloads and no full snapshot serialization');
 // Move same ID to another year with higher revision.
 put('payroll/statements/2025.enc',doc([make(2025,'2025'),make(2026,'2025',2)]));
 reset();const relocated=await api.getRecordSummary(2026,'2026');assert.equal(relocated.form.targetMonth,'2025-05');

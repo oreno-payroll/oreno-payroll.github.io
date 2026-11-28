@@ -1,10 +1,11 @@
 /** Actual shared notification and one-time handoff, synthetic values only. */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {mountNotificationHistory} from '../src/ui/notificationHistoryView.ts';
 import {createAppStatus} from '../src/ui/appStatus.ts';
 import {rememberNavigationNotice,takeNavigationNotice,navigationFeedback,clearNavigationNotice} from '../src/ui/navigationNotice.ts';
 import {invalidateAuthSession,authEpoch} from '../src/cloud/snapshot.ts';
-import {activateNotificationHistory,notificationHistory,recordNotification,confirmNotificationHistory,resetNotificationHistory,NOTICE_HISTORY_KEY} from '../src/ui/notificationHistory.ts';
+import {activateNotificationHistory,notificationHistory,recordNotification,noticeReason,noticeSummary,resetNotificationHistory,NOTICE_HISTORY_KEY} from '../src/ui/notificationHistory.ts';
 const items=new Map();globalThis.sessionStorage={getItem:k=>items.get(k)??null,setItem:(k,v)=>items.set(k,String(v)),removeItem:k=>items.delete(k)};
 const local=new Map();globalThis.localStorage={getItem:k=>local.get(k)??null,setItem:(k,v)=>local.set(k,String(v)),removeItem:k=>local.delete(k)};
 const key='payroll-navigation-notice-v1';
@@ -36,6 +37,7 @@ console.log('PASS: bounded outcome-only tab handoff, one-time consume, expiry, a
 class StubElement{
  constructor(){this.hidden=true;this.dataset={};this.textContent='';this.classList={add(){}};this.children=[];this.handlers={};}
  setAttribute(){} removeAttribute(name){if(name==='data-state')delete this.dataset.state;}
+ append(...children){this.children.push(...children);}
  replaceChildren(...children){this.children=children;} addEventListener(event,fn){this.handlers[event]=fn;}
  click(){this.handlers.click?.();}
 }
@@ -77,7 +79,8 @@ assert.deepEqual(notificationHistory().entries.map(x=>x.kind),['warning','succes
 protectedStatus.show('success','duplicate result',false,{scope:other});assert.equal(notificationHistory().entries.length,3);
 const second=protectedStatus.begin('export-button');protectedStatus.show('error','Synthetic error',false,{scope:second});
 assert.equal(protectedMessage.textContent,'Synthetic error');close.click();assert.equal(protectedEl.hidden,true);
-assert.equal(notificationHistory().entries.filter(x=>!x.seen).length,3);
+assert.equal(notificationHistory().entries.filter(x=>x.kind==='error').length,1);
+assert.ok(notificationHistory().entries.every(x=>!Object.hasOwn(x,'seen')));
 const fail=protectedStatus.begin('payroll-income-publish','same-target');protectedStatus.show('error','Synthetic failure',false,{scope:fail});
 const different=protectedStatus.begin('payroll-income-publish','different-target');protectedStatus.show('success','Other target',false,{scope:different});assert.equal(protectedEl.dataset.state,'success');
 const retry=protectedStatus.begin('payroll-income-publish','same-target');protectedStatus.show('loading','Verified retry',false,{scope:retry});
@@ -88,9 +91,9 @@ const independent=protectedStatus.begin('export-button');protectedStatus.show('l
 assert.equal(protectedEl.hidden,true);
 protectedStatus.show('error','<img src=x onerror=alert(1)> synthetic-private-name'+'@'+'example.invalid');
 assert.ok(!items.get(NOTICE_HISTORY_KEY).includes('synthetic-private-name'));assert.ok(!items.get(NOTICE_HISTORY_KEY).includes('<img'));
-confirmNotificationHistory();assert.equal(notificationHistory().entries.filter(x=>!x.seen).length,0);assert.equal(protectedEl.dataset.state,'error');
-for(let i=0;i<210;i++)recordNotification('general','warning');
-assert.equal(notificationHistory().entries.length,200);assert.equal(notificationHistory().entries.every(x=>!x.seen),true);assert.ok(notificationHistory().omitted>=10);
+assert.ok(!items.get(NOTICE_HISTORY_KEY).includes('\"seen\"'));assert.equal(protectedEl.dataset.state,'error');
+for(let i=0;i<210;i++)recordNotification('general',i===209?'success':'warning');
+assert.equal(notificationHistory().entries.length,200);assert.equal(notificationHistory().entries[0].kind,'success');assert.equal(notificationHistory().entries.slice(1).every(x=>x.kind==='warning'),true);assert.ok(notificationHistory().omitted>=10);
 const oldScope=protectedStatus.begin('settings');local.set('payroll-global-vault-lock-epoch-v1',crypto.randomUUID());
 assert.equal(notificationHistory().entries.length,0);assert.equal(items.has(NOTICE_HISTORY_KEY),false);assert.equal(protectedEl.hidden,true);
 protectedStatus.show('error','late old result',false,{scope:oldScope});assert.equal(protectedEl.hidden,true);
@@ -101,7 +104,7 @@ items.set(NOTICE_HISTORY_KEY,savedHistory.replace('settings','arbitrary-private-
 items.set(NOTICE_HISTORY_KEY,savedHistory);local.set('payroll-global-vault-lock-epoch-v1',crypto.randomUUID());const switched=await import('../src/ui/notificationHistory.ts?reload=3');switched.activateNotificationHistory(()=>true);assert.equal(switched.notificationHistory().entries.length,0);
 const oldStorage=globalThis.sessionStorage;globalThis.sessionStorage={getItem(){throw Error('blocked')},setItem(){throw Error('blocked')},removeItem(){throw Error('blocked')}};
 const memory=await import('../src/ui/notificationHistory.ts?reload=4');memory.activateNotificationHistory(()=>true);memory.recordNotification('settings','error');assert.equal(memory.notificationHistory().entries.length,1);memory.resetNotificationHistory();assert.equal(memory.notificationHistory().entries.length,0);globalThis.sessionStorage=oldStorage;
-console.log('PASS: latest outcomes, independent and related retry, no raw storage, confirmation, 200 cap, reload, epoch change, invalid storage, memory fallback');
+console.log('PASS: latest outcomes, independent and related retry, no raw storage, chronological 200 cap, reload, epoch change, invalid storage, memory fallback');
 // A restored BFCache page must reload the same-tab snapshot, not its stale memory.
 items.delete(NOTICE_HISTORY_KEY);const win=new EventTarget();win.opener=null;globalThis.window=win;
 const cached=await import('../src/ui/notificationHistory.ts?bfcache=1');cached.activateNotificationHistory(()=>true);cached.recordNotification('settings','error');
@@ -111,3 +114,65 @@ const returned=new Event('pageshow');Object.defineProperty(returned,'persisted',
 win.dispatchEvent(new Event('pagehide'));local.set('payroll-global-vault-lock-epoch-v1',crypto.randomUUID());win.dispatchEvent(returned);assert.equal(cached.notificationHistory().entries.length,0);assert.equal(items.has(NOTICE_HISTORY_KEY),false);
 const parent=await import('../src/ui/notificationHistory.ts?opener=1');parent.activateNotificationHistory(()=>true);parent.recordNotification('settings','error');win.opener={};const child=await import('../src/ui/notificationHistory.ts?opener=2');child.activateNotificationHistory(()=>true);assert.equal(child.notificationHistory().entries.length,0);delete globalThis.window;
 console.log('PASS: BFCache refresh, stale generation rejection, inherited opener storage discarded');
+
+resetNotificationHistory();activateNotificationHistory(()=>true);
+recordNotification('upload-saved','error','unknown');
+assert.equal(notificationHistory().entries[0].reason,'unknown');
+recordNotification('upload-saved','partial','finance');
+assert.equal(notificationHistory().entries[0].reason,'finance');
+recordNotification('upload-saved','error','arbitrary-private-string');
+assert.equal(notificationHistory().entries[0].reason,undefined);
+console.log('PASS: fixed outcome reasons; arbitrary reason rejected');
+
+const classified=(name,properties={})=>Object.assign(new Error('synthetic private detail'),{name,...properties});
+assert.equal(noticeReason(classified('GraphTimeoutError')),'graph-timeout');
+assert.equal(noticeReason(classified('GraphReadStageError',{stage:'transport'})),'graph-transport');
+assert.equal(noticeReason(classified('GraphReadStageError',{stage:'auth'})),'graph-auth');
+assert.equal(noticeReason(classified('MicrosoftSignInRequiredError')),'auth');
+assert.equal(noticeReason(classified('GraphLockError')),'lock');
+assert.equal(noticeReason(classified('PayrollPartialSuccessError',{stage:'income-sync',cause:classified('GraphTimeoutError')})),'finance');
+assert.equal(noticeReason(classified('PayrollPartialSuccessError',{stage:'income-sync',cause:classified('GraphWriteUncertainError')})),'unknown');
+recordNotification('edit-income-partial','partial','unknown');
+assert.match(noticeSummary(notificationHistory().entries[0]),/一部完了.*保存結果が不明/);
+assert.doesNotMatch(items.get(NOTICE_HISTORY_KEY)??'',/synthetic private detail/);
+console.log('PASS: typed reasons, uncertain result precedence, partial label, no raw error storage');
+
+// The same operation now distinguishes the actual read stage and HTTP status.
+const wrapped=cause=>classified('VaultIndexReadError',{cause});
+for(const [error,reason,text] of [
+ [classified('GraphError',{status:403,code:'synthetic private value'}),'index:graph-http:403',/Graph API：HTTP 403/],
+ [classified('GraphDiagnosticError',{diagnostic:'download-http:403'}),'index:download-http:403',/ファイル配信先：HTTP 403/],
+ [classified('GraphDiagnosticError',{diagnostic:'graph-json'}),'index:graph-json',/メタデータ.*JSON/],
+ [classified('GraphReadStageError',{stage:'transport',cause:classified('GraphTimeoutError')}),'index:graph-timeout',/Graph APIの応答が時間内/],
+ [classified('GraphDiagnosticError',{diagnostic:'download-size-mismatch'}),'index:download-size-mismatch',/サイズが一致しません/],
+ [classified('GraphDiagnosticError',{diagnostic:'https://example.invalid/private'}),'index-read',/詳細原因を特定できません/]
+]){
+ assert.equal(noticeReason(wrapped(error)),reason);recordNotification('employer-directory-load','error',reason);
+ assert.match(noticeSummary(notificationHistory().entries[0]),text);
+}
+assert.doesNotMatch(items.get(NOTICE_HISTORY_KEY)??'',/synthetic private|example\.invalid/);
+recordNotification('employer-directory-load','error','index:download-http:999');assert.equal(notificationHistory().entries[0].reason,undefined);
+const reloaded=await import('../src/ui/notificationHistory.ts?diagnostic=1');reloaded.activateNotificationHistory(()=>true);assert.ok(reloaded.notificationHistory().entries.some(e=>e.reason==='index:graph-http:403'));
+console.log('PASS: detailed reasons survive reload; no raw response or arbitrary code stored');
+
+// Legacy flags are accepted only for migration, never persisted or exposed.
+const legacy=JSON.parse(items.get(NOTICE_HISTORY_KEY));legacy.entries=legacy.entries.map((entry,i)=>({...entry,seen:i%2===0}));
+items.set(NOTICE_HISTORY_KEY,JSON.stringify(legacy));const migrated=await import('../src/ui/notificationHistory.ts?legacy-confirmation=1');migrated.activateNotificationHistory(()=>true);
+assert.equal(migrated.notificationHistory().entries.length,legacy.entries.length);
+assert.ok(migrated.notificationHistory().entries.every(entry=>!Object.hasOwn(entry,'seen')));
+assert.doesNotMatch(items.get(NOTICE_HISTORY_KEY),/"seen"/);
+resetNotificationHistory();activateNotificationHistory(()=>true);
+const elements=Object.fromEntries(['notification-list','notification-empty','notification-omitted','notification-filter'].map(id=>[id,new StubElement()]));
+const filter=elements['notification-filter'],list=elements['notification-list'],empty=elements['notification-empty'];filter.value='all';
+mountNotificationHistory({getElementById:id=>elements[id]??null,createElement:()=>new StubElement()});
+assert.equal(empty.hidden,false);assert.equal(empty.textContent,'通知はありません');
+for(const kind of ['success','warning','partial','error'])recordNotification('settings',kind);
+assert.deepEqual(list.children.map(x=>x.dataset.kind),['error','partial','warning','success']);
+const beforeFilter=items.get(NOTICE_HISTORY_KEY);
+for(const kind of ['success','error','warning','partial']){filter.value=kind;filter.handlers.change();assert.deepEqual(list.children.map(x=>x.dataset.kind),[kind]);assert.equal(empty.hidden,true);}
+assert.equal(items.get(NOTICE_HISTORY_KEY),beforeFilter,'viewing/filtering must not mutate stored outcomes');
+filter.value='error';filter.handlers.change();recordNotification('settings','success');assert.deepEqual(list.children.map(x=>x.dataset.kind),['error']);
+recordNotification('employer-directory-load','error','index:graph-http:403');assert.equal(list.children.length,2);assert.match(list.children[0].children[1].textContent,/HTTP 403/);
+resetNotificationHistory();activateNotificationHistory(()=>true);recordNotification('settings','success');assert.equal(empty.hidden,false);assert.equal(empty.textContent,'該当する通知はありません');
+filter.value='all';filter.handlers.change();assert.equal(list.children.length,1);assert.equal(empty.hidden,true);
+console.log('PASS: legacy flags removed, all four filters, live results, empty state, unchanged storage');

@@ -25,7 +25,10 @@ test('dashboard requires a vault unlock before salary data becomes available', a
   await expect(page.locator('input[name="statement-kind"]')).toHaveCount(3);
   await expect(page.locator('#statement-employer')).toHaveCount(0);
   await expect(page.locator('.statement-filter')).toHaveClass(/segmented-choice--three/);
-  await expect(page.locator('.page-heading #payroll-refresh-data')).toHaveCount(1);
+  await expect(page.locator('.page-heading #payroll-refresh-data')).toHaveCount(0);
+  await expect(page.locator('.site-footer__actions #payroll-refresh-data')).toHaveCount(1);
+  await expect(page.locator('.site-footer__actions #payroll-data-freshness')).toHaveCount(1);
+  await expect(page.locator('.page-heading .dashboard-upload')).toHaveCount(1);
   await expect(page.locator('#total-taxable')).toHaveText('--');
   await expect(page.locator('#total-non-taxable')).toHaveText('--');
   await expect(page.locator('.total-breakdown')).not.toHaveAttribute('open','');
@@ -51,6 +54,7 @@ test('dark-mode control persists across page reload', async ({ page }) => {
   // correctly places a modal authentication gate over its controls.
   await page.goto('/upload/index.html');
   await expect(page.getByRole('heading', { name: 'PDFを追加', exact: true, level: 1 })).toBeVisible();
+  await expect(page.locator('.upload-heading').getByRole('link', {name:'ホームへ戻る',exact:true})).toHaveAttribute('href','../index.html');
   const toggle = page.locator('[data-theme-toggle]').first();
   await expect(toggle).toBeVisible();
   const before = await toggle.getAttribute('aria-pressed');
@@ -60,6 +64,24 @@ test('dark-mode control persists across page reload', async ({ page }) => {
   await expect(toggle).toHaveAttribute('aria-pressed', after);
   await page.reload();
   await expect(page.locator('[data-theme-toggle]').first()).toHaveAttribute('aria-pressed', after);
+  const viewport = page.viewportSize();
+  const nav = page.getByRole('navigation', { name: 'メインナビゲーション' });
+  for (const width of [320,390,1280]) {
+    await page.setViewportSize({width,height:800});
+    await expect(nav.getByRole('link')).toHaveCount(3);
+    const brand = await page.locator('.site-header .brand').boundingBox();
+    const links = await nav.boundingBox();
+    const theme = await page.locator('.site-header .theme-toggle').boundingBox();
+    expect(brand && links && theme).toBeTruthy();
+    expect(links.x + links.width).toBeLessThanOrEqual(width);
+    expect(theme.x + theme.width).toBeLessThanOrEqual(width);
+    if(width<=640) expect(links.y).toBeGreaterThanOrEqual(brand.y+brand.height);
+    else {
+      expect(links.x).toBeGreaterThanOrEqual(brand.x+brand.width);
+      expect((await page.locator('.site-header').boundingBox()).height).toBeLessThanOrEqual(60);
+    }
+  }
+  if(viewport) await page.setViewportSize(viewport);
 });
 
 test('settings password can be shown and hidden without sending data', async ({ page }) => {
@@ -90,7 +112,7 @@ test('upload page displays PDF-only selection and returns home', async ({ page }
   await expect(pdfInput).toHaveAttribute('accept', /pdf/i);
   await expect(page.locator('.eyebrow,.section-kicker,.notice--privacy')).toHaveCount(0);
   await expect(page.locator('#drop-heading')).toHaveText('PDFを選択');
-  await page.locator('a.header-back').click();
+  await page.getByRole('navigation', { name: 'メインナビゲーション' }).getByRole('link', { name: 'ホーム', exact: true }).click();
   await expect(page.getByRole('heading', { name: '収入ダッシュボード' })).toBeVisible();
 });
 
@@ -345,7 +367,7 @@ test('PDF picker stays disabled until the upload module has initialized',async({
   await expect(page.locator('#mobile-file-picker')).toBeDisabled();
   await expect(page.locator('#drop-zone')).toHaveAttribute('aria-disabled','true');
   await expect(page.locator('#drop-zone')).toHaveAttribute('tabindex','-1');
-  await expect(page.locator('#upload-guide')).toContainText('PDF追加の準備中');
+  await expect(page.locator('#upload-guide')).toHaveCount(0);
  } finally { release(); }
  await page.waitForLoadState('load');
  const input=await readyUploadInput(page);
@@ -616,7 +638,13 @@ test('settings overview separates categories and retains only in-page drafts',as
  await menu.getByRole('button',{name:/^通知履歴/}).click();
  await expect(page.locator('#settings-notifications-panel')).toBeVisible();
  await expect(page.locator('#notification-empty')).toBeVisible();
- await expect(page.locator('#notification-confirm-all')).toBeDisabled();
+ await expect(page.locator('#notification-confirm-all')).toHaveCount(0);
+ await expect(menu.locator('[data-settings-open=notifications]')).toHaveText('通知履歴');
+ const notificationFilter=page.locator('#notification-filter');
+ await expect(notificationFilter).toHaveValue('all');
+ await notificationFilter.selectOption('error');
+ await expect(page.locator('#notification-empty')).toBeVisible();
+ await notificationFilter.selectOption('all');
  await expect(page.locator('#payroll-cloud-gate')).toHaveCount(0);
  await menu.getByRole('button',{name:/^勤務先管理/}).click();
  await expect(page.locator('#settings-backup-panel')).toBeHidden();
@@ -711,10 +739,10 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
     const r=s=>document.querySelector(s).getBoundingClientRect();
     const header=r('.statements-card__header'),title=r('#statements-heading'),filter=r('.statement-filter');
     return {right:header.right-filter.right,center:(title.top+title.bottom-filter.top-filter.bottom)/2,
-     gap:filter.left-title.right,height:r('.statement-filter span').height,overflow:document.documentElement.scrollWidth-innerWidth};
+     gap:filter.left-title.right,height:r('.statement-filter span').height,padding:parseFloat(getComputedStyle(document.querySelector('.statement-filter span')).paddingInlineStart),overflow:document.documentElement.scrollWidth-innerWidth};
    },theme);
    expect(Math.abs(controls.right)).toBeLessThan(1);expect(Math.abs(controls.center)).toBeLessThan(1);
-   expect(controls.gap).toBeGreaterThanOrEqual(0);expect(controls.height).toBe(36);expect(controls.overflow).toBe(0);
+   expect(controls.gap).toBeGreaterThanOrEqual(0);expect(controls.height).toBe(32);expect(controls.padding).toBeGreaterThanOrEqual(7);expect(controls.overflow).toBe(0);
    await expect(page.getByRole('link',{name:'PDFを追加',exact:true})).toHaveCount(1);
    // The source starts disabled until a dashboard view has been loaded.
    for(const radio of await page.locator('input[name="statement-kind"]').all())await expect(radio).toBeDisabled();
@@ -737,6 +765,18 @@ test('shared disclosure, statement columns and settings spacing stay aligned', a
    await page.mouse.move(0,0);
    const uploadHeading=await page.locator('.upload-heading h1').evaluate(e=>{const c=getComputedStyle(e),r=e.getBoundingClientRect();return [c.fontSize,c.fontWeight,c.lineHeight,r.left,r.top];});
    const uploadFile=await page.locator('.selected-file').evaluate(e=>{const c=getComputedStyle(e),n=getComputedStyle(e.querySelector('strong'));return [c.backgroundColor,c.borderColor,c.borderRadius,n.fontSize,n.fontWeight];});
+   await page.evaluate(()=>{
+    document.querySelector('.workspace').classList.remove('is-empty');document.querySelector('#review-content').hidden=false;
+    document.querySelector('#selected-name').textContent='synthetic-long-filename-'.repeat(8)+'.pdf';
+    const refresh=document.querySelector('#employer-load');refresh.textContent='勤務先一覧を更新';refresh.hidden=false;
+   });
+   const uploadActions=await page.evaluate(()=>{
+    const r=s=>document.querySelector(s).getBoundingClientRect(),a=r('.selected-file__actions'),f=r('.selected-file'),o=r('#open-pdf'),d=r('#diagnostic-button'),e=r('#employer-id'),u=r('#employer-load'),er=r('.employer-identity__row');
+    return {square:Math.abs(d.width-d.height)<1,sameHeight:Math.abs(o.height-d.height)<1,inside:d.right<=a.right+1&&a.right<=f.right+1&&o.right<=d.left+1,refreshInside:u.right<=er.right+1&&e.right<=u.left+1,refreshAligned:Math.abs(e.height-u.height)<1};
+   });
+   expect(uploadActions.square).toBe(true);expect(uploadActions.sameHeight).toBe(true);expect(uploadActions.inside).toBe(true);
+   expect(uploadActions.refreshInside).toBe(true);if(width<=430)expect(uploadActions.refreshAligned).toBe(true);
+
    await fixture('edit/index.html');
    const edit=await page.evaluate(theme=>{
     document.documentElement.dataset.theme=theme;
@@ -939,6 +979,11 @@ test('shared loading notification keeps its anchor across save phases',async({pa
    await page.evaluate(value=>document.documentElement.dataset.theme=value,theme);
    for(const width of [320,390,855,1280]){
     await page.setViewportSize({width,height:900});
+    const refreshLayout=await page.locator('#employer-directory-load').evaluate(el=>{
+     const a=el.getBoundingClientRect(),b=document.querySelector('#employer-directory-add').getBoundingClientRect(),h=el.closest('.employer-settings__header').getBoundingClientRect();
+     return {square:Math.abs(a.width-a.height)<1,sameHeight:Math.abs(a.height-b.height)<1,inside:a.left>=h.left-1&&b.right<=h.right+1&&a.right<=b.left+1};
+    });
+    expect(refreshLayout).toEqual({square:true,sameHeight:true,inside:true});
     const layout=await list.evaluate(el=>{
      const [main,side]=el.querySelectorAll(':scope > .employer-settings__group');
      const a=main.getBoundingClientRect(),b=side.getBoundingClientRect();

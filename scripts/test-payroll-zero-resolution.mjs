@@ -136,31 +136,26 @@ const parsed={
 }
 console.log('PASS: Round 4/B zero-resolution and import provenance regression');
 
-// Execute the actual editor shortcut with the normal-save boundary stubbed.
-// No authentication state is fabricated and no cloud write is performed.
+// The editor previews zero conversion without mutating the controls; normal save uses the preview.
 {
  const edit=src('src/edit.ts'),html=src('public/edit/index.html');
  const extract=(start,end)=>{const a=edit.indexOf(start),b=edit.indexOf(end,a);assert.ok(a>=0&&b>a);return stripTypeScriptTypes(edit.slice(a,b),{mode:'strip'});};
- const code=extract('function zeroInputTargets(', 'function updateUI(')+extract('function saveWithOptionalZeros(', 'zeroSaveButton.addEventListener(');
- assert.match(html,/id="edit-save-zero" type="button"[^>]* disabled/);
- assert.match(edit,/zeroSaveButton.hidden=deletionPending\|\|deletionNeedsReload\|\|zeroCount===0/);
- assert.match(edit,/zeroSaveButton.disabled=saving\|\|employerRefreshing\|\|deletionPending\|\|deletionConfirming\|\|deletionNeedsReload\|\|errors.length>0/);
- for(const mode of ['salary','bonus','warning','invalid','locked','saving','deletion','no-target']){
+ const code=extract('function zeroInputTargets(', 'function updateUI(');
+ assert.doesNotMatch(html,/id="edit-save-zero"/);
+ assert.match(html,/id="zero-missing-amounts" type="checkbox"/);
+ assert.match(edit,/applicablePayrollForm\(effectiveValues\(\)\)/);
+ for(const mode of ['salary','bonus','invalid','unchecked']){
   const values=form(mode==='bonus'?'bonus':'salary');
   values.transportation='100';values.nonTaxable='100';values.taxable='249900';
   values.yearEndAdjustment='';values.bonusBase='';values.performanceBonus='';values.workDays='';
-  if(mode==='warning'){values.taxable='';values.nonTaxable='';}
-  if(mode==='no-target')for(const key of emptyOptionalAmounts(values))values[key]='0';
   const controls=PAYROLL_FIELDS.filter(k=>!['job','kind','targetMonth','paymentDate'].includes(k)).map(name=>({name,value:values[name],disabled:false,validity:{badInput:mode==='invalid'&&name==='incomeTax'},closest:()=> (values.kind==='salary'?['bonusBase','performanceBonus']:['workDays','yearEndAdjustment','reimbursedExpenses']).includes(name)?{}:null}));
-  let writes=0,focus=0;const status={textContent:'',removeAttribute(){}};
-  const ctx={status,record:{},saving:mode==='saving',deletionPending:mode==='deletion',deletionConfirming:false,deletionNeedsReload:false,zeroSaveButton:{disabled:false},reviewApproval:'old',form:{querySelectorAll:()=>controls},emptyOptionalAmounts,captureOperationAuthorization:()=>()=>mode!=='locked',getValues:()=>({...values,...Object.fromEntries(controls.map(x=>[x.name,x.value]))}),clearInlineError(){},errorView:{},reviewConfirmation:{hidden:true},confirmDiff:{disabled:false,focus(){focus++;}},saveButton:{disabled:false,click(){writes++;}},updateUI(){const checked=validatePayrollForm(ctx.getValues());ctx.saveButton.disabled=!!(checked.errors.length||checked.warnings.length);ctx.reviewConfirmation.hidden=!checked.warnings.length;}};
-  const run=runInNewContext(code+'\nsaveWithOptionalZeros',ctx);run();
-  const changed=ctx.getValues();
-  if(['invalid','locked','saving','deletion','no-target'].includes(mode)){assert.equal(writes,0,mode);assert.equal(ctx.reviewApproval,'old',mode);assert.deepEqual(changed,values,mode);continue;}
-  assert.equal(changed.gross,values.gross);assert.equal(changed.net,values.net);assert.equal(changed.transportation,'100');assert.equal(changed.workDays,'');assert.equal(changed.residentTax,'0');assert.equal(changed.healthInsurance,'0');assert.equal(ctx.reviewApproval,null);
-  if(mode==='bonus'){assert.equal(changed.yearEndAdjustment,'');assert.equal(changed.reimbursedExpenses,'');assert.equal(changed.bonusBase,'0');}
-  else{assert.equal(changed.bonusBase,'');assert.equal(changed.performanceBonus,'');assert.equal(changed.yearEndAdjustment,'0');}
-  if(mode==='warning'){assert.equal(writes,0);assert.equal(focus,1);assert.match(status.textContent,/まだ保存されていません.*変更を保存/);}else assert.equal(writes,1,mode);
+  const ctx={zeroCheckbox:{checked:mode!=='unchecked'},form:{querySelectorAll:()=>controls},emptyOptionalAmounts,getValues:()=>({...values,...Object.fromEntries(controls.map(x=>[x.name,x.value]))})};
+  const effective=runInNewContext(code+'\neffectiveValues()',ctx);
+  assert.deepEqual(ctx.getValues(),values,'preview must not change inputs');
+  if(mode==='invalid'||mode==='unchecked'){assert.deepEqual({...effective},values);continue;}
+  assert.equal(effective.gross,values.gross);assert.equal(effective.net,values.net);assert.equal(effective.transportation,'100');assert.equal(effective.workDays,'');assert.equal(effective.residentTax,'0');
+  if(mode==='bonus'){assert.equal(effective.yearEndAdjustment,'');assert.equal(effective.reimbursedExpenses,'');assert.equal(effective.bonusBase,'0');}
+  else{assert.equal(effective.bonusBase,'');assert.equal(effective.performanceBonus,'');assert.equal(effective.yearEndAdjustment,'0');}
  }
- console.log('PASS: editor zero-save uses existing write boundary; existing values, hidden fields, warnings and operation guards are preserved');
+ console.log('PASS: editor zero checkbox previews only eligible empty fields without modifying draft inputs');
 }

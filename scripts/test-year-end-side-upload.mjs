@@ -24,7 +24,7 @@ assert.match(ui,/repo\.saveDocumentsBatch\(id,year,/,'bulk click uses isolated r
 assert.match(repo,/await this\.saveYear\(a,id,year,context\.file,working,context\.yearFile,context\)/,'one annual commit per batch');
 assert.doesNotMatch(html,/id="yea-review-ack"|id="yea-validate"|この従業員のPDF原本と入力内容を照合しました/,'no per-file checkbox or mandatory check button');
 assert.doesNotMatch(ui,/reviewAck|\.reviewed|reviewed:/,'no manual review state');
-assert.match(ui,/const blocked=ready\.some\(item=>validateQueueItem\(item\)!==null\)/,'automatic validation gates save');
+assert.match(ui,/const invalidNew=ready\.map\(item=>\(\{draft:item\.draft!,reason:validateQueueItem\(item\)\}\)\)\.find\(item=>item\.reason!==null\)/,'automatic validation gates save');
 assert.match(ui,/item\.year!==year\|\|validateQueueItem\(item\)/,'cloud write checks preflight without checkbox');
 assert.match(ui,/updateDrafts\(true\)/,'retain form input during automatic validation');
 assert.match(ui,/function updateDrafts\(preserveReview=false\)/,'avoid discarding typed invalid values');

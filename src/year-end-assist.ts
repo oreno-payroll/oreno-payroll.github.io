@@ -1,4 +1,4 @@
-import type {NoticeCode} from './ui/notificationHistory';
+import {noticeReason,type NoticeCode,type NoticeReason} from './ui/notificationHistory';
 import {createDraftReviewConsent,yearEndReviewRows,renderReviewConfirmation} from './ui/payrollReview';
 import {confirmOperation,type OperationDialogRequest} from './ui/operationDialog';
 import {captureOperationAuthorization} from './cloud/auth';
@@ -34,13 +34,13 @@ const methodChoices=$<HTMLElement>('yea-method');
 const selectedMethod=():EstimateMethod=>(methodChoices.querySelector<HTMLInputElement>('input[type=radio]:checked')?.value??'latest') as EstimateMethod;
 const currentName=$<HTMLElement>('yea-current-name');
 const backDirectory=$<HTMLButtonElement>('yea-back-directory');
-const backHome=$<HTMLAnchorElement>('yea-back-home');
 const currentYear=new Date().getFullYear();
 let people:Array<PersonProfile & {state:'active'|'deleting'}>=[];
 let selected:PersonId|null=null;
 let activeYear=currentYear;
 let data:YearData|null=null;
 let otherYearNames:string[]=[];
+let loadOtherYearNames:(()=>Promise<string[]>)|undefined;
 let forecastDirty=false;
 let bonusDirty=false;
 /** Only remembers a saved bonus month explicitly cleared in the editor. */
@@ -141,7 +141,7 @@ const totalDetails=$<HTMLElement>('yea-taxable-breakdown');
 const zipDownload=$<HTMLButtonElement>('yea-download-pdfs');
 const appStatus=createAppStatus(status,'yearEnd');
 let recoveryNoticeTarget:object|undefined;
-function say(message:string,kind:Exclude<AppStatusKind,'loading'>='info'){if(message)appStatus.show(kind,message);else appStatus.clear();}
+function say(message:string,kind:Exclude<AppStatusKind,'loading'>='info',reason?:NoticeReason){if(message)appStatus.show(kind,message,false,{reason});else appStatus.clear();}
 function showBusy(message:string,scope?:ReturnType<typeof appStatus.begin>){appStatus.show('loading',`${message}…`,false,{scope});}
 function el<K extends keyof HTMLElementTagNameMap>(tag:K,klass='',label=''):HTMLElementTagNameMap[K]{const node=document.createElement(tag);if(klass)node.className=klass;if(label)node.textContent=label;return node;}
 function setLocalError(node:HTMLElement,message=''){node.hidden=!message;node.textContent=message;}
@@ -300,7 +300,7 @@ async function action(description:string,fn:()=>Promise<void>,_showSuccess=true,
  busy=true;const authorized=captureOperationAuthorization(),scope=appStatus.begin(code,target);showBusy(description,scope);updateDirectoryControls();updateYearControls();updateForecastSaveState();updateBonusSaveState();
  let failed=false;
  try{await fn();}
- catch(err){failed=true;if(authorized())appStatus.show('error',`失敗：${err instanceof Error?err.message:'通信または処理エラー'}`,false,{scope});}
+ catch(err){failed=true;if(authorized())appStatus.show('error',`失敗：${err instanceof Error?err.message:'通信または処理エラー'}`,false,{scope,reason:noticeReason(err)});}
  finally{
   busy=false;if(!failed&&authorized()){if(_showSuccess)appStatus.show('success',`${description.replace(/を保存中$/,'の保存').replace(/を削除中$/,'の削除')}が完了しました`,false,{scope});else appStatus.clear(scope);}
   if(failed&&!selected)directory.hidden=false;
@@ -329,7 +329,7 @@ async function checkDetailExit(guard:()=>boolean):Promise<boolean>{
 }
 const displayPerson=(p:PersonProfile):string=>p.alias?`${p.displayName}（${p.alias}）`:p.displayName;
 function clearMemo(){memoKey='';memoDirty=false;memoInput.value='';memoButton.disabled=true;memoState.textContent='';}
-function resetSelection(){clearMemo();selected=null;data=null;otherYearNames=[];yearContent.hidden=true;yearContent.dataset.empty="false";yearContent.dataset.loading='false';directory.hidden=false;backDirectory.hidden=true;backHome.hidden=false;clearDrafts();resetForecastForm();resetBonusForm();}
+function resetSelection(){clearMemo();selected=null;data=null;otherYearNames=[];loadOtherYearNames=undefined;yearContent.hidden=true;yearContent.dataset.empty="false";yearContent.dataset.loading='false';directory.hidden=false;backDirectory.hidden=true;clearDrafts();resetForecastForm();resetBonusForm();}
 function renderPeople(){
  directoryObservedEpoch=sharedNavigationEpoch();
  const initial=selected;
@@ -386,7 +386,7 @@ async function selectPerson(id:string){
  if(!id){resetSelection();return;}
  const p=people.find(x=>x.id===id&&x.state==='active');if(!p){say('削除中・未登録の従業員は編集できません。','error');resetSelection();return;}
  selected=p.id;activeYear=currentYear;uploadContext='';
- currentName.textContent=displayPerson(p);renderYearOptions();directory.hidden=true;yearContent.hidden=false;backDirectory.hidden=false;backHome.hidden=true;
+ currentName.textContent=displayPerson(p);renderYearOptions();directory.hidden=true;yearContent.hidden=false;backDirectory.hidden=false;
  await loadYear();
 }
 async function loadPeople(forceFresh=false){
@@ -425,18 +425,15 @@ async function loadYear(){
  if(!selected)return;
  const editSnapshot=forecastDirty&&data?captureForecastInput():null;
  const bonusSnapshot=bonusDirty?captureBonusInput():null;
- uploadAccordion.open=false;data=null;otherYearNames=[];uiPdf.disabled=true;
+ uploadAccordion.open=false;data=null;otherYearNames=[];loadOtherYearNames=undefined;uiPdf.disabled=true;
  showYearPlaceholders();
  try{
   const id=selected,year=activeYear;
   const view=await repo.yearWithOtherYearNames(id,year);
   data=view.data;
   renderYear();
-  // Share the verified active-index/profile context, keeping name matching
-  // asynchronous so the document list appears without waiting for other years.
-  void view.otherYearNames().then(names=>{
-   if(selected===id&&activeYear===year){otherYearNames=names;updateDrafts(true);}
-  }).catch(()=>{if(selected===id&&activeYear===year)say('他年度のPDF氏名照合は完了していません。','error');});
+  // The verified reader is lazy: browsing and estimate/memo edits never read other years.
+  loadOtherYearNames=view.otherYearNames;
   if(editSnapshot)restoreForecastInput(editSnapshot);
   if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
  }catch(error){
@@ -566,7 +563,7 @@ function renderEstimateMonths(){
   }else{
    card.dataset.state='draft';
    const input=el('input','input') as HTMLInputElement;
-   input.type='number';input.min='0';input.step='1';input.max='999999999';input.dataset.override=month;
+   input.type='number';input.inputMode='numeric';input.min='0';input.step='1';input.max='999999999';input.dataset.override=month;
    input.value=oldNoPay?'0':existing?String(existing.amount):'';
    input.dataset.userEdited='false';
    input.setAttribute('aria-label',`${m}月の給与見込み額`);
@@ -623,7 +620,7 @@ function openBlobPdf(blob:Blob,displayedName?:string){
  try{
   const id=crypto.randomUUID();
   openYearEndPdf(id,async()=>({pdf:await asVerifiedPdfBlob(blob),fileName:displayedName??(blob instanceof File?blob.name:'確認用原本.pdf')}));
- }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。','error');}
+ }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。','error',noticeReason(error));}
 }
 function openStoredPdf(id:string){
  if(!selected)return;
@@ -631,7 +628,7 @@ function openStoredPdf(id:string){
  const record=data?.documents.find(row=>row.id===id);
  try{
   openYearEndPdf(id,async()=>({pdf:await asVerifiedPdfBlob(await repo.original(person,year,id)),fileName:record?yearEndVisiblePdfName(record.kind,record.paymentDate,record.fileName):'給与明細原本.pdf'}));
- }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。','error');}
+ }catch(error){say(error instanceof Error?error.message:'PDF原本を開けません。','error',noticeReason(error));}
 }
 const selectedQueueItem=():QueueItem|undefined=>fileQueue.find(x=>x.id===activeDraft);
 const recordDraft=(r:DocumentRecord):DraftDocument=>({
@@ -705,7 +702,10 @@ function updateSaveState(){
  const pending=fileQueue.some(item=>item.status==='reading');
  const errors=fileQueue.some(item=>item.status==='error');
  const duplicates=fileQueue.filter(item=>item.status==='duplicate').length;
- const blocked=ready.some(item=>validateQueueItem(item)!==null)||updates.some(r=>validateSavedEdit(r,savedEdits.get(r.id)!)!==null);
+ const invalidNew=ready.map(item=>({draft:item.draft!,reason:validateQueueItem(item)})).find(item=>item.reason!==null);
+ const invalidEdit=updates.map(r=>({draft:savedEdits.get(r.id)!.draft,reason:validateSavedEdit(r,savedEdits.get(r.id)!)})).find(item=>item.reason!==null);
+ const invalid=invalidNew??invalidEdit;
+ const blocked=Boolean(invalid);
  const unreviewed=ready.filter(item=>requiresAmountApproval(item.draft!)).length+updates.filter(r=>requiresAmountApproval(savedEdits.get(r.id)!.draft)).length;
  renderAmountReview();
  saveAll.disabled=busy||Boolean(saveRecoveryRequired)||!selected||!data||pending||errors||blocked||unreviewed>0||(ready.length===0&&updates.length===0&&pendingDeletions.size===0);
@@ -713,7 +713,7 @@ function updateSaveState(){
  saveRecheck.disabled=busy;
  $('yea-upload-progress').textContent=savingDocuments?'保存中…':
   !ready.length&&!updates.length&&!pendingDeletions.size&&!errors&&!pending&&!duplicates?'':pending?'PDFを読み取り中…':
-  errors?'読み取れないPDFを確認して一覧から外してください。':blocked?'入力内容に問題があります。':
+  errors?'読み取れないPDFを確認して一覧から外してください。':invalid?`${invalid.draft.targetMonth||'対象年月未入力'} ${invalid.draft.kind==='bonus'?'賞与':'給与'}：${invalid.reason}`:
   saveRecoveryRequired?'前回の保存が未完了です。OneDriveの状態を確認してください。':
   unreviewed?`${unreviewed}件の検算結果を原本と照合してください。`:
   !ready.length&&!updates.length&&duplicates?`重複${duplicates}件は保存対象外です。`:
@@ -728,6 +728,7 @@ function promoteRemainingDuplicate(removed:QueueItem){
   .sort((a,b)=>a.id-b.id)
   .find(item=>!fileQueue.some(other=>other!==item&&other.id<item.id&&other.hash===hash));
  if(!next){updateDrafts();return;}
+ const authorized=captureOperationAuthorization(),id=selected,year=activeYear;
  next.status='reading';next.error='';next.draft=null;
  updateDrafts();
  void action('重複PDFの再読み取り',async()=>{
@@ -738,6 +739,10 @@ function promoteRemainingDuplicate(removed:QueueItem){
   }catch(error){
    next.status='error';next.error=error instanceof Error?error.message:'PDFの読み取りに失敗しました。';
   }finally{updateDrafts();}
+  if(next.status==='ready'&&loadOtherYearNames&&authorized()&&selected===id&&activeYear===year){
+   const reader=loadOtherYearNames;const names=await reader();
+   if(authorized()&&selected===id&&activeYear===year&&reader===loadOtherYearNames){otherYearNames=names;updateDrafts();}
+  }
  },false);
 }
 function renderSelectedReview(){
@@ -932,10 +937,10 @@ async function saveAllDocuments(){
  const excluded=fileQueue.filter(x=>x.status==='duplicate').map(x=>({name:x.file.name,reason:x.error||'同一PDFのため除外'}));
  if(!updates.length&&!additions.length&&!deletions.length)return;
  for(const record of updates){const edit=savedEdits.get(record.id)!;
-  if(validateSavedEdit(record,edit)){activeSavedId=record.id;activeDraft=null;updateDrafts();say('変更する明細の入力内容を確認してください。','warning');return;}
+  if(validateSavedEdit(record,edit)){activeSavedId=record.id;activeDraft=null;updateDrafts();say('変更する明細の入力内容を確認してください。','warning','input');return;}
  }
  for(const item of additions){if(item.personId!==id||item.year!==year||validateQueueItem(item)){
-  activeSavedId=null;activeDraft=item.id;updateDrafts();say('新規明細の入力内容を確認してください。','warning');return;}}
+  activeSavedId=null;activeDraft=item.id;updateDrafts();say('新規明細の入力内容を確認してください。','warning','input');return;}}
  // Recheck every exact draft at the write boundary; the repository still enforces acknowledgement.
  const changedDrafts=[...updates.map(r=>savedEdits.get(r.id)!.draft),...additions.map(i=>i.draft!)];
  if(changedDrafts.some(requiresAmountApproval)){say('未確認の検算結果があります。原本と照合してください。','warning');return;}
@@ -976,7 +981,7 @@ async function saveAllDocuments(){
   saveRecovery.hidden=!saveRecoveryRequired;
   saveRecoveryStatus.textContent=!saveRecoveryRequired?'':writeState.completed?'明細の保存は完了しましたが、終了処理を確認できません。':writeState.attempted||writeState.uncertain?'保存状態が不明です。再保存する前にOneDriveの状態を確認してください。':'明細の書き込みは開始していません。保存ロックの状態を確認してください。';
   recoveryNoticeTarget=saveRecoveryRequired?noticeTarget:undefined;
-  if(authorized())appStatus.show(writeState.completed?'partial':'error',writeState.completed?'明細は保存済みです。終了処理の状態を確認してください。':`保存できませんでした：${error instanceof Error?error.message:'通信エラー'}`,false,{scope:noticeScope});
+  if(authorized())appStatus.show(writeState.completed?'partial':'error',writeState.completed?'明細は保存済みです。終了処理の状態を確認してください。':`保存できませんでした：${error instanceof Error?error.message:'通信エラー'}`,false,{scope:noticeScope,reason:writeState.uncertain?'unknown':writeState.lock==='held'||writeState.lock==='unknown'?'lock':noticeReason(error)});
  }finally{
   busy=false;savingDocuments=false;updateYearControls();updateDrafts();updateForecastSaveState();updateBonusSaveState();
  }
@@ -1007,7 +1012,7 @@ async function recoverDocuments(){
   if(bonusSnapshot)restoreBonusInput(bonusSnapshot);
   resetSaveRecoveryStateAfterSuccess();uploadAccordion.open=true;
   appStatus.show('success','保存状態を確認しました。保存済みの変更は反映し、未保存の入力は保持しました。',false,{scope:noticeScope,code:'ye-document-recovery'});recoveryNoticeTarget=undefined;
- }catch(error){saveRecoveryStatus.textContent=`OneDriveの確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;if(authorized())appStatus.show('error','OneDriveの保存状態を確認できませんでした。',false,{scope:noticeScope,code:'ye-document-recovery'});}
+ }catch(error){saveRecoveryStatus.textContent=`OneDriveの確認に失敗しました：${error instanceof Error?error.message:'通信エラー'}`;if(authorized())appStatus.show('error','OneDriveの保存状態を確認できませんでした。',false,{scope:noticeScope,code:'ye-document-recovery',reason:noticeReason(error)});}
  finally{busy=false;updateYearControls();updateDrafts();updateForecastSaveState();updateBonusSaveState();}
 }
 function bind(){
@@ -1064,7 +1069,7 @@ function bind(){
   if(!files.length)return;
   saveResult.hidden=true;saveResult.replaceChildren();
   if(files.length+fileQueue.length>30){say('一度に選択できるPDFは最大30件です。','warning');return;}
-  const id=selected,year=activeYear;
+  const id=selected,year=activeYear,authorized=captureOperationAuthorization();
   const items:QueueItem[]=files.map(file=>({id:++draftSerial,file,draft:null,personId:id,year,hash:'',status:'reading',error:'',fieldErrors:new Set<string>()}));
   fileQueue.push(...items);activeDraft=items[0]?.id??null;activeSavedId=null;
   uploadAccordion.open=false;updateDrafts();
@@ -1096,8 +1101,15 @@ function bind(){
      item.status='duplicate';item.error='今回選択したPDFと内容が重複しています。';
     }else if(!firstHash.has(item.hash))firstHash.set(item.hash,item);
    }
+   if(selected!==id||activeYear!==year||!authorized())throw new Error('読み取り中に従業員や年が変更されました。');
+   if(items.some(item=>item.status==='ready')&&loadOtherYearNames){
+    const reader=loadOtherYearNames;
+    try{
+     const names=await reader();
+     if(authorized()&&selected===id&&activeYear===year&&loadOtherYearNames===reader)otherYearNames=names;
+    }catch{if(authorized()&&selected===id&&activeYear===year&&loadOtherYearNames===reader)throw new Error('他年度のPDF氏名照合は完了していません。原本を確認してください。');}
+   }
    updateDrafts();
-   if(selected!==id||activeYear!==year){clearDrafts();throw new Error('読み取り中に従業員や年が変更されました。');}
   },false).finally(()=>{if(selected===id&&activeYear===year)uploadAccordion.open=true;});
  };
  uiPdf.addEventListener('change',()=>{const files=Array.from(uiPdf.files??[]);uiPdf.value='';queuePdfFiles(files);});

@@ -3,13 +3,18 @@ import type {EmployerEntry,EmployerRole} from '../storage/employerDirectory';
 export function currentEmployer(directory:readonly EmployerEntry[],role:string):string|undefined {
  return directory.find(entry=>entry.role===role&&entry.current)?.id;
 }
+/** Same-name ordinals use the full directory, independently of display order. */
+export function employerNumber(directory:readonly EmployerEntry[],entry:EmployerEntry):string {
+ const same=directory.filter(e=>e.name===entry.name).sort((a,b)=>a.id.localeCompare(b.id));
+ return same.length>1?String(same.findIndex(e=>e.id===entry.id)+1):'';
+}
 export function employerChoices(directory:readonly EmployerEntry[],role:string,selected?:string):{id:string;label:string}[] {
  const items=directory.filter(entry=>entry.role===role).sort((a,b)=>Number(b.current)-Number(a.current)||a.name.localeCompare(b.name,'ja')||a.id.localeCompare(b.id));
- const result=items.map((entry,i)=>({id:entry.id,label:`${entry.name}（${entry.current?'現在':'過去'}${items.filter(x=>x.name===entry.name).length>1?`・${i+1}`:''}）`}));
+ const result=items.map(entry=>{const n=employerNumber(directory,entry);return {id:entry.id,label:`${entry.name}（${entry.current?'現在':'過去'}${n?`・${n}`:''}）`};});
  // Never discard an old statement's ID just because a directory is absent or its role differs.
  if(selected&&!result.some(x=>x.id===selected)){
   const known=directory.find(x=>x.id===selected);
-  result.push({id:selected,label:known?`${known.name}（既存明細・別勤務区分）`:'未登録の勤務先（既存明細）'});
+  result.push({id:selected,label:known?`${employerDisplayName(directory,known.id)}（既存明細・別勤務区分）`:'未登録の勤務先（既存明細）'});
  }
  return [{id:'',label:'未設定'},...result];
 }
@@ -45,6 +50,6 @@ export function employerDisplayName(directory:readonly EmployerEntry[],id:string
  if(!id)return '勤務先未設定';
  const entry=directory.find(e=>e.id===id);
  if(!entry){const n=legacy?.findIndex(e=>e.id===id)??-1;return n>=0?`未登録の勤務先 ${n+1}`:'未登録の勤務先';}
- const same=directory.filter(e=>e.name===entry.name).sort((a,b)=>a.id.localeCompare(b.id));
- return entry.name+(same.length>1?`（${entry.role==='main'?'本業':'副業'}・${same.findIndex(e=>e.id===id)+1}）`:'')+(role&&role!==entry.role?'（勤務区分不一致）':'');
+ const number=employerNumber(directory,entry);
+ return entry.name+(number?`（${entry.role==='main'?'本業':'副業'}・${number}）`:'')+(role&&role!==entry.role?'（勤務区分不一致）':'');
 }

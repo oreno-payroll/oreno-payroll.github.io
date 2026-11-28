@@ -1,3 +1,4 @@
+import {noticeReason} from '../src/ui/notificationHistory.ts';
 /** Test the actual common review functions without a browser or any personal data. */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -44,7 +45,7 @@ assert.ok(start>=0&&end>start);const source=stripTypeScriptTypes(ui.slice(start,
 const d1={...a},d2={...a},consent=createDraftReviewConsent();
 const records=[{id:'one',revision:1},{id:'two',revision:1}],drafts=new Map([['one',{draft:d1}],['two',{draft:d2}]]);
 let writes=0,controlUpdates=0;const calls=[];
-const ctx={captureOperationAuthorization:()=>()=>true,setTimeout,clearTimeout,requestAnimationFrame:f=>setTimeout(f,0),busy:false,savingDocuments:false,saveAll:{disabled:false},selected:'synthetic',activeYear:2026,data:{documents:records},savedEdits:drafts,pendingDeletions:new Map(),fileQueue:[],isChanged:()=>true,validateSavedEdit:()=>null,validateQueueItem:()=>null,
+const ctx={noticeReason,captureOperationAuthorization:()=>()=>true,setTimeout,clearTimeout,requestAnimationFrame:f=>setTimeout(f,0),busy:false,savingDocuments:false,saveAll:{disabled:false},selected:'synthetic',activeYear:2026,data:{documents:records},savedEdits:drafts,pendingDeletions:new Map(),fileQueue:[],isChanged:()=>true,validateSavedEdit:()=>null,validateQueueItem:()=>null,
  requiresAmountApproval:d=>documentAmountWarnings(d).length>0&&!consent.has(d),documentAmountWarnings,structuredClone,say:m=>calls.push(m),saveResult:{replaceChildren(){}},uploadAccordion:{},showBusy(){},updateYearControls(){controlUpdates++;assert.equal(ctx.busy,true);},updateSaveState(){},
  repo:{saveDocumentsBatch:async(...args)=>{writes++;assert.equal(args[4],true);assert.notEqual(args[2][0].draft,d1);const approved=args[2][0].draft.taxable;d1.taxable++;await Promise.resolve();assert.equal(args[2][0].draft.taxable,approved,'in-flight edits cannot change the approved payload');throw new Error('synthetic stop at remote boundary');}},
  appStatus:{error(){},partial(){},begin(){return {};},show(){}},recoveryNoticeTarget:undefined,saveRecoveryRequired:null,saveRecovery:{},saveRecoveryStatus:{},updateDrafts(){},updateForecastSaveState(){},updateBonusSaveState(){},

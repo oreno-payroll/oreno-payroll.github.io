@@ -1,6 +1,7 @@
 /** Graph read/retry and encrypted cache regression; synthetic HTTP only. */
 import assert from 'node:assert/strict';
 import {PayrollGraph,GraphError} from '../src/cloud/graph.ts';
+import {noticeReason} from '../src/ui/notificationHistory.ts';
 // Metadata JSON and missing files
 {
 const signed='https://my.microsoftpersonalcontent.com/test-safe-no-credentials';
@@ -38,6 +39,7 @@ function fixture({badFolder=0,badFile=0,notFound=false}={}) {
  await assert.rejects(graph.read(['payroll'],'2026.enc',1000),error=>{
   assert.match(error.message,/年度暗号ファイル情報の照会/);
   assert.match(error.message,/3回試行/);
+  assert.equal(noticeReason(error),'graph-json');
   assert.doesNotMatch(error.message,/fake-token|my\.microsoftpersonalcontent\.com|broken/);
   return true;
  });
@@ -124,7 +126,7 @@ console.log('PASS: throttled/read errors retry only GET with bounded Retry-After
 const SIGNED='https://storage.example.invalid/opaque-temporary-download';
 const encode=new TextEncoder();
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-function fixture({delayMs=0,force304=false,first401=false,first429=false}={}) {
+function fixture({delayMs=0,force304=false,first401=false,first429=false,failConditional=false,unsolicitedAfterConditional=false}={}) {
  const events=[];
  let body='{"encrypted":"synthetic-A"}',tag='"etag-a"',exists=true;
  let metaCalls=0,bodyCalls=0,conditional=0,mutations=0,refreshes=0,token='token-A';
@@ -151,7 +153,8 @@ function fixture({delayMs=0,force304=false,first401=false,first429=false}={}) {
      if(first401&&metaCalls===1)return Response.json({error:{code:'invalidAuthenticationToken'}},{status:401});
      if(first429&&metaCalls===1)return new Response(JSON.stringify({error:{code:'throttled'}}),{status:429,headers:{'Retry-After':'0'}});
      if(!exists)return Response.json({error:{code:'itemNotFound'}},{status:404});
-     if(init.headers?.['If-None-Match'])conditional++;
+     if(init.headers?.['If-None-Match']){conditional++;if(failConditional)throw new TypeError('synthetic browser rejects conditional response');}
+     if(unsolicitedAfterConditional&&conditional)return new Response(null,{status:304});
      if(force304||init.headers?.['If-None-Match']===tag)return new Response(null,{status:304});
      return Response.json({id:'record',eTag:tag,size:encode.encode(body).byteLength,'@microsoft.graph.downloadUrl':SIGNED});
    }
@@ -181,6 +184,16 @@ function fixture({delayMs=0,force304=false,first401=false,first429=false}={}) {
  await f.read();assert.equal(f.stats().bodyCalls,2,'new ETag can also return 304');
 }
 console.log('PASS: first full ciphertext read; unchanged 304 skips signed download; ETag change fetches new encrypted body');
+// If the browser rejects a conditional cross-origin response, use an ordinary GET
+// within the existing retry budget. Its response must undergo a complete fresh check.
+{
+ const f=fixture({failConditional:true});await f.read();f.change('{"encrypted":"synthetic-B"}');
+ const changed=await f.read();assert.equal(changed.etag,'"etag-b"');assert.equal(changed.text,'{"encrypted":"synthetic-B"}');
+ assert.equal(f.stats().conditional,1);assert.equal(f.stats().bodyCalls,2);assert.equal(f.stats().mutations,0);
+ const rejected=fixture({failConditional:true,unsolicitedAfterConditional:true});await rejected.read();
+ await assert.rejects(rejected.read(),e=>e instanceof GraphError&&e.status===304);
+ assert.equal(rejected.stats().bodyCalls,1);
+}
 // If the server mistakenly returns 304 to an unconditional GET, it is NOT a hit:
 // without local ciphertext, HTTP 304 must fail and not return a fake empty file.
 {
@@ -251,9 +264,41 @@ const src=readFileSync(new URL('../src/cloud/graph.ts',import.meta.url),'utf8');
 assert.match(src,/if\(!readonly&&!lockControl\)\{this\.requireWriteOwner\(\);this\.clearEncryptedReadCache\(\);this\.onMutation\(\);\}/);
 assert.match(src,/if\(!readonly&&!lockControl\)\{await this\.clearCheckpointBeforeWrite\(\);await this\.verifyWriteOwner\(\);if\(this\.writeOwner\)\{this\.writeAttempted=true;this\.writeSerial\+\+;\}\}/);
 assert.match(src,/if\(name!==PAYROLL_WRITE_LOCK_NAME&&!parts\.includes\('originals'\)\)this\.rememberEncryptedRead\(/);
-assert.match(src,/readonly&&accept304&&r\.status===304/);
+// Unsolicited 304 rejection is exercised above, including the fallback GET.
 assert.match(src,/await this\.readMetadata<Item>\(metadataPath,'年度暗号ファイル情報の照会',cached\.file\.etag\)/);
 assert.match(src,/method:'PUT',credentials:'omit'/);
 assert.match(src,/headers:\{'If-Match':item\.etag\}/);
 console.log('PASS: PDF original bypass, write invalidation, If-Match and no-bearer upload invariant');
+}
+
+// Exercise actual header/body deadlines without waiting production intervals.
+{
+ const nativeSet=globalThis.setTimeout;
+ globalThis.setTimeout=(fn,ms,...args)=>nativeSet(fn,ms>=30000?12:1,...args);
+ try{
+  for(const stage of ['headers','body']){
+   let requests=0,canceled=0;
+   const graph=new PayrollGraph('synthetic',async(_url,init)=>{
+    requests++;assert.equal(init.method,'GET');
+    if(stage==='headers')return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>{canceled++;reject(init.signal.reason);},{once:true}));
+    return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{'));},cancel(){canceled++;}}),{headers:{'Content-Type':'application/json'}});
+   },undefined,undefined,undefined,false);
+   await assert.rejects(graph.root());assert.equal(requests,3);assert.equal(canceled,3);
+  }
+ }finally{globalThis.setTimeout=nativeSet;}
+ console.log('PASS: bounded header and response-body deadlines abort all three read attempts');
+}
+
+// File-distribution and Graph HTTP failures must not be conflated.
+{
+ const signed='https://storage.example.invalid/synthetic';
+ for(const [response,expected] of [[()=>new Response(null,{status:403}),'download-http:403'],[()=>new Response('<html>',{headers:{'Content-Type':'text/html'}}),'download-html'],[()=>new Response('different-size'),'download-size-mismatch']]){
+  const graph=new PayrollGraph('synthetic-token',async url=>{
+   if(url===signed)return response();
+   if(url.endsWith('/special/approot'))return Response.json({id:'root'});
+   if(url.includes('root:/payroll'))return Response.json({id:'folder'});
+   return Response.json({id:'file',eTag:'etag',size:6,'@microsoft.graph.downloadUrl':signed});
+  },undefined,undefined,undefined,false);
+  await assert.rejects(graph.read(['payroll'],'index.enc',100),e=>noticeReason(e)===expected);
+ }
 }

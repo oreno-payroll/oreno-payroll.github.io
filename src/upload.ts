@@ -1,4 +1,5 @@
-import {recordNotification} from './ui/notificationHistory';
+import {sharedNavigationEpoch,NAVIGATION_MUTATION_KEY} from './cloud/snapshot';
+import {recordNotification,noticeReason} from './ui/notificationHistory';
 import {personalReviewRows,renderReviewConfirmation} from './ui/payrollReview';
 import {registerDiagnosticClose} from './ui/recordDiagnostic';
 import {rememberNavigationNotice} from './ui/navigationNotice';
@@ -24,7 +25,7 @@ import { PAYROLL_FIELDS, validatePayrollForm, normalizeWorkDays, applicablePayro
 import {createPayrollSemantics} from './storage/payrollSemantics';
 import {validEmployerId} from './storage/employerIdentity';
 import {type EmployerEntry} from './storage/employerDirectory';
-import {currentEmployer,renderEmployerSelect} from './ui/employerSelection';
+import {currentEmployer,renderEmployerSelect,employerDisplayName} from './ui/employerSelection';
 import {emptyOptionalAmounts,prepareOptionalZeros} from './storage/payrollZeroResolution';
 import { verifyPdfBytes } from "./storage/pdfIntegrity";
 import { storedPdfName } from "./storage/fileNaming";
@@ -89,13 +90,15 @@ let employerDirectory:EmployerEntry[]|undefined;
 let employerLoading=false;
 let employerLoadFailed=false;
 let employerRefreshRequested=false;
+let employerManageOpened=false;
+let employerObservedEpoch=sharedNavigationEpoch();
 function defaultEmployer(entry:Entry):void{
  if(entry.employerChosen||!employerDirectory)return;
  const next=currentEmployer(employerDirectory,entry.form.job);
  if(entry.employerId!==next){entry.employerId=next;setReviewed(entry,false);}
 }
 /** Explicit load or save preflight. Never write on the first load or after a directory change. */
-async function refreshEmployerChoices(allowPrompt=true):Promise<boolean>{
+async function refreshEmployerChoices(allowPrompt=true,preserveSelection=false):Promise<boolean>{
  if(employerLoading)return false;
  employerLoading=true;updateSaveState();
  employerStatus.textContent='勤務先一覧を確認しています…';
@@ -108,15 +111,15 @@ async function refreshEmployerChoices(allowPrompt=true):Promise<boolean>{
   const before=entries.map(entry=>entry.employerId??null);
   employerDirectory=fresh;employerLoadFailed=false;employerRefreshRequested=false;
   for(const entry of entries){
-   if(entry.employerId&&!fresh.some(x=>x.id===entry.employerId&&x.role===entry.form.job)){entry.employerId=undefined;entry.employerChosen=false;setReviewed(entry,false);}
-   defaultEmployer(entry);
+   if(entry.employerId&&!fresh.some(x=>x.id===entry.employerId&&x.role===entry.form.job)){entry.employerId=undefined;entry.employerChosen=preserveSelection;setReviewed(entry,false);}
+   if(preserveSelection)entry.employerChosen=true;else defaultEmployer(entry);
   }
   const unchanged=entries.length===before.length&&entries.every((entry,i)=>(entry.employerId??null)===before[i]);
   employerStatus.textContent='';
   render();
   if(allowPrompt&&!saving&&!unchanged)notice('info','勤務先の選択が更新されました。確認して保存してください。');
   return unchanged;
- }catch{employerLoadFailed=true;employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度読み込んでください。';if(allowPrompt&&!saving){appStatus.clear();recordNotification('upload','error');}return false;}
+ }catch(error){employerLoadFailed=true;employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度読み込んでください。';if(allowPrompt&&!saving){appStatus.clear();recordNotification('upload','error',noticeReason(error));}return false;}
  finally{employerLoading=false;updateSaveState();}
 }
 const readResult = $<HTMLDivElement>("read-result");
@@ -162,7 +165,6 @@ zeroCheckbox.addEventListener('change',()=>{
   updateSaveState();
 });
 const saveStatus = $<HTMLElement>("save-status");
-const uploadGuide = $<HTMLParagraphElement>("upload-guide");
 const workspace = document.querySelector<HTMLElement>(".workspace")!;
 const saveBar = document.querySelector<HTMLElement>(".save-bar")!;
 const saveFeedback = $<HTMLElement>("save-feedback");
@@ -382,7 +384,7 @@ function renderFileList(): void {
     const size = document.createElement("span");
     size.className = "file-caption";
     const employer=employerDirectory?.find(x=>x.id===entry.employerId);
-    size.textContent = `${formatBytes(entry.file.size)}${entry.pages ? ` · ${entry.pages}ページ` : ""}${employer?` · ${employer.name}`:""}`;
+    size.textContent = `${formatBytes(entry.file.size)}${entry.pages ? ` · ${entry.pages}ページ` : ""}${employer?` · ${employerDisplayName(employerDirectory??[],employer.id)}`:""}`;
     const status = document.createElement("span");
     const state = statusLabel(entry);
     status.className = `file-status file-status--${state.variant}`;
@@ -765,8 +767,17 @@ employerInput.addEventListener('change',()=>{
  if(entry.employerId===next)return;
  entry.employerId=next;setReviewed(entry,false);renderFileList();updateSaveState();
 });
-$<HTMLAnchorElement>('employer-manage').addEventListener('click',event=>{if(saving||uploadSaveRecoveryChecking){event.preventDefault();return;}employerRefreshRequested=true;updateSaveState();});
-employerLoad.addEventListener('click',()=>{if(!saving&&!employerLoading&&!uploadSaveRecoveryChecking)void refreshEmployerChoices();});
+$<HTMLAnchorElement>('employer-manage').addEventListener('click',event=>{if(saving||uploadSaveRecoveryChecking){event.preventDefault();return;}employerManageOpened=true;employerRefreshRequested=true;updateSaveState();});
+employerLoad.addEventListener('click',()=>{if(!saving&&!employerLoading&&!uploadSaveRecoveryChecking)void refreshEmployerChoices(true,employerManageOpened);});
+function refreshEmployerOnReturn():void{
+ if(document.hidden||!employerManageOpened||saving||employerLoading||uploadSaveRecoveryChecking)return;
+ const epoch=sharedNavigationEpoch();
+ if(!employerRefreshRequested&&epoch===employerObservedEpoch)return;
+ void refreshEmployerChoices(false,true).then(()=>{if(!employerLoadFailed&&!employerRefreshRequested)employerObservedEpoch=epoch;if(epoch!==sharedNavigationEpoch())refreshEmployerOnReturn();});
+}
+window.addEventListener('focus',refreshEmployerOnReturn);
+window.addEventListener('storage',event=>{if(event.key===NAVIGATION_MUTATION_KEY)refreshEmployerOnReturn();});
+document.addEventListener('visibilitychange',refreshEmployerOnReturn);
 reviewForm.addEventListener("input", event => {
   const target = event.target;
   const entry = selectedEntry();
@@ -892,13 +903,16 @@ function updateSaveState(): void {
   saveBar.classList.toggle('is-empty',isEmpty&&!saving&&!uploadSaveRecoveryRequired);
   saveStatus.hidden=isEmpty||saving;
   saveBar.classList.toggle('is-recovering',uploadSaveRecoveryRequired);
-  uploadGuide.textContent=uploadSaveRecoveryRequired?'前回の保存結果が未確認です。OneDriveを再照合してください。':isEmpty?'':saving?'':pending?'PDFを読み取っています…':badPdf?'読み取り失敗のPDFを一覧から外してください。':invalidEntry||unreviewed.length?'明細の内容を確認してください。':'確認完了。すべて保存できます。';
   if (saving) {
     saveStatus.textContent = "";
   } else if (!entries.length) {
     saveStatus.textContent = "";
   } else if (uploadSaveRecoveryRequired||(!saveFeedback.hidden&&saveFeedback.classList.contains('is-failed'))) {
     // Preserve the error detail while recovery runs; the recovery panel owns its status.
+  } else if (uploadSaveRecoveryChecking) {
+    saveStatus.textContent = "前回の保存状態を確認しています…";
+  } else if (employerLoading) {
+    saveStatus.textContent = "勤務先一覧を確認しています…";
   } else if (pending) {
     saveStatus.textContent = `PDFの読み取り完了後に保存できます（全${entries.length}件）。`;
   } else if (badPdf) {
@@ -944,7 +958,7 @@ uploadRecoveryRecheck.addEventListener('click',()=>{void(async()=>{
     notice('info',uploadRecoveryMessage(report)+(report.attempted>0&&report.saved===report.attempted?' すべての明細は保存済みです。再登録は不要です。':' 入力内容を保持しています。必要な明細だけ再保存できます。'));
   }catch(error){
     uploadRecoveryStatus.textContent=`再保存できません：${error instanceof Error?error.message:'通信エラー'}。入力内容は保持しています。`;
-    if(authorized())recordNotification('upload-recovery','error');
+    if(authorized())recordNotification('upload-recovery','error',noticeReason(error));
   }finally{uploadSaveRecoveryChecking=false;updateSaveState();}
  })()});
 // Let the disabled controls and progress panel paint before authentication or
@@ -1091,7 +1105,7 @@ saveButton.addEventListener("click", async () => {
     saveStatus.hidden=false;
     if(writeState.payrollSaved)showInlineError(saveStatus, error instanceof Error ? error.message : '給与明細は保存済みです。Finance連携を確認してください。');
     else showInlineError(saveStatus, `保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
-    if(authorized())recordNotification('upload-saved',writeState.payrollSaved||writeState.completed?'partial':'error');
+    if(authorized())recordNotification('upload-saved',writeState.payrollSaved||writeState.completed?'partial':'error',writeState.uncertain?'unknown':writeState.payrollSaved&&!writeState.completed?'finance':writeState.lock==='held'||writeState.lock==='unknown'?'lock':noticeReason(error));
     appStatus.clear();
   }
 });

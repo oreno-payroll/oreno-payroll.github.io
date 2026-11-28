@@ -1,3 +1,4 @@
+import {noticeReason} from '../src/ui/notificationHistory.ts';
 /** Execute the production upload click handler with deterministic UI and storage doubles. */
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -19,7 +20,7 @@ function fixture(mode,count=1){
  const node=()=>({hidden:false,disabled:false,textContent:'',style:{},classList:{add(){},remove(){}},setAttribute(){},removeAttribute(){},addEventListener(_,f){this.click=f;}});
  const entries=Array.from({length:count},(_,i)=>({id:String(i),file:new Blob(['%PDF-1.7 synthetic']),hash:'a'.repeat(64),status:'ready',employerId:'fixture',form:{job:'fixture',kind:'salary',paymentDate:'2026-11-25',workDays:1},pages:1}));
  const forms=entries.map(e=>e.form);
- const ctx={Error,Date,Uint8Array,Blob,setTimeout,clearTimeout,requestAnimationFrame:f=>setTimeout(()=>{events.push('paint');f();},0),saving:false,uploadSaveRecoveryRequired:false,uploadSaveRecoveryChecking:false,uploadSaveAttempt:[],uploadLockState:undefined,recoverAcrossMonths:false,leavingAfterSave:false,entries,
+ const ctx={noticeReason,Error,Date,Uint8Array,Blob,setTimeout,clearTimeout,requestAnimationFrame:f=>setTimeout(()=>{events.push('paint');f();},0),saving:false,uploadSaveRecoveryRequired:false,uploadSaveRecoveryChecking:false,uploadSaveAttempt:[],uploadLockState:undefined,recoverAcrossMonths:false,leavingAfterSave:false,entries,
   saveButton:node(),zeroCheckbox:node(),zeroConsentFingerprint:'fingerprint',saveStatus:node(),saveFeedback:node(),saveStage:node(),saveProgress:node(),saveProgressFill:node(),saveGuidance:node(),saveButtonLabel:node(),uploadRecovery:node(),uploadRecoveryStatus:node(),uploadRecoveryRecheck:node(),saveDuplicates:node(),
   candidates:()=>entries,zeroCandidatesFingerprint:()=> 'fingerprint',captureOperationAuthorization:()=>()=>true,authEpoch:()=>1,
   clearInlineError:n=>{n.textContent='';},showInlineError:(n,t)=>{n.textContent=t;},beginSaveFeedback:()=>events.push('feedback'),updateSaveState:()=>{ctx.saveButton.disabled=ctx.saving||ctx.uploadSaveRecoveryRequired;},showSaveProgress:s=>events.push(s),

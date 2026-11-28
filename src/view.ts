@@ -1,4 +1,4 @@
-import {resetNotificationHistory} from './ui/notificationHistory';
+import {resetNotificationHistory,noticeReason} from './ui/notificationHistory';
 import { createAppStatus } from './ui/appStatus';
 /** PDF原本はクリック時だけ取得する。ファイル名を履歴・タブタイトルに渡さない。 */
 import {readNavigationParams,replaceNavigationParams} from './ui/navigationParams';
@@ -93,6 +93,6 @@ async function start(): Promise<void> {
 appStatus.loading('PDF原本を取得しています…');
 void start().catch(error => {
   if (status&&!locked) {
-    appStatus.error(`PDFを表示できませんでした：${error instanceof Error ? error.message : String(error)}`);
+    appStatus.show('error',`PDFを表示できませんでした：${error instanceof Error ? error.message : String(error)}`,false,{reason:noticeReason(error)});
   }
 });

@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {stripTypeScriptTypes} from 'node:module';
 import {defaultEmployerForecast,validateEmployerForecast} from '../src/storage/employerForecast.ts';
-import {currentEmployer,employerChoices,legacyEmployers,renderEmployerSelect} from '../src/ui/employerSelection.ts';
+import {currentEmployer,employerChoices,legacyEmployers,renderEmployerSelect,employerNumber,employerDisplayName} from '../src/ui/employerSelection.ts';
 const A='emp_'+'a'.repeat(32),B='emp_'+'b'.repeat(32),C='emp_'+'c'.repeat(32),D='emp_'+'d'.repeat(32);
 const directory=[{id:A,name:'架空勤務先A',role:'main',current:true},{id:B,name:'架空勤務先B',role:'main',current:false},{id:C,name:'架空勤務先C',role:'side',current:true}];
 assert.equal(currentEmployer(directory,'main'),A);assert.equal(currentEmployer(directory,'side'),C);assert.equal(currentEmployer(directory,''),undefined);
@@ -25,7 +25,7 @@ assert.match(src('src/upload.ts'),/const unchanged=await refreshEmployerChoices\
 assert.match(src('src/upload.ts'),/entries\.every\(\(entry,i\)=>\(entry\.employerId\?\?null\)===before\[i\]\)/);
 assert.match(src('src/upload.ts'),/employerLoad\.hidden=\(employerDirectory!==undefined&&!employerLoadFailed&&!employerRefreshRequested\)\|\|employerLoading/);
 assert.match(src('src/upload.ts'),/employerLoad\.textContent=employerLoadFailed\?'再読み込み'/);
-assert.match(src('src/upload.ts'),/catch\{employerLoadFailed=true/);
+assert.match(src('src/upload.ts'),/catch\(error\)\{employerLoadFailed=true/);
 assert.match(src('src/upload.ts'),/employerDirectory=fresh;employerLoadFailed=false/);
 assert.match(src('src/upload.ts'),/entry\.employerChosen=true/);assert.match(src('src/upload.ts'),/void refreshEmployerChoices\(false\)/);
 assert.match(src('src/cloud/auth.ts'),/if\(!allowPrompt\)throw new MicrosoftSignInRequiredError\(\);\s*return beginUnlock\(\);/);
@@ -55,3 +55,9 @@ ctx.employerDraft.authorized=()=>false;ctx.update();assert.equal(ctx.employerDir
 ctx.employerDraft={id:D,expected:directory,legacy:{roles:['side']},authorized:()=>true};ctx.role('side');ctx.fill(defaultEmployerForecast('side'));ctx.update();assert.ok(roles.every(r=>r.disabled));assert.deepEqual(ctx.read().bonusMonths,[]);
 
 console.log('PASS: employer names, role-filtered defaults, legacy identities, safe DOM options and fresh-directory guards');
+
+const sameNames=[{id:B,name:'架空',role:'main',current:true},{id:A,name:'架空',role:'side',current:false},{id:C,name:'別',role:'main',current:false}];
+assert.equal(employerNumber(sameNames,sameNames[0]),'2');
+assert.equal(employerChoices(sameNames,'main')[1].label,'架空（現在・2）');
+assert.match(employerDisplayName(sameNames,A),/・1）$/);
+assert.equal(employerNumber([...sameNames].reverse(),sameNames[0]),'2');

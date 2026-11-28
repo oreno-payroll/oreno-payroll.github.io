@@ -1,4 +1,4 @@
-import {recordNotification} from './ui/notificationHistory';
+import {recordNotification,noticeReason,notificationGeneration} from './ui/notificationHistory';
 import {confirmOperation,showOperationMessage} from './ui/operationDialog';
 import {takeNavigationNotice,navigationFeedback} from './ui/navigationNotice';
 import { createAppStatus, type AppStatusKind } from './ui/appStatus';
@@ -134,15 +134,15 @@ deletionSave.addEventListener('click',async()=>{
  }catch(error){
   if(error instanceof PayrollPartialSuccessError&&error.stage==='income-sync'){
    completion={kind:'partial',message:incompleteDeleteIncomeNotice()};
-   if(authorized())appStatus.show('partial',completion.message,false,{code:'delete-income-partial'});
+   if(authorized())appStatus.show('partial',completion.message,false,{code:'delete-income-partial',reason:noticeReason(error)});
    await showOperationMessage({title:'明細削除・一部完了',details:[incompleteDeleteIncomeNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
   }else if(error instanceof PayrollPartialSuccessError&&error.stage==='original-trash'){
    completion={kind:'partial',message:incompleteDeleteOriginalNotice()};
-   if(authorized())appStatus.show('partial',completion.message,false,{code:'delete-original-partial'});
+   if(authorized())appStatus.show('partial',completion.message,false,{code:'delete-original-partial',reason:noticeReason(error)});
    await showOperationMessage({title:'PDF原本の整理・一部完了',details:[completion.message],tone:'warning',acceptLabel:'閉じる'},authorized);
   }else{
    completion={kind:'error',message:'削除結果を確認できません。年度ごとに一部確定した可能性があります。最新データを確認し、設定からFinance連携を再生成してください。'};
-   if(authorized())appStatus.show('error',completion.message,false,{code:'delete-saved'});
+   if(authorized())appStatus.show('error',completion.message,false,{code:'delete-saved',reason:noticeReason(error)});
    await showOperationMessage({title:'削除結果を確認してください',details:[completion.message],tone:'danger',acceptLabel:'閉じる'},authorized);
   }
  }finally{
@@ -208,7 +208,7 @@ sideZipButton.addEventListener('click', async () => {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     if(authorized())appStatus.show('success',`副業PDF ${side.length}件のZIPを作成しました`,false,{scope:noticeScope});
   } catch (error) {
-    if(authorized())appStatus.show('error',`副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`,false,{scope:noticeScope});
+    if(authorized())appStatus.show('error',`副業PDFのZIP作成に失敗しました：${error instanceof Error ? error.message : String(error)}`,false,{scope:noticeScope,reason:noticeReason(error)});
   } finally {
     exportingSideZip = false;
     renderPendingDeletion();
@@ -474,7 +474,7 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
         window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
         if(authorized())appStatus.show('success','PDFのダウンロードを開始しました',false,{scope:noticeScope});
       } catch (error) {
-        if(authorized())appStatus.show('error',`PDFのダウンロードに失敗しました：${error instanceof Error ? error.message : String(error)}`,false,{scope:noticeScope});
+        if(authorized())appStatus.show('error',`PDFのダウンロードに失敗しました：${error instanceof Error ? error.message : String(error)}`,false,{scope:noticeScope,reason:noticeReason(error)});
       } finally { download.disabled = false; }
     });
     const edit = document.createElement('a');
@@ -620,8 +620,11 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
   const hadView=dashboardHasView;
   dashboardLoading=true;
   if(!hadView){registrationPanel.hidden = true;renderList('main',[],'読み込み中…');renderList('side',[],'読み込み中…');}
-  // Routine reads must not erase an unresolved partial operation notice.
-  appStatus.clear();
+  // Use the same progress toast as the other pages. Do not cover a pending
+  // error/partial result, and clear only this read's own progress on completion.
+  const preserveNotice=['partial','error'].includes(appStatus.element.dataset.state??'');
+  let readNotice=preserveNotice?undefined:appStatus.begin('home');
+  if(readNotice)appStatus.show('loading',hadView?'最新の明細を確認しています…':'明細を読み込んでいます…',false,{scope:readNotice});
   const indicator=document.getElementById('payroll-data-freshness');
   const freshness=hadView?'rechecking':'checking';
   if(indicator){indicator.textContent=dashboardFreshnessLabel(freshness);indicator.dataset.freshness=freshness;}
@@ -640,7 +643,12 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
       onEmployerDirectory:directory=>{nextDirectory=directory;},
       forceFresh,
       priorityYears:[String(preferred),String(preferred-1)],
-      onProgress:message=>{if(!hadView)periodLabel.textContent=message;},
+      onProgress:message=>{
+        // A successful initial unlock can reset the pre-auth notification scope.
+        if(!readNotice||['partial','error'].includes(appStatus.element.dataset.state??''))return;
+        if(!hadView&&!readNotice.dismissed&&readNotice.generation!==notificationGeneration())readNotice=appStatus.begin('home');
+        appStatus.show('loading',message,false,{scope:readNotice});
+      },
     });
     saved=nextSaved;employerDirectory=nextDirectory;legacyDirectory=legacyEmployers(saved,employerDirectory);
     yearSelect.disabled = false;
@@ -663,7 +671,7 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
     else if(completion?.kind==='success')appStatus.show(completion.kind,completion.message,false,{record:false});
   } catch (error) {
     console.error('保存済み明細を読み込めませんでした。');
-    appStatus.error(`${completion?completion.message+'\n':''}明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`);
+    appStatus.show('error',`${completion?completion.message+'\n':''}明細を読み込めませんでした：${error instanceof Error?error.message:String(error)}`,false,{reason:noticeReason(error)});
     dashboardStale=dashboardHasView;
     const failedState=dashboardHasView?'stale':'unavailable';
     if(indicator){indicator.textContent=dashboardFreshnessLabel(failedState);indicator.dataset.freshness=failedState;}
@@ -682,6 +690,7 @@ async function refreshDashboard(forceFresh=false,completion?:{kind:AppStatusKind
     }
     // The last verified screen is preserved for read-only use; saving is blocked.
   } finally {
+    if(readNotice)appStatus.clear(readNotice);
     periodLabel.removeAttribute('aria-busy');
     dashboardLoading=false;updatePeriodControls();
     if(refreshButton)refreshButton.disabled=false;
@@ -713,14 +722,14 @@ window.addEventListener('storage',event=>{
 window.addEventListener('focus',()=>{
  if(dashboardHasView&&dashboardMutationEpoch!==mutationEpoch()&&!dashboardLoading&&!deletionBusy()&&!exportingSideZip)void refreshDashboard(true);
 });
-// Keep refresh next to the page title; the independent lock action stays in the footer.
-const refreshActions=document.querySelector<HTMLElement>('.dashboard-sync');
+// Keep the freshness indicator and refresh beside the independent vault lock.
+const refreshActions=document.querySelector<HTMLElement>('.site-footer__actions');
 if(refreshActions&&!refreshActions.querySelector('#payroll-refresh-data')) {
  const control=document.createElement('span');control.className='payroll-data-sync';
  const state=document.createElement('span');state.id='payroll-data-freshness';state.textContent='確認中…';
  state.setAttribute('role','status');state.setAttribute('aria-live','polite');
  const refresh=document.createElement('button');refresh.id='payroll-refresh-data';refresh.type='button';refresh.className='site-footer__button';refresh.textContent='最新データを確認';
  refresh.addEventListener('click',()=>{void refreshDashboard(true);});
- control.append(state,refresh);refreshActions.append(control);
+ control.append(state,refresh);refreshActions.prepend(control);
 }
 void refreshDashboard();

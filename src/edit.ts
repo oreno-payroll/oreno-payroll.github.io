@@ -1,14 +1,14 @@
-import {recordNotification} from './ui/notificationHistory';
+import {recordNotification,noticeReason,type NoticeReason} from './ui/notificationHistory';
 import {openRecordDiagnostic} from './ui/recordDiagnostic';
 import {personalReviewRows,renderReviewConfirmation,editedReviewRecord} from './ui/payrollReview';
 import {confirmOperation,showOperationMessage} from './ui/operationDialog';
 import {rememberNavigationNotice} from './ui/navigationNotice';
-import {authEpoch} from './cloud/snapshot';
+import {authEpoch,sharedNavigationEpoch,NAVIGATION_MUTATION_KEY} from './cloud/snapshot';
 import { createAppStatus } from './ui/appStatus';
 import { safePdfFileName } from './storage/fileNaming';
 import {preparePdfHandoff} from './pdf/handoff';
 import {readNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
-import {capturePdfHandoffAuthorization,captureOperationAuthorization,cloudVault} from './cloud/auth';
+import {capturePdfHandoffAuthorization,captureOperationAuthorization,cloudVault,tryResumeCloudVault} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
 import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,needsEditConflictReview,PayrollEditConflictError,type ReplacementConflict,type SavedPayrollSummary} from './storage/payrollStore';
 import {emptyOptionalAmounts,reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
@@ -33,7 +33,8 @@ const editor = $<HTMLElement>('editor');
 const appStatus=createAppStatus(undefined,'edit');
 const status = $<HTMLElement>('edit-status');
 const saveButton = $<HTMLButtonElement>('edit-save');
-const zeroSaveButton = $<HTMLButtonElement>('edit-save-zero');
+const zeroCheckbox = $<HTMLInputElement>('zero-missing-amounts');
+const zeroApproval = $<HTMLElement>('edit-zero-approval');
 const deleteButton = $<HTMLButtonElement>('edit-delete');
 const confirmDiff = $<HTMLInputElement>('confirm-diff');
 const reviewConfirmation=$<HTMLElement>('edit-review-confirmation');
@@ -69,27 +70,39 @@ const employerStatus=$<HTMLElement>('employer-status');
 const employerRefresh=$<HTMLButtonElement>('employer-refresh');
 const employerManage=$<HTMLAnchorElement>('employer-manage');
 let employerRefreshing=false;
+let employerManageOpened=false;
+let employerObservedEpoch=sharedNavigationEpoch();
 let employerDirectory:EmployerEntry[]=[];
 let employerRoleSelectionRequired=false;
 function refreshEmployerSelect(selected?:string):void{
  renderEmployerSelect(employerInput,employerDirectory,getValues().job,selected);
 }
-employerManage.addEventListener('click',event=>{if(saving||deletionPending||deletionNeedsReload||employerRefreshing){event.preventDefault();return;}employerRefresh.hidden=false;});
-employerRefresh.addEventListener('click',()=>{void(async()=>{
+employerManage.addEventListener('click',event=>{if(saving||deletionPending||deletionNeedsReload||employerRefreshing){event.preventDefault();return;}employerManageOpened=true;employerRefresh.hidden=false;});
+async function refreshEmployerDirectory(allowPrompt:boolean){
  if(!record||saving||deletionPending||deletionNeedsReload||employerRefreshing)return;
- const authorized=captureOperationAuthorization(),target=record;
+ const authorized=captureOperationAuthorization(),target=record,epoch=sharedNavigationEpoch();
  employerRefreshing=true;employerRefresh.disabled=true;employerStatus.textContent='勤務先一覧を確認しています…';updateUI();
  try{
-  const fresh=await (await cloudVault()).readEmployerDirectory();
+  const vault=allowPrompt?await cloudVault():await tryResumeCloudVault();
+  if(!vault){employerStatus.textContent='保管庫を開いて勤務先一覧を更新してください。';return;}
+  const fresh=await vault.readEmployerDirectory();
   if(!authorized()||record!==target)return;
   const selected=employerInput.value||undefined;
   employerDirectory=fresh;
   if(!employerRoleSelectionRequired&&employerAssignmentAllowed(fresh,getValues().job,selected,target))refreshEmployerSelect(selected);
   else {refreshEmployerSelect();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='勤務先を選択してください';placeholder.disabled=true;employerInput.prepend(placeholder);employerInput.selectedIndex=0;employerRoleSelectionRequired=true;reviewApproval=null;}
-  employerStatus.textContent='';employerRefresh.hidden=true;
- }catch{if(authorized()){employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度お試しください。';recordNotification('edit','error');}}
- finally{employerRefreshing=false;employerRefresh.disabled=false;updateUI();}
- })();});
+  employerStatus.textContent='';employerRefresh.hidden=true;employerObservedEpoch=epoch;
+ }catch(error){if(authorized()){employerStatus.textContent='勤務先一覧を確認できませんでした。もう一度お試しください。';recordNotification('edit','error',noticeReason(error));}}
+ finally{employerRefreshing=false;employerRefresh.disabled=false;updateUI();if(epoch!==sharedNavigationEpoch())refreshEmployerOnReturn();}
+}
+employerRefresh.addEventListener('click',()=>{void refreshEmployerDirectory(true);});
+function refreshEmployerOnReturn():void{
+ if(document.hidden||!employerManageOpened||(employerRefresh.hidden&&employerObservedEpoch===sharedNavigationEpoch()))return;
+ void refreshEmployerDirectory(false);
+}
+window.addEventListener('focus',refreshEmployerOnReturn);
+window.addEventListener('storage',event=>{if(event.key===NAVIGATION_MUTATION_KEY)refreshEmployerOnReturn();});
+document.addEventListener('visibilitychange',refreshEmployerOnReturn);
 employerInput.addEventListener('change',()=>{employerRoleSelectionRequired=false;reviewApproval=null;clearInlineError(errorView);updateUI();});
 function hideConditional(kind: string): void {
   form.querySelectorAll<HTMLElement>('[data-bonus-only]').forEach(el => { el.hidden = kind !== 'bonus'; });
@@ -115,7 +128,7 @@ function getValues(): Record<string, string> {
 /** 既存PDFはそのまま。フォームの実質的な編集がある時だけ離脱警告。 */
 function hasUnsavedChanges(): boolean {
   if (!record) return false;
-  const current = getValues();
+  const current = effectiveValues();
   const previous = record.form;
   const keys = new Set([...Object.keys(current), ...Object.keys(previous)]);
   for (const key of keys) {
@@ -124,7 +137,7 @@ function hasUnsavedChanges(): boolean {
   }
   return (employerInput.value.trim()||undefined)!==record.employerId;
 }
-function approvalFingerprint():string{return JSON.stringify([getValues(),employerInput.value.trim()]);}
+function approvalFingerprint():string{return JSON.stringify([effectiveValues(),employerInput.value.trim(),zeroCheckbox.checked]);}
 function hasApproval():boolean{return reviewApproval!==null&&reviewApproval===approvalFingerprint();}
 /** HTML number inputs can expose an empty value for an invalid draft. Do not
  * turn that into a confirmed zero, or touch inactive/non-money controls. */
@@ -135,9 +148,19 @@ function zeroInputTargets(values:Record<string,string>):HTMLInputElement[] {
   const fields=new Set<string>(emptyOptionalAmounts(values));
   return active.filter(input=>!input.disabled&&fields.has(input.name)&&input.value.trim()==='');
 }
+/** Preview the values that would be saved without changing the input controls. */
+function effectiveValues():Record<string,string>{
+ const values=getValues();
+ if(zeroCheckbox.checked)for(const input of zeroInputTargets(values))values[input.name]='0';
+ return values;
+}
 function updateUI(): void {
   if (!record) return;
-  const values = getValues();
+  const zeroCount=zeroInputTargets(getValues()).length;
+  if(zeroCount===0)zeroCheckbox.checked=false;
+  zeroApproval.hidden=deletionPending||deletionNeedsReload||zeroCount===0;
+  zeroCheckbox.disabled=saving||employerRefreshing||deletionPending||deletionConfirming||deletionNeedsReload||zeroCount===0;
+  const values = effectiveValues();
   const { errors, warnings } = validatePayrollForm(values);
   const selected=employerInput.value||undefined;
   if(employerRoleSelectionRequired||!validEmployerId(selected)||!employerAssignmentAllowed(employerDirectory,values.job,selected,record))errors.unshift('勤務区分に対応する勤務先（または未設定）を選び直してください。');
@@ -159,10 +182,6 @@ function updateUI(): void {
     ? '未保存の変更があります。'
     : '');
   saveButton.disabled = saving || employerRefreshing || !changed || errors.length > 0 || Boolean(warnings.length && !hasApproval());
-  const zeroCount=zeroInputTargets(values).length;
-  zeroSaveButton.hidden=deletionPending||deletionNeedsReload||zeroCount===0;
-  zeroSaveButton.textContent=`未入力${zeroCount}項目を0円として保存`;
-  zeroSaveButton.disabled=saving||employerRefreshing||deletionPending||deletionConfirming||deletionNeedsReload||errors.length>0||zeroCount===0;
   employerInput.disabled=saving||employerRefreshing||deletionPending||deletionNeedsReload;
   if(deletionPending||deletionNeedsReload){
     reviewConfirmation.hidden=true;currentReview.hidden=true;
@@ -179,9 +198,9 @@ diagnosticButton.addEventListener('click',()=>{
   const target=record,session=captureOperationAuthorization(),unlocked=capturePdfHandoffAuthorization();
   openRecordDiagnostic(()=>JSON.stringify({...target,pdf:{size:target.pdfSize,type:target.pdfType,loaded:false}},null,2),()=>session()&&unlocked()&&record===target&&!diagnosticButton.disabled);
 });
-function showError(message: string): void {
-  if(editor.hidden){appStatus.clear();showInlineError(errorView,message);recordNotification('edit','error');}
-  else {clearInlineError(errorView);appStatus.error(message);}
+function showError(message: string,reason?:NoticeReason): void {
+  if(editor.hidden){appStatus.clear();showInlineError(errorView,message);recordNotification('edit','error',reason);}
+  else {clearInlineError(errorView);appStatus.show('error',message,false,{reason});}
 }
 form.addEventListener('input', event => {
   const el = event.target;
@@ -211,29 +230,12 @@ form.addEventListener('change', event => {
 });
 form.addEventListener('submit', event => event.preventDefault());
 confirmDiff.addEventListener('change', () => { reviewApproval=confirmDiff.checked&&!confirmDiff.disabled?approvalFingerprint():null;clearInlineError(errorView); updateUI(); });
-// Explicit user action only. Reuse the normal save/validation/conflict path;
-// do not create import provenance for values entered later in the editor.
-function saveWithOptionalZeros():void {
-  if(!record||saving||deletionPending||deletionConfirming||deletionNeedsReload||zeroSaveButton.disabled||!captureOperationAuthorization()())return;
-  const targets=zeroInputTargets(getValues());
-  if(!targets.length)return;
-  for(const input of targets)input.value='0';
-  reviewApproval=null;
-  clearInlineError(errorView);
-  updateUI();
-  status.removeAttribute('data-routine');
-  if(!saveButton.disabled)saveButton.click();
-  else if(!reviewConfirmation.hidden&&!confirmDiff.disabled){
-    status.textContent=`${targets.length}項目を0円にしました。まだ保存されていません。原本との照合後に「変更を保存」を押してください。`;
-    confirmDiff.focus();
-  }else status.textContent=`${targets.length}項目を0円にしました。まだ保存されていません。入力内容を確認してください。`;
-}
-zeroSaveButton.addEventListener('click',saveWithOptionalZeros);
+zeroCheckbox.addEventListener('change',()=>{reviewApproval=null;clearInlineError(errorView);updateUI();});
 saveButton.addEventListener('click', async () => {
   if(deletionPending){await commitPendingDeletion();return;}
   if (!record || saving || employerRefreshing || deletionNeedsReload || !hasUnsavedChanges()) return;
   const employerId=employerInput.value.trim()||undefined;
-  const formValues = applicablePayrollForm(getValues());
+  const formValues = applicablePayrollForm(effectiveValues());
   if(employerRoleSelectionRequired||!validEmployerId(employerId)||!employerAssignmentAllowed(employerDirectory,formValues.job,employerId,record)){updateUI();return;}
   const checked = validatePayrollForm(formValues);
   if (checked.errors.length) { updateUI(); return; }
@@ -314,14 +316,14 @@ saveButton.addEventListener('click', async () => {
         : error.stage==='year-move'
           ? '編集内容は移動先年度に保存済みですが、移動元年度の明細整理が未完了の可能性があります。'
           : '編集内容は保存済みですが、Finance連携用の収入同期が未完了です。';
-      recordNotification(error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial','partial');
+      recordNotification(error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial','partial',noticeReason(error));
       saving=true;updateUI();
       await showOperationMessage({title:'明細編集・一部完了',details:[heading,detail],tone:'warning',acceptLabel:'閉じる'},authorized);
       if(!authorized()){saving=false;updateUI();return;}
       if(operationEpoch===authEpoch())rememberNavigationNotice({operation:error.stage==='duplicate-cleanup'?'edit-cleanup-partial':error.stage==='year-move'?'edit-year-partial':'edit-income-partial'},operationEpoch,true);
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }
-    showError(`保存処理を完了できませんでした。入力内容は保持しています。再読込して最新の状態を確認してください。\n${detail}`);
+    showError(`保存処理を完了できませんでした。入力内容は保持しています。再読込して最新の状態を確認してください。\n${detail}`,noticeReason(error));
     updateUI();
   }finally{perf.finish(completed);}
 });
@@ -359,7 +361,7 @@ async function commitPendingDeletion():Promise<void>{
     if(!authorized()){updateUI();return;}
     const detail=error instanceof Error?error.message:String(error);
     if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
-      recordNotification('delete-income-partial','partial');
+      recordNotification('delete-income-partial','partial',noticeReason(error));
       saving=true;updateUI();
       await showOperationMessage({title:'明細削除・一部完了',details:[incompleteDeleteIncomeNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
       if(!authorized()){saving=false;updateUI();return;}
@@ -369,7 +371,7 @@ async function commitPendingDeletion():Promise<void>{
       return;
     }
     if(error instanceof PayrollPartialSuccessError&&error.stage==='original-trash'){
-      recordNotification('delete-original-partial','partial');
+      recordNotification('delete-original-partial','partial',noticeReason(error));
       saving=true;updateUI();
       await showOperationMessage({title:'PDF原本の整理・一部完了',details:[incompleteDeleteOriginalNotice()],tone:'warning',acceptLabel:'閉じる'},authorized);
       if(!authorized()){saving=false;updateUI();return;}
@@ -377,7 +379,7 @@ async function commitPendingDeletion():Promise<void>{
       leavingAfterSave=true;window.location.assign(homeHref);return;
     }
     deletionNeedsReload=true;
-    showError(`削除処理を完了できませんでした。処理が一部確定した可能性があるため、最新の明細一覧を確認し、設定からFinance連携を再生成してください。\n${detail}`);
+    showError(`削除処理を完了できませんでした。処理が一部確定した可能性があるため、最新の明細一覧を確認し、設定からFinance連携を再生成してください。\n${detail}`,noticeReason(error));
     updateUI();
   }
 }
@@ -429,7 +431,7 @@ void (async () => {
           document.body.append(anchor);anchor.click();anchor.remove();
         }finally{window.setTimeout(()=>URL.revokeObjectURL(objectUrl),60_000);}
         appStatus.success('PDFのダウンロードを開始しました');
-      }catch(error){showError(`PDF原本を取得できませんでした：${error instanceof Error?error.message:String(error)}`);}
+      }catch(error){showError(`PDF原本を取得できませんでした：${error instanceof Error?error.message:String(error)}`,noticeReason(error));}
       finally{pdfDownloading=false;}
     });
     fillForm(record.form);
@@ -442,5 +444,5 @@ void (async () => {
       for(const issue of issues){const li=document.createElement('li');li.textContent=issue;list.append(li);}
     }
     updateUI();
-  } catch (error) { showError(error instanceof Error ? error.message : '明細の読み込みに失敗しました。'); }
+  } catch (error) { showError(error instanceof Error ? error.message : '明細の読み込みに失敗しました。',noticeReason(error)); }
 })();

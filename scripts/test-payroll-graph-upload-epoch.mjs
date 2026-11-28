@@ -8,7 +8,7 @@ import {performance} from 'node:perf_hooks';
 const src=readFileSync(new URL('../src/cloud/graph.ts',import.meta.url),'utf8');
 const strip=s=>stripTypeScriptTypes(s.replace(/^import[^\n]*\n/gm,'').replace(/\bexport\s+/g,''),{mode:'transform'});
 const {PayrollGraph}=runInNewContext(strip(src)+'\n({PayrollGraph})',{
- URL,Response,Request,Headers,TextEncoder,TextDecoder,Uint8Array,performance,
+ URL,Response,Request,Headers,AbortController,TextEncoder,TextDecoder,Uint8Array,performance,
  observeGraphTransfer:()=>{},observeGraphRetry:()=>{},setTimeout,clearTimeout,
  MicrosoftSignInRequiredError:class extends Error{},MicrosoftTemporaryError:class extends Error{},
 });

@@ -88,24 +88,4 @@ assert.match(upload,/保存・検証しました/);
 assert.match(source('.gitignore'),/!\/public\/payroll-cloud-session\.js/);
 console.log('PASS: 認証画面・同一オリジンの鍵継承・保存進捗・変更年のみの同期');
 
-// UX regressions: connected account must not advertise a no-op button; upload must tell users when to navigate.
-const html=source('public/upload/index.html'),css=source('public/styles/cloud.css');
-assert.match(auth,/ui\.loginForm\.hidden=state==='connected'/);
-assert.match(auth,/ui\.unlockForm\.hidden=state!=='connected'/);
-assert.match(auth,/ui\.button\.disabled=state!=='connected'/);
-assert.match(css,/payroll-cloud-error\[hidden\]/);
-assert.match(html,/id="save-feedback"/);
-assert.match(html,/id="save-progress-track"/);
-// The upload UI no longer repeats the persistence explanation in its diagnostic panel.
-// Keep the public documentation and verify encryption at the actual Graph write boundary.
-assert.match(source('README.md'),/給与の平文PDF・平文JSONをOneDriveへアップロードしません/);
-const persistence=source('src/cloud/vault.ts');
-assert.match(persistence,/const encrypted=await encryptBytes\('original',bytes,key\);[\s\S]*?this\.graph\.write\(this\.storagePath\('originals',year,mm\),`\$\{uuid\}\.enc`,encrypted,/);
-assert.match(persistence,/const encrypted=await encryptJson\('year',merged,this\.unlocked\(\),this\.salt\);[\s\S]*?this\.graph\.write\(this\.storagePath\('statements'\),`\$\{year\}\.enc`,encrypted,/);
-assert.doesNotMatch(html,/IndexedDBへ保存します/);
-assert.match(upload,/saveElapsed\.textContent/);
-assert.doesNotMatch(upload,/通信応答を待っています|OneDriveの応答待ち/);
-assert.match(upload,/document\.addEventListener\('click',event=>/);
-assert.match(upload,/stopSaveClock\(\)/);
-assert.doesNotMatch(upload,/window\.alert\(`\$\{result\.saved\}/);
-console.log('PASS: connected Microsoft UI, visible cloud progress, safe navigation, no stale IndexedDB notice');
+// Shared upload/auth UI and encrypted-write assertions: test-cloud-upload-ux.mjs.

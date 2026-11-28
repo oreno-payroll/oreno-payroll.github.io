@@ -19,7 +19,7 @@
 .yea-page button:not(:disabled):focus-visible,.yea-create-dialog button:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .yea-main{display:grid;gap:15px;min-width:0}
 /* Compact context: same .select component as the dashboard. */
-.site-header #yea-back-directory[hidden],.site-header #yea-back-home[hidden]{display:none!important}
+.yea-detail-navigation{display:flex;justify-content:flex-start}
 /* Keep the entire detail screen mounted even when the year is empty or loading. */
 .yea-context{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 2px;flex-wrap:wrap;background:transparent;border:0;border-radius:0;box-shadow:none}
 .yea-context h2{margin:0;min-width:0;font-size:16px;line-height:1.45;font-weight:800;overflow-wrap:anywhere}

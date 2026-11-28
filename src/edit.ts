@@ -10,11 +10,14 @@ import {preparePdfHandoff} from './pdf/handoff';
 import {readNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
 import {capturePdfHandoffAuthorization,captureOperationAuthorization,cloudVault,tryResumeCloudVault} from './cloud/auth';
 /** 保存済みレコードの検査・編集。PDF原本と保存IDは保持する。 */
-import {deleteRecords,getRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,needsEditConflictReview,PayrollEditConflictError,type ReplacementConflict,type SavedPayrollSummary} from './storage/payrollStore';
+import {deleteRecords,getRecordSummary,previewRecordSummary,getOriginalForVerifiedEdit,updateRecordMetadata,inspectReplacementConflicts,recordSignature,needsEditConflictReview,PayrollEditConflictError,type ReplacementConflict,type SavedPayrollSummary} from './storage/payrollStore';
 import {emptyOptionalAmounts,reconcilePayrollZeroResolution} from './storage/payrollZeroResolution';
 import {validEmployerId} from './storage/employerIdentity';
-import type {EmployerEntry} from './storage/employerDirectory';
-import {beginPerfOperation} from './cloud/perf';
+import {employerDirectorySignature,type EmployerEntry} from './storage/employerDirectory';
+import {beginPerfOperation,observePdfSender} from './cloud/perf';
+import {GraphError} from './cloud/graph';
+import {MicrosoftSignInRequiredError} from './cloud/msalPolicy';
+import {InterruptedRotationError} from './cloud/vault';
 import {renderEmployerSelect,employerAssignmentAllowed,employerDisplayName} from './ui/employerSelection';
 import { validatePayrollForm, normalizeWorkDays, applicablePayrollForm } from './storage/payrollValidation';
 import { storedPdfName } from './storage/fileNaming';
@@ -57,6 +60,30 @@ document.querySelectorAll<HTMLAnchorElement>('a[href="../index.html"]').forEach(
   link.setAttribute('href', homeHref);
 });
 let record: SavedPayrollSummary | undefined;
+let verification:'checking'|'preview'|'ready'|'failed'|'conflict'='checking';
+let draftTouched=false;
+let editAuthorized:()=>boolean=()=>false;
+const recheckButton=$<HTMLButtonElement>('edit-recheck');
+const originalLink=$<HTMLAnchorElement>('original-pdf');
+const downloadLink=$<HTMLAnchorElement>('download-pdf');
+// A preview permits initiating an operation, not bypassing its live verification.
+function canUseRecord():boolean{return (verification==='ready'||verification==='preview')&&editAuthorized();}
+function discardUnauthorizedRecord():void{
+ record=undefined;editor.hidden=true;recheckButton.hidden=true;form.reset();
+ $('record-name').textContent='';$('record-details').textContent='';
+ historyReview.querySelector('ul')!.replaceChildren();historyReview.hidden=true;
+ employerDirectory=[];employerInput.replaceChildren();appStatus.clear();
+ showInlineError(errorView,'保管庫の状態が変更されました。画面を開き直してください。');
+}
+function authorizationFailure(error:unknown):boolean{
+ for(let cause=error;cause instanceof Error;cause=cause.cause){
+  if(cause instanceof MicrosoftSignInRequiredError||cause instanceof InterruptedRotationError||
+    cause instanceof GraphError&&(cause.status===401||cause.status===403)||
+    /保管庫の鍵が変更|保管庫の保存世代が変更|保管庫の索引が別のもの/.test(cause.message))return true;
+  if(cause.cause===cause)break;
+ }
+ return false;
+}
 let pdfDownloading=false;
 let saving = false;
 let deletionPending=false;
@@ -77,9 +104,9 @@ let employerRoleSelectionRequired=false;
 function refreshEmployerSelect(selected?:string):void{
  renderEmployerSelect(employerInput,employerDirectory,getValues().job,selected);
 }
-employerManage.addEventListener('click',event=>{if(saving||deletionPending||deletionNeedsReload||employerRefreshing){event.preventDefault();return;}employerManageOpened=true;employerRefresh.hidden=false;});
+employerManage.addEventListener('click',event=>{if(!canUseRecord()||saving||deletionPending||deletionNeedsReload||employerRefreshing){event.preventDefault();return;}employerManageOpened=true;employerRefresh.hidden=false;});
 async function refreshEmployerDirectory(allowPrompt:boolean){
- if(!record||saving||deletionPending||deletionNeedsReload||employerRefreshing)return;
+ if(!record||!canUseRecord()||saving||deletionPending||deletionNeedsReload||employerRefreshing)return;
  const authorized=captureOperationAuthorization(),target=record,epoch=sharedNavigationEpoch();
  employerRefreshing=true;employerRefresh.disabled=true;employerStatus.textContent='勤務先一覧を確認しています…';updateUI();
  try{
@@ -128,8 +155,8 @@ function getValues(): Record<string, string> {
 /** 既存PDFはそのまま。フォームの実質的な編集がある時だけ離脱警告。 */
 function hasUnsavedChanges(): boolean {
   if (!record) return false;
-  const current = effectiveValues();
-  const previous = record.form;
+  const current = applicablePayrollForm(effectiveValues());
+  const previous = applicablePayrollForm(record.form);
   const keys = new Set([...Object.keys(current), ...Object.keys(previous)]);
   for (const key of keys) {
     const oldValue = key === 'workDays' ? normalizeWorkDays(previous[key] ?? '') : (previous[key] ?? '');
@@ -156,6 +183,7 @@ function effectiveValues():Record<string,string>{
 }
 function updateUI(): void {
   if (!record) return;
+  if(!editAuthorized()){discardUnauthorizedRecord();return;}
   const zeroCount=zeroInputTargets(getValues()).length;
   if(zeroCount===0)zeroCheckbox.checked=false;
   zeroApproval.hidden=deletionPending||deletionNeedsReload||zeroCount===0;
@@ -192,6 +220,15 @@ function updateUI(): void {
   currentReview.hidden=deletionPending||deletionNeedsReload;
   deleteButton.disabled=saving||employerRefreshing||deletionConfirming||deletionNeedsReload;
   diagnosticButton.disabled=saving||employerRefreshing||deletionPending||deletionConfirming||deletionNeedsReload;
+  const ready=canUseRecord();
+  originalLink.inert=!ready;downloadLink.inert=!ready;employerManage.inert=!ready;employerRefresh.disabled=!ready||employerRefreshing;
+  if(ready){originalLink.href=`../view/index.html#id=${encodeURIComponent(String(record.id))}`;downloadLink.href='#';}
+  else {originalLink.removeAttribute('href');downloadLink.removeAttribute('href');saveButton.disabled=true;deleteButton.disabled=true;diagnosticButton.disabled=true;
+   status.removeAttribute('data-routine');
+   status.textContent=verification==='checking'?'最新の明細を確認しています… 入力はできます。':verification==='conflict'?'明細が更新されています。入力内容は保持しています。保存せず最新の明細を開き直してください。':'最新の明細を確認できませんでした。入力内容は保持しています。再確認してください。';
+  }
+  recheckButton.hidden=verification!=='failed'&&verification!=='preview';
+  recheckButton.disabled=saving||pdfDownloading||deletionPending||employerRefreshing;
 }
 diagnosticButton.addEventListener('click',()=>{
   if(!record||diagnosticButton.disabled)return;
@@ -203,6 +240,7 @@ function showError(message: string,reason?:NoticeReason): void {
   else {clearInlineError(errorView);appStatus.show('error',message,false,{reason});}
 }
 form.addEventListener('input', event => {
+  draftTouched=true;
   const el = event.target;
   if (el instanceof HTMLInputElement && el.name === 'kind') hideConditional(el.value);
   if (el instanceof HTMLInputElement && el.name === 'job') {
@@ -221,6 +259,7 @@ form.addEventListener('input', event => {
   updateUI();
 });
 form.addEventListener('change', event => {
+  draftTouched=true;
   const el = event.target;
   if (el instanceof HTMLInputElement && el.name === 'workDays') {
     const next=normalizeWorkDays(el.value);if(next!==el.value)reviewApproval=null;el.value=next;
@@ -229,9 +268,10 @@ form.addEventListener('change', event => {
   updateUI();
 });
 form.addEventListener('submit', event => event.preventDefault());
-confirmDiff.addEventListener('change', () => { reviewApproval=confirmDiff.checked&&!confirmDiff.disabled?approvalFingerprint():null;clearInlineError(errorView); updateUI(); });
-zeroCheckbox.addEventListener('change',()=>{reviewApproval=null;clearInlineError(errorView);updateUI();});
+confirmDiff.addEventListener('change', () => { draftTouched=true;reviewApproval=confirmDiff.checked&&!confirmDiff.disabled?approvalFingerprint():null;clearInlineError(errorView); updateUI(); });
+zeroCheckbox.addEventListener('change',()=>{draftTouched=true;reviewApproval=null;clearInlineError(errorView);updateUI();});
 saveButton.addEventListener('click', async () => {
+  if(!canUseRecord())return;
   if(deletionPending){await commitPendingDeletion();return;}
   if (!record || saving || employerRefreshing || deletionNeedsReload || !hasUnsavedChanges()) return;
   const employerId=employerInput.value.trim()||undefined;
@@ -281,7 +321,7 @@ saveButton.addEventListener('click', async () => {
       }
       if(!authorized()){saving=false;appStatus.clear();updateUI();return;}
       // Modal confirmation is asynchronous: do not save a draft changed during confirmation.
-      if(employerRoleSelectionRequired||JSON.stringify(applicablePayrollForm(getValues()))!==JSON.stringify(formValues)||(employerInput.value.trim()||undefined)!==employerId||(checked.warnings.length&&!hasApproval())){
+      if(employerRoleSelectionRequired||JSON.stringify(applicablePayrollForm(effectiveValues()))!==JSON.stringify(formValues)||(employerInput.value.trim()||undefined)!==employerId||(checked.warnings.length&&!hasApproval())){
         saving=false;appStatus.warning('入力内容が変わりました。もう一度確認してください。');updateUI();return;
       }
       perf.mark('save-records');
@@ -291,7 +331,7 @@ saveButton.addEventListener('click', async () => {
           else if(stage.startsWith('Finance連携用'))perf.mark('save-finance');
           else if(stage.startsWith('クラウド保存と検証'))perf.mark('save-finish');
           appStatus.loading(stage);
-        });
+        },employerDirectorySignature(employerDirectory));
         break;
       }catch(error){
         // The preflight error can only escape after a safe lock release. Prompt
@@ -308,7 +348,7 @@ saveButton.addEventListener('click', async () => {
   } catch (error) {
     leavingAfterSave = false;
     saving = false;
-    if(!authorized()){updateUI();return;}
+    if(!authorized()||(!(error instanceof PayrollPartialSuccessError)&&authorizationFailure(error))){discardUnauthorizedRecord();return;}
     const detail=error instanceof Error?error.message:String(error);
     if(error instanceof PayrollPartialSuccessError){
       const heading=error.stage==='duplicate-cleanup'
@@ -328,13 +368,13 @@ saveButton.addEventListener('click', async () => {
   }finally{perf.finish(completed);}
 });
 deleteButton.addEventListener('click',()=>{
-  if(!record||saving||employerRefreshing||deletionConfirming||deletionNeedsReload)return;
+  if(!record||!canUseRecord()||saving||employerRefreshing||deletionConfirming||deletionNeedsReload)return;
   if(!deletionPending)deletionAuthorization=captureOperationAuthorization();
   if(!deletionAuthorization?.())return;
   deletionPending=!deletionPending;updateUI();
 });
 async function commitPendingDeletion():Promise<void>{
-  if (!record || saving || deletionConfirming || deletionNeedsReload || !deletionPending || !deletionAuthorization?.()) return;
+  if (!record || !canUseRecord() || saving || deletionConfirming || deletionNeedsReload || !deletionPending || !deletionAuthorization?.()) return;
   const job = record.form.job === 'main' ? '本業' : '副業';
   const kind = record.form.kind === 'bonus' ? '賞与' : '給与';
   const target=record,signature=recordSignature(record),operationEpoch=authEpoch(),authorized=deletionAuthorization;
@@ -358,7 +398,7 @@ async function commitPendingDeletion():Promise<void>{
   } catch (error) {
     leavingAfterSave = false;
     saving = false;
-    if(!authorized()){updateUI();return;}
+    if(!authorized()||(!(error instanceof PayrollPartialSuccessError)&&authorizationFailure(error))){discardUnauthorizedRecord();return;}
     const detail=error instanceof Error?error.message:String(error);
     if(error instanceof PayrollPartialSuccessError && error.stage==='income-sync'){
       recordNotification('delete-income-partial','partial',noticeReason(error));
@@ -390,59 +430,91 @@ window.addEventListener('beforeunload', event => {
 });
 window.addEventListener('pagehide',()=>{if(!saving){deletionPending=false;deletionAuthorization=undefined;}});
 window.addEventListener('pageshow',event=>{if(event.persisted)updateUI();});
+window.addEventListener('focus',()=>{if(record&&!editAuthorized())discardUnauthorizedRecord();});
+/** Populate only on initial load or when no user draft would be overwritten. */
+function renderRecord(next:SavedPayrollSummary,directory:EmployerEntry[]):void{
+ record=next;draftTouched=false;employerDirectory=directory;employerStatus.textContent='';employerRoleSelectionRequired=false;reviewApproval=null;
+ zeroCheckbox.checked=false;
+ $('record-name').textContent=next.fileName;
+ $('record-details').textContent=`PDF ${next.pdfSize < 1024 * 1024 ? `${Math.max(1, Math.round(next.pdfSize / 1024))} KB` : `${(next.pdfSize / 1024 / 1024).toFixed(1)} MB`}`;
+ fillForm(next.form);
+ const issues=next.reviewedIssues??[],list=historyReview.querySelector<HTMLElement>('ul')!;
+ list.replaceChildren();historyReview.hidden=!issues.length&&!next.reviewedAt;
+ if(!historyReview.hidden){
+  historyReview.querySelector<HTMLElement>('[data-review-history-date]')!.textContent=next.reviewedAt?`確認日時：${new Date(next.reviewedAt).toLocaleString('ja-JP')}`:'確認日時：未記録';
+  for(const issue of issues){const li=document.createElement('li');li.textContent=issue;list.append(li);}
+ }
+ editor.hidden=false;updateUI();
+}
+// The original is never fetched from the display snapshot. Its own live before/after
+// verification and one-use handoff are mandatory even when initiated from a preview.
+const startHandoff=(event:MouseEvent)=>{if(record&&canUseRecord()){const target=record;preparePdfHandoff(originalLink,target.id,async()=>({
+ fileName:target.fileName,pdf:await getOriginalForVerifiedEdit(target.id,recordSignature(target)),
+}),capturePdfHandoffAuthorization(),event,observePdfSender);}};
+originalLink.addEventListener('click',event=>{if(!canUseRecord()){event.preventDefault();return;}if(!event.defaultPrevented)startHandoff(event);});
+originalLink.addEventListener('auxclick',event=>{if(!canUseRecord()){event.preventDefault();return;}if(event.button===1&&!event.defaultPrevented)startHandoff(event);});
+downloadLink.addEventListener('click',async event=>{
+ event.preventDefault();
+ if(!record||!canUseRecord()||saving||pdfDownloading)return;
+ const authorized=editAuthorized,target=record;
+ pdfDownloading=true;appStatus.loading('PDF原本を取得しています…');
+ try{
+  const pdf=await getOriginalForVerifiedEdit(target.id,recordSignature(target));
+  if(!authorized()||record!==target)return;
+  const objectUrl=URL.createObjectURL(pdf);
+  try{const anchor=document.createElement('a');anchor.href=objectUrl;anchor.download=safePdfFileName(target.fileName);document.body.append(anchor);anchor.click();anchor.remove();}
+  finally{window.setTimeout(()=>URL.revokeObjectURL(objectUrl),60_000);}
+  appStatus.success('PDFのダウンロードを開始しました');
+ }catch(error){if(!authorized()||authorizationFailure(error)){discardUnauthorizedRecord();return;}showError(`PDF原本を取得できませんでした：${error instanceof Error?error.message:String(error)}`,noticeReason(error));}
+ finally{pdfDownloading=false;}
+});
+async function verifyRecord(id:number,yearHint?:string):Promise<void>{
+ verification='checking';updateUI();
+ try{
+  let freshDirectory:EmployerEntry[]|undefined;
+  const fresh=await getRecordSummary(id,yearHint,directory=>{freshDirectory=directory;});
+  if(!editAuthorized()){discardUnauthorizedRecord();return;}
+  if(!freshDirectory)throw new Error('勤務先一覧を確認できませんでした。');
+  if(!fresh){
+   if(record&&(draftTouched||hasUnsavedChanges())){verification='conflict';updateUI();return;}
+   record=undefined;editor.hidden=true;showError('保存済み明細が見つかりません。');return;
+  }
+  if(record&&recordSignature(record)===recordSignature(fresh)){
+
+   // Preserve every current input, including an explicitly unset employer.
+   const selected=employerInput.value||undefined;
+   if(JSON.stringify(employerDirectory)!==JSON.stringify(freshDirectory)){
+    reviewApproval=null;employerDirectory=freshDirectory;refreshEmployerSelect(selected);
+    // Preserve an explicit unresolved role assignment.
+    if(employerRoleSelectionRequired){const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='勤務先を選択してください';placeholder.disabled=true;employerInput.prepend(placeholder);employerInput.selectedIndex=0;}
+   }
+   record=fresh;verification='ready';updateUI();
+  }else if(record&&(draftTouched||hasUnsavedChanges())){verification='conflict';updateUI();return;}
+  else{verification='ready';renderRecord(fresh,freshDirectory);}
+  appStatus.clear();
+ }catch(error){
+  if(!editAuthorized()||authorizationFailure(error)){discardUnauthorizedRecord();return;}
+  verification='failed';
+  if(record){updateUI();showError('最新の明細を確認できませんでした。入力内容は保持しています。',noticeReason(error));}
+  else showError(error instanceof Error?error.message:'明細の読み込みに失敗しました。',noticeReason(error));
+ }
+}
 appStatus.loading('保存済み明細を読み込んでいます…');
 void (async () => {
-  const rawId=originParams.get('id')??'';
-  const id = Number(rawId);
-  if (originParams.getAll('id').length!==1 || !/^\d+$/.test(rawId) || !Number.isSafeInteger(id) || id <= 0) { showError('明細IDが不正です。ホームに戻って選び直してください。'); return; }
-  try {
-    // Priority-only hint, not a trusted statement location. CloudVault still
-    // validates the whole indexed snapshot before returning any editable record.
-    const yearHint=originParams.get('hintYear')??undefined;
-    record = await getRecordSummary(id,yearHint,directory=>{employerDirectory=directory;});
-    if (!record) { showError('保存済み明細が見つかりません。'); return; }
-    employerStatus.textContent='';
-    editor.hidden = false;
-    if(appStatus.element.dataset.state==='loading')appStatus.clear();
-    $('record-name').textContent = record.fileName;
-    $('record-details').textContent = `PDF ${record.pdfSize < 1024 * 1024 ? `${Math.max(1, Math.round(record.pdfSize / 1024))} KB` : `${(record.pdfSize / 1024 / 1024).toFixed(1)} MB`}`;
-    const link = $<HTMLAnchorElement>('original-pdf');
-    link.href = `../view/index.html#id=${encodeURIComponent(String(record.id))}`;
-    // Opens a new viewer tab synchronously; the already-unlocked editor transfers
-    // only the verified PDF Blob over a one-use, lock-aware BroadcastChannel.
-    const startHandoff=()=>preparePdfHandoff(link,record!.id,async()=>({
-      fileName:record!.fileName,
-      pdf:await getOriginalForVerifiedEdit(record!.id,recordSignature(record!)),
-    }),capturePdfHandoffAuthorization());
-    link.addEventListener('click',event=>{if(!event.defaultPrevented)startHandoff();});
-    link.addEventListener('auxclick',event=>{if(event.button===1&&!event.defaultPrevented)startHandoff();});
-    const download = $<HTMLAnchorElement>('download-pdf');
-    download.href = '#'; // Real bytes are fetched and verified only after a click.
-    download.addEventListener('click',async event=>{
-      event.preventDefault();
-      if(!record||saving||pdfDownloading)return;
-      pdfDownloading=true;appStatus.loading('PDF原本を取得しています…');
-      try{
-        const pdf=await getOriginalForVerifiedEdit(record.id,recordSignature(record));
-        const objectUrl=URL.createObjectURL(pdf);
-        try{
-          const anchor=document.createElement('a');
-          anchor.href=objectUrl;anchor.download=safePdfFileName(record.fileName);
-          document.body.append(anchor);anchor.click();anchor.remove();
-        }finally{window.setTimeout(()=>URL.revokeObjectURL(objectUrl),60_000);}
-        appStatus.success('PDFのダウンロードを開始しました');
-      }catch(error){showError(`PDF原本を取得できませんでした：${error instanceof Error?error.message:String(error)}`,noticeReason(error));}
-      finally{pdfDownloading=false;}
-    });
-    fillForm(record.form);
-    const issues=record.reviewedIssues??[];
-    historyReview.hidden=!issues.length&&!record.reviewedAt;
-    if(!historyReview.hidden){
-      const date=historyReview.querySelector<HTMLElement>('[data-review-history-date]')!;
-      date.textContent=record.reviewedAt?`確認日時：${new Date(record.reviewedAt).toLocaleString('ja-JP')}`:'確認日時：未記録';
-      const list=historyReview.querySelector<HTMLElement>('ul')!;
-      for(const issue of issues){const li=document.createElement('li');li.textContent=issue;list.append(li);}
-    }
-    updateUI();
-  } catch (error) { showError(error instanceof Error ? error.message : '明細の読み込みに失敗しました。',noticeReason(error)); }
+ const rawId=originParams.get('id')??'',id=Number(rawId);
+ if(originParams.getAll('id').length!==1||!/^\d+$/.test(rawId)||!Number.isSafeInteger(id)||id<=0){showError('明細IDが不正です。ホームに戻って選び直してください。');return;}
+ const yearHint=originParams.get('hintYear')??undefined;
+ const perf=beginPerfOperation('payroll-edit-preview');let completed=false;
+ try{
+  await perf.measure('edit-access',()=>cloudVault());
+  const session=captureOperationAuthorization(),unlocked=capturePdfHandoffAuthorization();
+  editAuthorized=()=>session()&&unlocked();
+  const preview=await perf.measure('edit-preview',()=>previewRecordSummary(id));
+  if(!editAuthorized()){discardUnauthorizedRecord();return;}
+  if(preview){verification='preview';renderRecord(preview.record,preview.directory);appStatus.clear();}
+  completed=true;
+ }catch(error){showError(error instanceof Error?error.message:'明細の読み込みに失敗しました。',noticeReason(error));return;}
+ finally{perf.finish(completed);}
+ recheckButton.addEventListener('click',()=>{if((verification==='failed'||verification==='preview')&&editAuthorized()&&!saving&&!pdfDownloading&&!deletionPending&&!employerRefreshing)void verifyRecord(id,yearHint);});
+ if(verification!=='preview')await verifyRecord(id,yearHint);
 })();

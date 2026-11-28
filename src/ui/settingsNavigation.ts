@@ -42,7 +42,7 @@ export function mountSettingsNavigation(root:HTMLElement,canNavigate:()=>boolean
  window.addEventListener('pagehide',remask);
  const initial=readView(window.location.hash.slice(1))??'auth';
  render(initial);
- if(initial!=='auth')onOpen?.(initial);
+ onOpen?.(initial);
  for(const button of buttons)button.addEventListener('click',()=>open(button));
  renderButtons();
  return {setBusy(value){busy=value;renderButtons();}};

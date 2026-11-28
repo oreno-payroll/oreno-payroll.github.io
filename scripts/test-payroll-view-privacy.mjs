@@ -43,7 +43,7 @@ const vault={
  records(){throw Error('single viewer must not use a stale in-memory snapshot');},
  async original(record){downloads++;assert.equal(record.id,7);return pdf;},
 };
-const api=runInNewContext(strip(read('src/storage/payrollStore.ts'))+'\n({getOriginalForVerifiedEdit,getRecord,recordSignature})',{cloudVault:async()=>vault,Blob,structuredClone});
+const api=runInNewContext(strip(read('src/storage/payrollStore.ts'))+'\n({getOriginalForVerifiedEdit,getRecord,recordSignature})',{cloudVault:async()=>vault,Blob,structuredClone,beginPerfOperation:()=>({measure:async(_,work)=>work(),finish(){}})});
 const signature=api.recordSignature(rec);
 const setup=(a,b,fail=0)=>{before=a;after=b;reads=downloads=0;failAt=fail;};
 for(const get of [()=>api.getOriginalForVerifiedEdit(7,signature),()=>api.getRecord(7)]){

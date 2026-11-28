@@ -89,7 +89,7 @@ await assert.rejects(getRecordSummary(id),/保管庫|解除|索引/);
 console.log('PASS: remote edits reject stale save; locked vault never serves a stale summary');
 const edit=readFileSync(new URL('../src/edit.ts',import.meta.url),'utf8');
 const dashboard=readFileSync(new URL('../src/main.ts',import.meta.url),'utf8');
-assert.match(edit,/await getRecordSummary\(id,yearHint,directory=>\{employerDirectory=directory;\}\)/);
+assert.match(edit,/await getRecordSummary\(id,yearHint,directory=>\{freshDirectory=directory;\}\)/);
 assert.doesNotMatch(edit,/URL\.createObjectURL\(record\.pdf\)/);
 assert.match(edit,/preparePdfHandoff\(/);
 assert.match(edit,/getOriginalForVerifiedEdit\(/);

@@ -391,11 +391,22 @@ async function selectPerson(id:string){
 }
 async function loadPeople(forceFresh=false){
  const empty=$<HTMLElement>('yea-person-empty');
- let receiving=true;
+ let receiving=true,previewed=false;
  if(!peopleLoaded&&!personList.childElementCount){empty.hidden=false;empty.textContent='読み込み中…';}
- try{const next=await repo.people(true,forceFresh||peopleLoaded,(done,total)=>{if(receiving&&!peopleLoaded)empty.textContent=`従業員を読み込み中… ${done}/${total}件`;});people=next;peopleLoaded=true;peopleStale=false;peopleFreshness.hidden=true;renderPeople();}
- catch(error){peopleStale=true;peopleFreshness.hidden=false;peopleFreshness.textContent=peopleLoaded?'最新データを取得できませんでした。以前の一覧を表示しています。':'従業員一覧を取得できませんでした。';if(!peopleLoaded&&!personList.childElementCount){empty.hidden=false;empty.textContent='最新データを確認してください。';}throw error;}
- finally{receiving=false;}
+ try{
+  const next=await repo.people(true,forceFresh||peopleLoaded,(done,total)=>{
+   if(receiving&&!peopleLoaded&&!previewed)empty.textContent=`従業員を読み込み中… ${done}/${total}件`;
+  },list=>{
+   if(!receiving||peopleLoaded)return;
+   previewed=true;people=list;peopleStale=true;peopleFreshness.hidden=false;
+   peopleFreshness.textContent='最新の接続状態を確認しています。';renderPeople();
+  });
+  people=next;peopleLoaded=true;peopleStale=false;peopleFreshness.hidden=true;renderPeople();
+ }catch(error){
+  if(previewed&&!peopleLoaded){people=[];renderPeople();}
+  peopleStale=true;peopleFreshness.hidden=false;peopleFreshness.textContent=peopleLoaded?'最新データを取得できませんでした。以前の一覧を表示しています。':'従業員一覧を取得できませんでした。';
+  if(!peopleLoaded&&!personList.childElementCount){empty.hidden=false;empty.textContent='最新データを確認してください。';}throw error;
+ }finally{receiving=false;}
 }
 function showYearPlaceholders(){
  yearContent.hidden=false;yearContent.dataset.loading='true';yearError.hidden=true;yearRetry.hidden=true;

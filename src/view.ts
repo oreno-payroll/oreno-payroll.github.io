@@ -7,6 +7,7 @@ import { receivePdfHandoff } from './pdf/handoff';
 import {receiveYearEndPdf} from './pdf/yearEndHandoff';
 import {asVerifiedPdfBlob,requirePdfMime} from './pdf/safePdf';
 import {createTabLockCoordinator} from './cloud/tabLock';
+import {observePdfRoute} from './cloud/perf';
 
 const status = document.getElementById('pdf-status');
 const appStatus=createAppStatus(status,'view');
@@ -72,10 +73,14 @@ async function start(): Promise<void> {
   // 通常のクリックでは、認証済みのホームタブから検証済みPDFのみを受け取る。
   // 直接URLを開いた場合やBroadcastChannel非対応時は、従来の認証経路へ戻る。
   if (ticket!==null && !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(ticket))throw new Error('PDF閲覧チケットが不正です。');
+  const receiveStarted=Date.now();
   if (ticket) appStatus.loading('元のタブからPDFを受信しています…');
   const transferred = ticket ? await receivePdfHandoff(id,ticket,()=>{
     appStatus.loading('PDF原本を取得・検証しています…');
   }) : null;
+  observePdfRoute(transferred?'handoff':ticket?'direct-unavailable':'direct-no-ticket',ticket?Date.now()-receiveStarted:undefined);
+  assertUnlocked(startEpoch);
+  if(ticket&&!transferred)appStatus.loading('PDF原本を取得・検証しています…');
   const record = transferred ?? await getRecord(id);
   if (!record) throw new Error('このPDF原本は削除済みか、保存されていません。');
 

@@ -4,7 +4,7 @@ export const NOTICE_LABELS={
  'upload-saved':'明細の登録','edit-saved':'明細の変更','delete-saved':'明細の削除',
  'edit-income-partial':'明細の変更・Finance連携','edit-cleanup-partial':'明細の変更・重複整理','edit-year-partial':'明細の年度移動',
  'delete-income-partial':'明細削除・Finance連携','delete-original-partial':'明細削除・原本整理',
- 'payroll-income-publish':'Finance連携の更新','employer-directory-load':'勤務先一覧の確認','employer-directory-save':'勤務先の保存','employer-bulk-save':'勤務先の一括設定',
+ 'payroll-income-publish':'Finance連携の更新','employer-directory-load':'勤務先一覧の確認','employer-inventory-load':'勤務先未設定の明細の確認','employer-directory-save':'勤務先の保存','employer-bulk-save':'勤務先の一括設定',
  'export-button':'バックアップ作成','verify-button':'バックアップ検証','restore-button':'バックアップ復元','restore-add-inspect':'追加復元の確認','restore-add-button':'明細の追加復元',
  'change-passphrase-button':'パスフレーズ変更','cloud-cleanup-check':'旧暗号データ確認','cloud-cleanup-delete':'旧暗号データ整理','orphan-year-check':'年度データ検査','orphan-year-recover':'年度データ復旧',
  'detached-original-check':'未参照PDF検査','migrate-legacy-cloud':'旧データ移行','legacy-cleanup-check':'旧データ検査','legacy-cleanup-delete':'旧データ削除','backup-cloud-load':'明細取得',

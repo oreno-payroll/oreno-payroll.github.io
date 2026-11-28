@@ -1037,7 +1037,14 @@ saveButton.addEventListener("click", async () => {
       ], reviewedAt: new Date().toISOString() } : {}),
       };
     });
-    const result = await saveRecordsSkippingDuplicates(records,showSaveProgress,writeState,authorized,recoverAcrossMonths);
+    // Revalidate the selected employer against the exact locked index. The
+    // initial UI check can update the visible choices without holding a lock.
+    const result = await saveRecordsSkippingDuplicates(records,showSaveProgress,writeState,authorized,recoverAcrossMonths,directory=>{
+      if(!authorized()||uploadable.some(entry=>
+        entry.employerId&&!directory.some(e=>e.id===entry.employerId&&e.role===entry.form.job)||
+        !entry.employerChosen&&currentEmployer(directory,entry.form.job)!==entry.employerId))
+        throw new Error('勤務先一覧が更新されました。確認してから再試行してください。');
+    });
     recoverAcrossMonths=false;
     const duplicateOwnersAtSave=duplicated();
     const skippedDetails=describeUploadDuplicates(result.skipped,[...duplicateOwnersAtSave].map(([duplicateId,firstId])=>({

@@ -1,7 +1,20 @@
 /** Finance v1.1のAppFolder/ETag/事前認証URL方式をPayroll専用APIへ適用。 */
 import {MicrosoftSignInRequiredError,MicrosoftTemporaryError} from './msalPolicy.ts';
-import {observeGraphTransfer,observeGraphRetry} from './perf.ts';
+import {observeGraphTransfer,observeGraphRetry,type TransferCategory} from './perf.ts';
 const BASE = 'https://graph.microsoft.com/v1.0';
+// Fixed diagnostic classes only. Never output the path, query, item ID or URL.
+function readCategory(path:string):TransferCategory {
+  const clean=path.split('?')[0];
+  if(clean.endsWith('/special/approot'))return 'folder';
+  if(clean.endsWith('/children'))return 'inventory';
+  if(path.includes('$select=id,name,folder'))return 'folder';
+  if(clean.endsWith('/index.enc'))return 'index';
+  if(clean.endsWith('/profile.enc'))return 'profile';
+  if(/\/originals\//.test(clean))return 'original';
+  if(/\/(19|20|21)\d{2}\.enc$/.test(clean)||/\/years\/[0-9a-f-]{36}\.enc$/i.test(clean))return 'annual';
+  if(clean.endsWith('/payroll-write-lock-v1.bin'))return 'lock';
+  return 'other';
+}
 // Graph のスロットリングと一時障害だけを、読み取り専用で再試行する。
 // Retry-After が待機上限を超える場合は早めに再送せず、呼び出し元へエラーを返す。
 const TEMPORARY_READ_STATUSES = new Set([408,429,500,502,503,504]);
@@ -59,6 +72,7 @@ const MAX_CACHED_ENCRYPTED_FILES=8;
 interface CachedEncryptedRead {file:RemoteFile;bytes:number}
 
 
+export type VerifiedFileVersion = {id:string;etag:string;size?:number};
 export interface RemoteFile { id: string; etag: string; text: string; size?: number; }
 export interface NewWriteReceipt {id:string;etag:string;size:number;name:string}
 interface Item { parentReference?:{id?:string}; id?: string; name?: string; folder?: Record<string,unknown>; eTag?: string; size?: number; '@microsoft.graph.downloadUrl'?: string }
@@ -195,12 +209,25 @@ export class PayrollGraph {
   }
   /** A missing lock after a conditional DELETE is evidence of release, not of
    * payroll failure. A different owner is never deleted. */
-  private async releaseOwner(owner:WriteOwner):Promise<void>{
+  private async releaseOwner(owner:WriteOwner,verifiedNormal=false):Promise<void>{
     const receipt=await this.releaseReceipt(owner);
     try{if(receipt)localStorage.setItem(receipt,'1');}catch{/* Storage may be disabled; same-tab recovery remains available. */}
-    const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
-    if(live&&!this.matchesOwner(live,owner))throw new Error('書き込みロックの所有権が変化しました。解除しません。');
-    if(live)try{
+    // Only the ordinary completed operation has an authenticated owner body.
+    // A fresh exact version/size match is sufficient; recovery retains the full read.
+    let present:boolean|undefined;
+    if(verifiedNormal){
+      try{
+        const version=await this.metadata([],PAYROLL_WRITE_LOCK_NAME);
+        if(!version)present=false;
+        else if(version.id===owner.id&&version.etag===owner.etag&&version.size===owner.text.length)present=true;
+      }catch{/* A failed observation must use the strict recovery path. */}
+    }
+    if(present===undefined){
+      const live=await this.read([],PAYROLL_WRITE_LOCK_NAME,64);
+      if(live&&!this.matchesOwner(live,owner))throw new Error('書き込みロックの所有権が変化しました。解除しません。');
+      present=Boolean(live);
+    }
+    if(present)try{
       const response=await this.request(`/me/drive/items/${encodeURIComponent(owner.id)}`,{
         method:'DELETE',headers:{'If-Match':owner.etag},
       },false,undefined,true);
@@ -291,7 +318,7 @@ export class PayrollGraph {
       this.writeOwner=evidence.owner!;
       if(state)state.lock='held';
       const runOwned=async():Promise<T>=>{
-        const release=async()=>{await this.releaseOwner(this.writeOwner!);this.markReleased(state);};
+        const release=async(normal=false)=>{await this.releaseOwner(this.writeOwner!,normal);this.markReleased(state);};
         let result:T;
         try{result=await operation();}
         catch(error){
@@ -316,7 +343,7 @@ export class PayrollGraph {
         }
         if(this.writeUncertain)throw new GraphLockError('保存中の通信結果が不明です。'+LOCK_RETAINED,{cause:new GraphWriteUncertainError()});
         if(state)state.completed=true;
-        try{await release();}catch(error){if(state)state.lock='unknown';throw new GraphLockError('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
+        try{await release(true);}catch(error){if(state)state.lock='unknown';throw new GraphLockError('保存処理は完了しましたが、書き込みロックの解除を確認できません。再保存せず最新データを確認してください。'+LOCK_RETAINED,{cause:error});}
         return result;
       };
       const locks=this.browserLocks(),receipt=locks?await this.releaseReceipt(this.writeOwner):null;
@@ -335,7 +362,7 @@ export class PayrollGraph {
         if(!callbackStarted)return await runOwned();
         throw error;
       }
-    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.writeLockBusy=false;this.writeAttempted=false;this.uncertainWrites=0;this.pendingContentChecks=[];this.checkpointReceipt=null;this.checkpointPublished=false;this.checkpointRemoval=null;}
+    }finally{if(state){state.attempted=this.writeAttempted;state.uncertain=this.writeUncertain;}this.writeOwner=null;this.updatePaths.clear();this.writeLockBusy=false;this.writeAttempted=false;this.uncertainWrites=0;this.pendingContentChecks=[];this.checkpointReceipt=null;this.checkpointPublished=false;this.checkpointRemoval=null;}
   }
 
   /** Only reconcile a lock belonging to this exact in-memory operation. Positive
@@ -376,8 +403,23 @@ export class PayrollGraph {
   private encryptedReadCacheBytes=0;
   private encryptedReadPending=new Map<string,{epoch:number;promise:Promise<RemoteFile|null>}>();
   private readCacheEpoch=0;
+  // Exact path observations for existing annual/income updates, scoped to the
+  // live owner and current mutation epoch. No body or persistent state retained.
+  private readonly updatePaths=new Map<string,{owner:WriteOwner;id:string;etag:string;size:number}>();
+  private rememberUpdatePath(parts:string[],name:string,version:VerifiedFileVersion,directChild:boolean):void{
+    if(!this.writeOwner||!directChild||!['statements','income'].includes(parts.at(-1)??'')||
+       !/^(19|20|21)\d{2}\.enc$/.test(name)||!version.id||!version.etag||
+       typeof version.size!=='number'||!Number.isSafeInteger(version.size)||version.size<=0)return;
+    const path=JSON.stringify([...parts,name]);
+    this.updatePaths.delete(path);
+    if(this.updatePaths.size>=8)this.updatePaths.delete(this.updatePaths.keys().next().value!);
+    this.updatePaths.set(path,{owner:this.writeOwner,id:version.id,etag:version.etag,size:version.size});
+  }
+  // Per Graph session, bounded to avoid repeatedly failing the same conditional route.
+  private readonly ordinaryReadPaths=new Set<string>();
   private clearEncryptedReadCache():void {
     this.readCacheEpoch++;
+    this.updatePaths.clear();
     this.encryptedReadCache.clear();this.encryptedReadCacheBytes=0;
   }
   private discardEncryptedRead(key:string):void {
@@ -399,13 +441,18 @@ export class PayrollGraph {
 
   constructor(private readonly token: string | (() => Promise<string>), private readonly http: typeof fetch = (url, init) => globalThis.fetch(url, init), private readonly onMutation:()=>void=()=>{}, private readonly unauthorized?:{invalidate:()=>void;refresh:()=>Promise<string>},private readonly assertCurrent:()=>void=()=>{},private readonly enforceOperationLock=true) {}
   /** Graph API replies contain only small metadata/receipts. Signed downloads use the same deadline with their own size limit. */
-  private async fetchGraphResponse(url:string,init:RequestInit,ms:number):Promise<Response>{
-    return withinGraphDeadline(ms,async signal=>{
-      const response=await this.http(url,{...init,signal});signal.throwIfAborted();
-      if(!response.body)return response;
-      const bytes=await responseBytes(response,MAX_GRAPH_RESPONSE_BYTES,signal,'graph-response-size');
-      return new Response(bytes.buffer as ArrayBuffer,{status:response.status,statusText:response.statusText,headers:response.headers});
-    });
+  private async fetchGraphResponse(url:string,init:RequestInit,ms:number,transport:'graph-api'|'encrypted-upload'='graph-api',category:TransferCategory='other'):Promise<Response>{
+    const started=performance.now();let status:number|null=null,completed=false;
+    try{
+      const result=await withinGraphDeadline(ms,async signal=>{
+        const response=await this.http(url,{...init,signal});status=response.status;signal.throwIfAborted();
+        // Fetch forbids a body (even an empty ArrayBuffer) on these statuses.
+        if(response.status===204||response.status===205||response.status===304||!response.body)return response;
+        const bytes=await responseBytes(response,MAX_GRAPH_RESPONSE_BYTES,signal,'graph-response-size');
+        return new Response(bytes.buffer as ArrayBuffer,{status:response.status,statusText:response.statusText,headers:response.headers});
+      });
+      completed=true;return result;
+    }finally{observeGraphTransfer(transport,performance.now()-started,(init.method??'GET').toUpperCase(),status,completed,category);}
   }
   private async request(path: string, init: RequestInit = {}, accept304=false,beforeSend?:()=>Promise<void>,lockControl=false,proof?:{uncertain:boolean}): Promise<Response> {
     this.assertCurrent();
@@ -415,19 +462,17 @@ export class PayrollGraph {
     let bearer:string;
     try{bearer=typeof this.token==='function'?await withinGraphDeadline(READ_TIMEOUT_MS,()=>typeof this.token==='function'?this.token():Promise.resolve(this.token)):this.token;}
     catch(error){if(readonly&&!(error instanceof MicrosoftSignInRequiredError)&&!(error instanceof MicrosoftTemporaryError))throw new GraphReadStageError('auth',error);throw error;}
-    let dispatched=false,conditional=accept304;
+    let dispatched=false,conditional=accept304&&!this.ordinaryReadPaths.has(path),conditionalFailed=false;
     this.assertCurrent();
     const graphUrl=`${BASE}${path}`;
     const send=async()=>{
-      const started=performance.now();
       dispatched=false;
       this.assertCurrent();
       if(beforeSend){await beforeSend();this.assertCurrent();}
       if(!readonly&&!lockControl){await this.clearCheckpointBeforeWrite();await this.verifyWriteOwner();if(this.writeOwner){this.writeAttempted=true;this.writeSerial++;}}
-      try{dispatched=true;const headers={Authorization:`Bearer ${bearer}`,...init.headers} as Record<string,string>;
-        if(accept304&&!conditional)delete headers['If-None-Match'];
-        const response=await this.fetchGraphResponse(graphUrl,{...init,headers,redirect:'error'},readonly?READ_TIMEOUT_MS:WRITE_TIMEOUT_MS);this.assertCurrent();return response;}
-      finally{observeGraphTransfer('graph-api',performance.now()-started);}
+      dispatched=true;const headers={Authorization:`Bearer ${bearer}`,...init.headers} as Record<string,string>;
+      if(accept304&&!conditional)delete headers['If-None-Match'];
+      const response=await this.fetchGraphResponse(graphUrl,{...init,headers,redirect:'error'},readonly?READ_TIMEOUT_MS:WRITE_TIMEOUT_MS,'graph-api',readCategory(path));this.assertCurrent();return response;
     };
     let retries=0,renewed=false;
     for (;;) {
@@ -440,7 +485,7 @@ export class PayrollGraph {
         if(readonly&&dispatched&&retries<READ_RETRIES){
           // A browser may reject a conditional cross-origin reply (including 304).
           // Try an ordinary GET inside the existing retry budget, never stale ciphertext.
-          if(conditional&&error instanceof TypeError)conditional=false;
+          if(conditional&&error instanceof TypeError){conditional=false;conditionalFailed=true;}
           observeGraphRetry();await pause(350*2**retries++);continue;
         }
         if(readonly&&dispatched)throw new GraphReadStageError('transport',error);
@@ -475,17 +520,22 @@ export class PayrollGraph {
           ? new GraphWriteRejectedError(r.status,code) : new GraphError(r.status,code);
       }
       this.assertCurrent();
+      if(conditionalFailed&&r.ok){
+        if(this.ordinaryReadPaths.size>=128)this.ordinaryReadPaths.delete(this.ordinaryReadPaths.values().next().value!);
+        this.ordinaryReadPaths.add(path);
+      }
       return r;
     }
   }
   /** 署名付き原本ダウンロードURLもBearerなしのGETだけ再試行する。 */
-  private async download(url:string,limit:number):Promise<Uint8Array> {
+  private async download(url:string,limit:number,category:TransferCategory='other'):Promise<Uint8Array> {
     for(let retry=0;;){
       this.assertCurrent();
       let response:Response|undefined,bytes:Uint8Array|undefined;
-      const started=performance.now();
+      const started=performance.now();let completed=false;
       try{
-        await withinGraphDeadline(TRANSFER_TIMEOUT_MS,async signal=>{
+        try{
+          await withinGraphDeadline(TRANSFER_TIMEOUT_MS,async signal=>{
           response=await this.http(url,{credentials:'omit',cache:'no-store',signal});
           signal.throwIfAborted();this.assertCurrent();
           if(!response.ok){void response.body?.cancel().catch(()=>{});return;}
@@ -495,14 +545,15 @@ export class PayrollGraph {
             throw new GraphDiagnosticError('download-html',`OneDriveのファイル配信先がHTMLを返しました (HTTP ${response.status}, MIME: ${mime})。暗号化データとして扱わず、クラウドは変更していません。`);
           }
           bytes=await responseBytes(response,limit,signal);
-        });
+        });completed=true;
+        }finally{observeGraphTransfer('encrypted-download',performance.now()-started,'GET',response?.status??null,completed,category);}
       }catch(error){
         this.assertCurrent();if(retry>=READ_RETRIES||(response&&!(error instanceof GraphTimeoutError)&&!(error instanceof TypeError))){
           if(error instanceof GraphDiagnosticError)throw error;
           throw new GraphDiagnosticError(error instanceof GraphTimeoutError?'download-timeout':'download-transport','OneDriveの配信応答を取得できませんでした。',{cause:error});
         }
         observeGraphRetry();await pause(350*2**retry++);continue;
-      }finally{observeGraphTransfer('encrypted-download',performance.now()-started);}
+      }
       this.assertCurrent();
       if(bytes)return bytes;
       if(response&&TEMPORARY_READ_STATUSES.has(response.status)&&retry<READ_RETRIES){
@@ -551,7 +602,7 @@ export class PayrollGraph {
         return parsed as T;
       }catch(error){
         if(!(error instanceof SyntaxError))throw error;
-        if(attempt<3){await new Promise<void>(resolve=>setTimeout(resolve,150*attempt));continue;}
+        if(attempt<3){observeGraphRetry();await new Promise<void>(resolve=>setTimeout(resolve,150*attempt));continue;}
         const actualBytes=new TextEncoder().encode(body).byteLength;
         const declaredBytes=contentLength!==null&&/^\d+$/.test(contentLength)?Number(contentLength):null;
         const encoding=response.headers.get('content-encoding');
@@ -655,16 +706,47 @@ export class PayrollGraph {
     this.folderPending.set(pendingKey,pending);
     try{const result=await pending;this.assertCurrent();return result;}finally{if(this.folderPending.get(pendingKey)===pending)this.folderPending.delete(pendingKey);}
   }
+  /** Resolve validated relative read paths without changing write paths. */
+  private async readLocation(parts:string[],name:string,directChild:boolean):Promise<{parent:string;suffix:string[];relative:string}|null> {
+    // Read-only fast paths address fixed file shapes from a known parent ID.
+    // The reserved versions name is always resolved separately by folder().
+    const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const profile=directChild&&name==='profile.enc'&&parts.at(-2)==='persons'&&uuid.test(parts.at(-1)??'');
+    const annual=directChild&&parts.at(-3)==='persons'&&uuid.test(parts.at(-2)??'')&&parts.at(-1)==='years'&&name.endsWith('.enc')&&uuid.test(name.slice(0,-4));
+    // Original and display-only statement reads: anchor at the payroll/generation folder.
+    // Keep the reserved `versions` segment on the existing folder-ID route.
+    const payrollRoot=(root:string[])=>root.length===1&&root[0]==='payroll'||root.length===3&&root[0]==='payroll'&&root[1]==='versions'&&uuid.test(root[2]);
+    const originalRoot=parts.slice(0,-3);
+    const original=directChild&&parts.at(-3)==='originals'&&/^(19|20|21)\d{2}$/.test(parts.at(-2)??'')&&/^(0[1-9]|1[0-2])$/.test(parts.at(-1)??'')&&name.endsWith('.enc')&&uuid.test(name.slice(0,-4))&&
+      payrollRoot(originalRoot);
+    const statement=directChild&&(parts.at(-1)==='statements'||parts.at(-1)==='income')&&/^(19|20|21)\d{2}\.enc$/.test(name)&&payrollRoot(parts.slice(0,-1));
+    const assistIndex=directChild&&name==='index.enc'&&parts.at(-1)==='year-end-assist'&&payrollRoot(parts.slice(0,-1));
+    const assistProfile=profile&&parts.at(-3)==='year-end-assist'&&payrollRoot(parts.slice(0,-3));
+    const assistAnnual=annual&&parts.at(-4)==='year-end-assist'&&payrollRoot(parts.slice(0,-4));
+    if(directChild&&!profile&&!annual&&!assistIndex&&!original&&!statement)throw new Error('暗号ファイルの直接参照先が不正です。');
+    let depth=assistProfile?3:assistAnnual?4:original?3:statement||assistIndex||profile?1:annual?2:0;
+    // The reserved folder itself is still found by its parent-ID listing.
+    // A validated generation UUID can be part of the relative *read* suffix.
+    const base=depth?parts.slice(0,-depth):[];
+    if(depth&&base.length===3&&payrollRoot(base))depth++;
+    const parent=await this.folder(depth?parts.slice(0,-depth):parts,false);
+    if(!parent)return null;
+    const suffix=depth?parts.slice(-depth):[];
+    const relative=[...suffix,name].map(encodeURIComponent).join('/');
+    return {parent,suffix,relative};
+  }
   /** 同時編集検査専用。本文をダウンロードせずETagとサイズだけ取得。 */
-  async metadata(parts:string[],name:string):Promise<{id:string;etag:string;size?:number}|null> {
+  async metadata(parts:string[],name:string,directChild=false):Promise<{id:string;etag:string;size?:number}|null> {
     this.assertCurrent();
     if(!/^[A-Za-z0-9_.-]{1,100}$/.test(name))throw new Error('ファイル名が不正です。');
-    const parent=await this.folder(parts,false);
-    if(!parent)return null;
+    this.updatePaths.delete(JSON.stringify([...parts,name]));
+    const location=await this.readLocation(parts,name,directChild);
+    if(!location)return null;
+    const {parent,relative}=location;
     let item:Item;
-    try{item=await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}`,'暗号ファイル情報の照会');}
+    try{item=await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(parent)}:/${relative}`,'暗号ファイル情報の照会');}
     catch(e){if(e instanceof GraphError&&e.status===404)return null;throw e;}
-    if(!item.id||!item.eTag)throw new GraphDiagnosticError('graph-item','クラウドファイルのIDまたはETagがありません。');
+    if(!item.id||!item.eTag||item.folder)throw new GraphDiagnosticError('graph-item','クラウドファイルのIDまたはETagがありません。');
     this.assertCurrent();
     return {id:item.id,etag:item.eTag,size:item.size};
   }
@@ -679,7 +761,7 @@ export class PayrollGraph {
       if(this.readCacheEpoch!==running.epoch)throw new GraphDiagnosticError('graph-version','読み込み中に保存操作が完了しました。再読み込みしてください。');
       return result?{...result}:null;
     }
-    const operation=this.readEncryptedUnshared(parts,name,limit,directChild);
+    const operation=this.readEncryptedUnshared(parts,name,limit,directChild).then(file=>file??null);
     const entry={epoch:this.readCacheEpoch,promise:operation};
     this.encryptedReadPending.set(pendingKey,entry);
     try{
@@ -692,25 +774,34 @@ export class PayrollGraph {
     }
     finally{if(this.encryptedReadPending.get(pendingKey)===entry)this.encryptedReadPending.delete(pendingKey);}
   }
-  private async readEncryptedUnshared(parts:string[],name:string,limit:number,directChild=false):Promise<RemoteFile|null> {
+  /** Revalidate an already authenticated JSON version. Undefined means the exact
+   * ID, ETag and known size match; null means absent. Changed files use the same
+   * metadata response for the download and retain the post-download version check. */
+  async readIfChanged(parts:string[],name:string,limit:number,verified:VerifiedFileVersion,directChild=false):Promise<RemoteFile|null|undefined> {
+    this.assertCurrent();
+    if(name===PAYROLL_WRITE_LOCK_NAME||parts.includes('originals'))throw new Error('原本・ロックには版再利用を使用できません。');
+    const epoch=this.readCacheEpoch;
+    const result=await this.readEncryptedUnshared(parts,name,limit,directChild,verified);
+    this.assertCurrent();
+    if(epoch!==this.readCacheEpoch)throw new GraphDiagnosticError('graph-version','読み込み中に保存操作が完了しました。再読み込みしてください。');
+    return result;
+  }
+  private async readEncryptedUnshared(parts:string[],name:string,limit:number,directChild=false,verified?:VerifiedFileVersion):Promise<RemoteFile|null|undefined> {
     if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('ファイル名が不正です。');
-    // Read-only fast path for employee profiles: resolve the persons folder once,
-    // then address each profile by its validated relative path, without a per-person folder GET.
-    const child=directChild?parts.at(-1):undefined;
-    if(directChild&&(name!=='profile.enc'||parts.at(-2)!=='persons'||!child||!/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(child)))
-      throw new Error('従業員プロフィールの参照先が不正です。');
-    const parent = await this.folder(directChild?parts.slice(0,-1):parts,false);
-    if (!parent) return null;
-    const relative=child?`${encodeURIComponent(child)}/${encodeURIComponent(name)}`:encodeURIComponent(name);
-    const cacheKey=JSON.stringify(child?[parent,child,name]:[parent,name]);
+    const owner=this.writeOwner;
+    this.updatePaths.delete(JSON.stringify([...parts,name]));
+    const location=await this.readLocation(parts,name,directChild);
+    if(!location)return null;
+    const {parent,suffix,relative}=location;
+    const cacheKey=JSON.stringify([parent,...suffix,name]);
     const cached=this.encryptedReadCache.get(cacheKey);
     const startEpoch=this.readCacheEpoch;
     const metadataPath=`/me/drive/items/${encodeURIComponent(parent)}:/${relative}`;
     let item:Item|null;
     try {
-      // A cached body is reusable only after a fresh, successful Graph 304 for
-      // the exact drive item. Any 200 re-downloads and validates the ciphertext.
-      item=cached && cached.bytes<=limit && cached.file.etag.length<=256 &&
+      // A 304 or an exact fresh 200 identity/version/size match can reuse
+      // the same previously read ciphertext. Unknown sizes never qualify for 200 reuse.
+      item=!verified && cached && cached.bytes<=limit && cached.file.etag.length<=256 &&
         !/[\r\n]/.test(cached.file.etag)
         ? await this.readMetadata<Item>(metadataPath,'年度暗号ファイル情報の照会',cached.file.etag)
         : await this.readMetadata<Item>(metadataPath,'年度暗号ファイル情報の照会');
@@ -725,6 +816,21 @@ export class PayrollGraph {
       this.encryptedReadCache.delete(cacheKey);this.encryptedReadCache.set(cacheKey,cached);
       return {...cached.file};
     }
+    if(verified&&item.id&&item.eTag&&item.id===verified.id&&item.eTag===verified.etag&&
+       Number.isSafeInteger(item.size)&&item.size!>0&&item.size!<=limit&&item.size===verified.size){
+      if(this.readCacheEpoch!==startEpoch)throw new GraphDiagnosticError('graph-version','読み込み中に保存操作が完了しました。再読み込みしてください。');
+      if(owner===this.writeOwner&&!item.folder)this.rememberUpdatePath(parts,name,verified,directChild);
+      return undefined;
+    }
+    if(!verified&&cached&&name!==PAYROLL_WRITE_LOCK_NAME&&!parts.includes('originals')&&
+       item.id===cached.file.id&&item.eTag===cached.file.etag&&Number.isSafeInteger(item.size)&&
+       item.size!>0&&item.size!<=limit&&item.size===cached.file.size&&item.size===cached.bytes){
+      if(this.readCacheEpoch!==startEpoch||this.encryptedReadCache.get(cacheKey)!==cached)
+        throw new GraphDiagnosticError('graph-version','読み込み中に保存先の状態が変更されました。再読み込みしてください。');
+      this.encryptedReadCache.delete(cacheKey);this.encryptedReadCache.set(cacheKey,cached);
+      if(owner===this.writeOwner&&!item.folder)this.rememberUpdatePath(parts,name,cached.file,directChild);
+      return {...cached.file};
+    }
     this.discardEncryptedRead(cacheKey);
     if (!item.id || !item.eTag) throw new GraphDiagnosticError('graph-item','クラウドファイルのIDまたはETagがありません。');
     if (item.size !== undefined && item.size > limit) throw new GraphDiagnosticError('download-size','OneDriveファイルの容量が上限を超えています。');
@@ -732,7 +838,7 @@ export class PayrollGraph {
     if (!url) { const refreshed = await this.readMetadata<Item>(`/me/drive/items/${encodeURIComponent(item.id)}`,'ダウンロード情報の照会'); if(refreshed.id!==item.id||refreshed.eTag!==item.eTag||refreshed.size!==item.size)throw new GraphDiagnosticError('graph-version','ダウンロード情報の取得中に保存先の世代が変更されました。'); url = refreshed['@microsoft.graph.downloadUrl']; }
     if (!url || new URL(url).protocol !== 'https:') throw new GraphDiagnosticError('download-url','OneDriveのダウンロード先URLが不正です。');
     // 署名付きダウンロードURLにBearerトークンを付けてはいけない。
-    const bytes = await this.download(url,limit);
+    const bytes = await this.download(url,limit,parts.includes('originals')?'original':name===PAYROLL_WRITE_LOCK_NAME?'lock':readCategory(metadataPath));
     const checked = async (text: string, byteLength: number): Promise<RemoteFile> => {
       this.assertCurrent();
       // HTMLのエラーページを成功レスポンスとして読み込む等の取り違えを検出する。
@@ -751,21 +857,56 @@ export class PayrollGraph {
       const file={id:item.id!,etag:item.eTag!,text,size:item.size};
       // Profile, annual and income ciphertext only. Never cache encrypted PDFs.
       if(name!==PAYROLL_WRITE_LOCK_NAME&&!parts.includes('originals'))this.rememberEncryptedRead(cacheKey,file,byteLength);
+      if(owner===this.writeOwner&&!item.folder&&!latest.folder)this.rememberUpdatePath(parts,name,file,directChild);
       return file;
     };
     let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch(error){throw new GraphDiagnosticError('download-encoding','暗号ファイルをUTF-8として読み取れません。',{cause:error});}
     return checked(text,bytes.byteLength);
   }
   /** 旧暗号領域の整理用。指定したPayroll配下だけを一覧化し、名前・ID・ETagを返す。 */
-  async listFolder(parts:string[],reuseChildFolderIds=false):Promise<CloudFolderItem[]|null> {
+  async listFolder(parts:string[],reuseChildFolderIds=false,directFolder:boolean|'strict'|'display'=false):Promise<CloudFolderItem[]|null> {
     this.assertCurrent();
-    const parent=await this.folder(parts,false);
+    let parent:string|null;
+    let displayEndpoint:string|undefined;
+    const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const generation=parts[0]==='payroll'&&parts[1]==='versions'&&uuid.test(parts[2]??'');
+    const baseDepth=generation?3:1;
+    const tail=parts.slice(baseDepth);
+    const directMonth=tail.length===3&&tail[0]==='originals'&&/^(19|20|21)\d{2}$/.test(tail[1])&&/^(0[1-9]|1[0-2])$/.test(tail[2]);
+    const directStatements=tail.length===1&&tail[0]==='statements';
+    const cached=directFolder==='strict'?this.folders.get(parts.join('/')):undefined;
+    if(directFolder==='display'){
+      // Only warm display probes use a path-addressed listing. The existing
+      // authenticated anchor is reused, but the statements path itself is live.
+      if(reuseChildFolderIds||parts[0]!=='payroll'||!directStatements)throw new Error('年度一覧の直接参照先が不正です。');
+      const anchorDepth=generation?2:1;
+      parent=this.folders.get(parts.slice(0,anchorDepth).join('/'))??null;
+      if(!parent)return null;
+      const relative=parts.slice(anchorDepth).map(encodeURIComponent).join('/');
+      displayEndpoint=`/me/drive/items/${encodeURIComponent(parent)}:/${relative}:/children`;
+    }else if(cached)parent=cached;
+    else if(parts[0]==='payroll'&&((directFolder==='strict'&&(directMonth||directStatements))||(directFolder===true&&generation&&directStatements))){
+      const anchorDepth=generation?2:1;
+      const anchor=await this.folder(parts.slice(0,anchorDepth),false);
+      if(!anchor)return null;
+      const relative=parts.slice(anchorDepth).map(encodeURIComponent).join('/');
+      const path=`/me/drive/items/${encodeURIComponent(anchor)}:/${relative}?$select=id,name,folder`;
+      let item:Item;
+      try{item=await this.readMetadata<Item>(path,'対象フォルダーの照会');}
+      catch(error){if(error instanceof GraphError&&error.status===404)return null;throw error;}
+      if(!item.id||item.name!==parts.at(-1)||!item.folder||typeof item.folder!=='object')throw new Error('対象フォルダー情報が不正です。');
+      this.assertCurrent();parent=item.id;
+      // Strict inventory used the ordinary folder-ID cache before this fast path.
+      if(directFolder==='strict')this.folders.set(parts.join('/'),parent);
+    }else parent=await this.folder(parts,false);
     if(!parent)return null;
-    const endpoint=`/me/drive/items/${encodeURIComponent(parent)}/children`;
+    const endpoint=displayEndpoint??`/me/drive/items/${encodeURIComponent(parent)}/children`;
     let path=`${endpoint}?$select=id,name,folder,file,eTag,size&$top=200`;
     const result:CloudFolderItem[]=[];
     for(let page=0;page<25;page++) {
-      const data=await this.readMetadata<{value?:Item[];'@odata.nextLink'?:string}>(path,'OneDriveフォルダー一覧の取得');
+      let data:{value?:Item[];'@odata.nextLink'?:string};
+      try{data=await this.readMetadata(path,'OneDriveフォルダー一覧の取得');}
+      catch(error){if(displayEndpoint&&error instanceof GraphError&&[400,404,405,501].includes(error.status))return null;throw error;}
       if(!Array.isArray(data.value))throw new Error('OneDriveのフォルダー一覧が不正です。削除を中断しました。');
       for(const item of data.value) {
         if(!item.id||typeof item.name!=='string'||!item.eTag||(!item.folder && !('file' in item)))
@@ -782,6 +923,10 @@ export class PayrollGraph {
         }
         return result;
       }
+      // This optimization only consumes a complete single page. A continuation
+      // may canonicalize the path to an item ID; don't follow it or use partial
+      // evidence. Fall back to independent live annual probes instead.
+      if(displayEndpoint)return null;
       let u:URL;try{u=new URL(next);}catch{throw new Error('一覧の次ページURLが不正です。');}
       if(u.protocol!=='https:'||u.hostname!=='graph.microsoft.com'||u.port||u.username||u.password||u.pathname!==`/v1.0${endpoint}`)
         throw new Error('不正なページングURLを拒否しました。');
@@ -887,14 +1032,19 @@ export class PayrollGraph {
     this.pendingContentChecks.push(check);
     return false;
   }
-  async write(parts: string[], name: string, text: string, prior: Pick<RemoteFile,'id'|'etag'>|null, limit: number, progress?:(sent:number,total:number)=>void,freshCiphertext=true): Promise<NewWriteReceipt|undefined> {
+  async write(parts: string[], name: string, text: string, prior: Pick<RemoteFile,'id'|'etag'|'size'>|null, limit: number, progress?:(sent:number,total:number)=>void,freshCiphertext=true): Promise<NewWriteReceipt|undefined> {
     this.assertCurrent();
     if (!/^[A-Za-z0-9_.-]{1,100}$/.test(name)) throw new Error('クラウドファイル名が不正です。');
     const bytes = new TextEncoder().encode(text);
     if (!bytes.length || bytes.length > limit) throw new Error('暗号化ファイルのサイズが不正です。');
     progress?.(0,bytes.length);
-    const parent = await this.folder(parts,true);
-    if (!parent) throw new Error('保存先フォルダーがありません。');
+    const observed=this.updatePaths.get(JSON.stringify([...parts,name]));
+    const existingPath=prior&&this.writeOwner&&observed&&observed.owner===this.writeOwner&&
+      observed.id===prior.id&&observed.etag===prior.etag&&observed.size===prior.size;
+    // Existing upload sessions address the previously observed file ID. Creation,
+    // uncertain versions, other paths and observations across writes keep folder().
+    const parent = existingPath?undefined:await this.folder(parts,true);
+    if (!parent&&!existingPath) throw new Error('保存先フォルダーがありません。');
     // Only a complete creation response can replace an original readback.
     const receipt=(item:Item,status:number):NewWriteReceipt|undefined=>
       !prior&&status===201&&typeof item.id==='string'&&item.id&&typeof item.eTag==='string'&&item.eTag&&
@@ -907,7 +1057,7 @@ export class PayrollGraph {
       let responseReceived=false,verified=false;
       const proof={uncertain:false};
       try {
-      const path = `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
+      const path = `/me/drive/items/${encodeURIComponent(parent!)}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
       const response = await this.request(path,{
         method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes,
       },false,undefined,false,proof);
@@ -940,7 +1090,7 @@ export class PayrollGraph {
     try {
     const path = prior
       ? `/me/drive/items/${encodeURIComponent(prior.id)}/createUploadSession`
-      : `/me/drive/items/${encodeURIComponent(parent)}:/${encodeURIComponent(name)}:/createUploadSession`;
+      : `/me/drive/items/${encodeURIComponent(parent!)}:/${encodeURIComponent(name)}:/createUploadSession`;
     const sessionResponse=await this.request(path,{
       method:'POST',headers:{'Content-Type':'application/json',...(prior?{'If-Match':prior.etag}:{})},
       body:JSON.stringify({item:{'@microsoft.graph.conflictBehavior':prior?'replace':'fail'}}),
@@ -957,7 +1107,7 @@ export class PayrollGraph {
       chunkDispatched=true;finalDispatched=end===bytes.length;
       const response=await this.fetchGraphResponse(session.uploadUrl,{
         method:'PUT',credentials:'omit',headers:{'Content-Range':`bytes ${start}-${end-1}/${bytes.length}`},body:bytes.slice(start,end),
-      },TRANSFER_TIMEOUT_MS);
+      },TRANSFER_TIMEOUT_MS,'encrypted-upload');
       this.assertCurrent();
       if (!response.ok) {
         if(rejectedWriteStatus(response.status)){chunkDispatched=false;finalDispatched=false;if(this.writeOwner)this.markRejected();throw new GraphWriteRejectedError(response.status,'upload-rejected');}

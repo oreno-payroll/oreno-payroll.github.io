@@ -51,7 +51,7 @@ assert.match(plaintext,/state:'deleting'/);
 assert.match(plaintext,/await this\.assertActive\(a,id\)/);
 assert.match(plaintext,/await decryptBytes\(kinds\.original/);
 const vault=read('src/cloud/vault.ts');
-assert.match(vault,/yearEndAccess\(\)/);
+assert.match(vault,/yearEndAccess\(initialDisplay=false\)/);
 assert.match(vault,/listYearEndFiles\(originalIndex\)/);
 const homepage=read('public/index.html');
 assert.match(homepage,/href="\.\/year-end-assist\/index\.html"/);

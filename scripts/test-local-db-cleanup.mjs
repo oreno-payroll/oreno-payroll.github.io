@@ -77,7 +77,8 @@ assert.ok(view.indexOf('id="legacy-cleanup-check"')<view.indexOf('id="migrate-le
 assert.doesNotMatch(ui,/oldLocalCount/);
 assert.match(view,/id="backup-cloud-load"[^>]*hidden/);
 assert.match(ui,/if\(legacyExists\)/);
-assert.match(ui,/if\(legacyExists\)\{appStatus\.clear\(\);return;\}/);
+const prepare=ui.slice(ui.indexOf('function prepareBackupView()'),ui.indexOf('// Existing saved salaries'));
+assert.match(prepare,/if\(legacyExists\)\{[\s\S]*?cloudLoad\.hidden=false;[\s\S]*?updateButtons\(\);return;\s*\}\s*const connected=/,'legacy data must stop automatic cloud loading and preserve explicit load');
 assert.match(ui,/cloudLoad\.addEventListener/);
 const handler=ui.slice(ui.indexOf("localDelete.addEventListener('click'"),ui.indexOf("// Year-end records belong to a separate"));
 assert.match(handler,/deleteLegacyIndexedDb\(result.count/);

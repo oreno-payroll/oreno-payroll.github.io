@@ -116,7 +116,8 @@ assert.match(source,/const old=await vault\.refresh\(\{forceFresh:true,reuseVeri
 assert.match(source,/await vault\.refresh\(\{forceFresh:true\}\)/);
 // Two additional live checks are required for the direct PDF viewer.
 const direct=source.slice(source.indexOf('export async function getRecord('),source.indexOf('export async function getOriginalForBatchExport('));
-assert.equal(direct.match(/vault\.refresh\(\{\.\.\.freshReadOnlyOptions,recordId:id\}\)/g)?.length,2);
+assert.equal(direct.match(/vault\.refresh\(\{\.\.\.freshReadOnlyOptions,recordId:id(?:,initialPdfRead:true)?\}\)/g)?.length,2);
+assert.equal(direct.match(/initialPdfRead:true/g)?.length,1,'only the pre-download direct read may reuse live unlock');
 assert.equal(source.match(/vault\.refresh\(freshReadOnlyOptions\)/g)?.length,3);
 assert.doesNotMatch(source.slice(source.indexOf('export async function saveRecordsSkippingDuplicates'),source.indexOf('export async function updateRecordMetadata')),/freshReadOnlyOptions/);
 console.log('PASS F: mutation paths remain separate, and no shared persistent caches, tokens or cloud writes were added');

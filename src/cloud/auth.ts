@@ -1,7 +1,7 @@
 import {confirmOperation} from '../ui/operationDialog';
 /** MSAL owns OAuth tokens in its browser cache; Payroll stores only a pinned account ID. Browser-key persistence remains opt-in. */
 import {PayrollGraph} from './graph';
-import {EmptyPayrollIndexError,InterruptedRotationError,PayrollVault,RememberedKeyMismatchError} from './vault';
+import {EmptyPayrollIndexError,InterruptedRotationError,PayrollVault,RememberedKeyMismatchError,VaultIndexReadError} from './vault';
 import {rememberKey,restoredKey,captureKeyGeneration,clearKey,clearAllKeys,clearTabUnlock} from './session';
 import {clearNavigationSnapshot,invalidateNavigationSnapshot,invalidateAuthSession,authEpoch} from './snapshot';
 import {createTabLockCoordinator} from './tabLock';
@@ -526,6 +526,7 @@ async function resumeOrPrompt(allowPrompt=true):Promise<PayrollVault> {
  clearTabUnlock();
  const startEpoch=tabLocks.epoch();
  const workerGeneration=await captureKeyGeneration();
+ let indexReadFailure:VaultIndexReadError|undefined;
  if(validId(id)) {
   try {
    const app=await getMsal();
@@ -554,6 +555,7 @@ async function resumeOrPrompt(allowPrompt=true):Promise<PayrollVault> {
       return candidate;
      } catch(error) {
       if(!tabLocks.check())throw error;
+      if(error instanceof VaultIndexReadError)indexReadFailure=error;
       // A remote index parse/decrypt failure is not evidence that the
       // in-memory key is invalid. Do not clear an otherwise valid key.
       // The current navigation still falls back to explicit unlock.
@@ -561,7 +563,7 @@ async function resumeOrPrompt(allowPrompt=true):Promise<PayrollVault> {
     }
     // Only a separately approved, per-browser CryptoKey may unlock across restarts.
     // Always verify the current OneDrive index, never the short-lived navigation snapshot.
-    if(tabLocks.canAutoResumePersistent()){
+    if(!indexReadFailure&&tabLocks.canAutoResumePersistent()){
      try {
       const stored=await readRememberedBrowserKey(scope);
       if(stored){
@@ -587,11 +589,15 @@ async function resumeOrPrompt(allowPrompt=true):Promise<PayrollVault> {
       }
       // Browser storage was evicted or the local key was corrupt. No automatic retry.
       tabLocks.suspendPersistentAutoResume();
-     }catch{ /* Graph/MSAL/IndexedDB temporary errors must not erase a valid saved key. */ }
+     }catch(error){
+      if(error instanceof VaultIndexReadError)indexReadFailure=error;
+      /* Graph/MSAL/IndexedDB temporary errors must not erase a valid saved key. */
+     }
     }
    }
   }catch { /* Microsoft認証が必要ならモーダルで案内する */ }
  }
+ if(indexReadFailure&&!allowPrompt)throw indexReadFailure;
  if(!allowPrompt)throw new MicrosoftSignInRequiredError();
  return beginUnlock();
 }
@@ -616,13 +622,14 @@ export async function cloudVault():Promise<PayrollVault> {
  if(!tabLocks.check())throw new Error('別のタブで保管庫がロックされました。再度開いてください。');
  if(vault?.isUnlocked())return vault;
  // A silent probe cannot satisfy an interactive request if it fails.
+ let failedIndexRead=false;
  if(backgroundUnlocking){
   const probe=backgroundUnlocking,authorized=captureOperationAuthorization();
-  try{await probe;}catch{/* interactive caller may now open the gate */}
+  try{await probe;}catch(error){failedIndexRead=error instanceof VaultIndexReadError;}
   if(!authorized())throw new Error('別のタブで保管庫がロックされました。');
   if(vault?.isUnlocked())return vault;
  }
- if(!unlocking)unlocking=resumeOrPrompt();
+ if(!unlocking)unlocking=failedIndexRead?beginUnlock():resumeOrPrompt();
  const operation=unlocking;
  try{return await operation;}finally{if(unlocking===operation)unlocking=undefined;}
 }

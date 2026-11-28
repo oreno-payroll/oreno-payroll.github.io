@@ -54,6 +54,7 @@ handoff(normal,42,async()=>({pdf,fileName:'test.pdf'}),()=>allowed);
 let channel=Channel.instances.at(-1);
 let ticket=new URLSearchParams(new URL(normal.href).hash.slice(1)).get('handoff');
 channel.onmessage({data:{action:'ready',id:42,ticket}});
+channel.onmessage({data:{action:'start',id:42,ticket}});
 await tick();
 assert.deepEqual(messages(channel),['loading','pdf']);
 assert.equal(channel.sent[1].pdf,pdf);
@@ -66,6 +67,8 @@ const waiting=link();
 handoff(waiting,42,()=>{loadStarted=true;return new Promise(resolve=>{finish=resolve;});},()=>allowed);
 channel=Channel.instances.at(-1);ticket=new URLSearchParams(new URL(waiting.href).hash.slice(1)).get('handoff');
 channel.onmessage({data:{action:'ready',id:42,ticket}});
+assert.equal(loadStarted,false,'no download until receiver confirms');
+channel.onmessage({data:{action:'start',id:42,ticket}});
 assert.equal(loadStarted,true);
 allowed=false;
 finish({pdf,fileName:'private.pdf'});
@@ -98,3 +101,20 @@ assert.equal(denied.href,'https://payroll.example/view/index.html#id=42');
 assert.match(read('src/main.ts'),/capturePdfHandoffAuthorization\(\)/,'dashboard must bind the guard per click');
 assert.match(read('src/view.ts'),/assertUnlocked\(startEpoch\)/,'receiver continues checking lock before display');
 console.log('PASS: authenticated PDF transfer only; lock, identity switch and in-flight download cannot leak Blob');
+
+// Receiver gives up before confirming: a late start must not trigger a read.
+allowed=true;loads=0;const late=link();
+handoff(late,42,async()=>{loads++;return {pdf,fileName:'fixture.pdf'};},()=>allowed);
+channel=Channel.instances.at(-1);ticket=new URLSearchParams(new URL(late.href).hash.slice(1)).get('handoff');
+channel.onmessage({data:{action:'ready',id:42,ticket}});
+channel.onmessage({data:{action:'cancel',id:42,ticket}});
+channel.onmessage({data:{action:'start',id:42,ticket}});
+await tick();assert.equal(loads,0);assert.equal(channel.closed,true);
+// Lock between offer and acknowledgement must also fail closed.
+allowed=true;const offered=link();
+handoff(offered,42,async()=>{loads++;return {pdf,fileName:'fixture.pdf'};},()=>allowed);
+channel=Channel.instances.at(-1);ticket=new URLSearchParams(new URL(offered.href).hash.slice(1)).get('handoff');
+channel.onmessage({data:{action:'ready',id:42,ticket}});allowed=false;
+channel.onmessage({data:{action:'start',id:42,ticket}});
+assert.equal(loads,0);assert.deepEqual(messages(channel),['loading','error']);
+console.log('PASS: no late or unauthorized load after receiver cancellation');

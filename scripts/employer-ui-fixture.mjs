@@ -14,8 +14,8 @@ const A='emp_'+'a'.repeat(32),B='emp_'+'b'.repeat(32),C='emp_'+'c'.repeat(32),D=
 const makeRecord=(id,job,employerId)=>({id,employerId,fileName:'synthetic.pdf',form:{job,targetMonth:'2026-0'+id,kind:'salary',paymentDate:'2026-0'+id+'-25',gross:'1000'}});
 let fixtureList=[{id:A,name:'架空本業',role:'main',current:true},{id:B,name:'架空旧勤務先',role:'main',current:false},{id:C,name:'架空副業',role:'side',current:true}];
 let fixtureRecords=[makeRecord(1,'main'),makeRecord(2,'side'),makeRecord(3,'main',D)];
-let writes=0,failRead=false,failWrite=false,authorized=true,pauseWrite=false,releaseWrite;
-const vault={async refresh(options){if(failRead)throw Error('fixture read failure');options.onEmployerDirectory?.(fixtureList);return fixtureRecords;},async readEmployerDirectory(){return fixtureList;},async writeEmployerDirectory(expected,next){writes++;if(pauseWrite)await new Promise(resolve=>{releaseWrite=resolve;});if(failWrite)throw Error('fixture write failure');if(employerDirectorySignature(expected)!==employerDirectorySignature(fixtureList))throw Error('fixture conflict');fixtureList=next;return fixtureList;}};
+let writes=0,annualReads=0,failRead=false,failWrite=false,authorized=true,pauseWrite=false,releaseWrite;
+const vault={async refresh(options){annualReads++;if(failRead)throw Error('fixture read failure');options.onEmployerDirectory?.(fixtureList);return fixtureRecords;},async readEmployerDirectory(){if(failRead)throw Error('fixture read failure');return fixtureList;},async writeEmployerDirectory(expected,next){writes++;if(pauseWrite)await new Promise(resolve=>{releaseWrite=resolve;});if(failWrite)throw Error('fixture write failure');if(employerDirectorySignature(expected)!==employerDirectorySignature(fixtureList))throw Error('fixture conflict');fixtureList=next;return fixtureList;}};
 const captureOperationAuthorization=()=>()=>authorized;
 const tryResumeCloudVault=async()=>vault,cloudVault=async()=>vault;
 const recordSignature=r=>JSON.stringify(r);
@@ -27,6 +27,6 @@ function updateButtons(){
  reportStatusTransition();
 }
 `+section('let employers:','let loadedDb = false;')+section('const appStatus=createAppStatus','\nconst sizes =')+section('// Employer names stay','// Activate navigation')+`
-window.fixture={get writes(){return writes;},get list(){return fixtureList;},get records(){return fixtureRecords;},get busy(){return busy;},set failRead(v){failRead=v;},set failWrite(v){failWrite=v;},set pauseWrite(v){pauseWrite=v;},release(){releaseWrite?.();},set authorized(v){authorized=v;},async load(){await loadEmployerDirectory(false);}};
+window.fixture={get writes(){return writes;},get annualReads(){return annualReads;},get list(){return fixtureList;},get records(){return fixtureRecords;},get busy(){return busy;},set failRead(v){failRead=v;},set failWrite(v){failWrite=v;},set pauseWrite(v){pauseWrite=v;},release(){releaseWrite?.();},set authorized(v){authorized=v;},async load(){await loadEmployerDirectory(false);}};
 document.getElementById('settings-employers-panel').hidden=false;void loadEmployerDirectory(false);
 `,{mode:'strip'});}

@@ -29,7 +29,7 @@ PayrollGraph.prototype.checkpointStorage=async function(receipt,action){
  checkpoints.delete(receipt);return true;
 };
 function fixture(){
- const state={lock:null,serial:0,writes:0,lostCreate:false,delayedCreate:false,createStatus:201,lostWrite:false,lostRelease:false,blockedRelease:false,events:[],content:null,contentMode:"ok",rejectStatus:0,lockReject:0,sessionReject:0,chunkReject:0,contentReadBlocked:false};
+ const state={lock:null,serial:0,writes:0,lostCreate:false,delayedCreate:false,createStatus:201,lostWrite:false,lostRelease:false,blockedRelease:false,events:[],content:null,contentMode:"ok",rejectStatus:0,lockReject:0,sessionReject:0,chunkReject:0,contentReadBlocked:false,lockReads:0,lockDownloads:0,incomeFolderReads:0,incomePathAbsent:false};
  const meta=()=>({name,id:state.lock.id,eTag:state.lock.etag,size:state.lock.text.length,'@microsoft.graph.downloadUrl':'https://storage.example.test/'+state.lock.id});
  const http=async(raw,init={})=>{
   const u=new URL(raw),method=init.method??'GET';
@@ -41,7 +41,7 @@ function fixture(){
    }
    assert.equal(method,'GET');
    if(u.pathname==='/data')return state.content?new Response(state.content.text):new Response(null,{status:404});
-   return state.lock&&u.pathname==='/'+state.lock.id?new Response(state.lock.text):new Response(null,{status:404});
+   state.lockDownloads++;return state.lock&&u.pathname==='/'+state.lock.id?new Response(state.lock.text):new Response(null,{status:404});
   }
   assert.equal(u.origin,'https://graph.microsoft.com');assert.equal(new Headers(init.headers).get('Authorization'),'Bearer fixture');
   if(u.pathname.endsWith('/special/approot'))return Response.json({id:'root'});
@@ -56,6 +56,7 @@ function fixture(){
    if(state.lostCreate)throw Error('lost acquire response');return Response.json(meta(),{status:state.createStatus});
   }
   if(u.pathname.endsWith('/root:/'+name)&&method==='GET'){
+   state.lockReads++;
    if(!state.lock)return new Response(null,{status:404});
    return Response.json(meta());
   }
@@ -65,6 +66,13 @@ function fixture(){
    if(state.blockedRelease)throw Error('release unavailable');
    state.lock=null;state.events.push('release');if(state.lostRelease)throw Error('lost release response');return new Response(null,{status:204});
   }
+  if(u.pathname.endsWith('/root:/payroll')&&method==='GET')return Response.json({id:'payroll-folder',folder:{}});
+  if(u.pathname.endsWith('/payroll-folder:/income')&&method==='GET'){state.incomeFolderReads++;return Response.json({id:'income-folder',folder:{}});}
+  if(u.pathname.endsWith('/payroll-folder:/income/2026.enc')&&method==='GET'){
+   if(state.incomePathAbsent)return new Response(null,{status:404});
+   return Response.json({id:'income-file',eTag:'income-etag',size:state.content.text.length,'@microsoft.graph.downloadUrl':'https://storage.example.test/data'});
+  }
+  if(u.pathname.endsWith('/income-file/createUploadSession')&&method==='POST')assert.equal(new Headers(init.headers).get('If-Match'),'income-etag');
   if(u.pathname.endsWith('/root:/data.enc:/content')&&method==='PUT')return saveContent(init.body);
   if(u.pathname.endsWith('/createUploadSession')&&method==='POST'){
    if(state.sessionReject)return new Response(null,{status:state.sessionReject});
@@ -91,6 +99,42 @@ function fixture(){
  const graph=()=>new PayrollGraph('fixture',http);
  return {state,graph,write:g=>g.request('/synthetic-write',{method:'POST'})};
 }
+// R13 normal release reuses the authenticated acquisition body, but still
+// checks the exact current version and conditionally deletes it.
+{
+ const f=fixture(),a=f.graph();let reads,downloads;
+ await a.withWriteLock(async()=>{reads=f.state.lockReads;downloads=f.state.lockDownloads;});
+ assert.equal(f.state.lockReads-reads,1);assert.equal(f.state.lockDownloads-downloads,0);assert.equal(f.state.lock,null);
+ const g=fixture(),b=g.graph();
+ await assert.rejects(b.withWriteLock(async()=>{g.state.lock={id:'successor',etag:'next',text:'a'.repeat(64)};}),/解除/);
+ assert.equal(g.state.lock.id,'successor');assert.equal(g.state.lockDownloads,2,'different owner must take strict recovery read');
+ const h=fixture(),c=h.graph();h.state.lostRelease=true;
+ await c.withWriteLock(async()=>{});assert.equal(h.state.lock,null);
+ console.log('PASS R13: normal owner release uses metadata only, successor retained, lost DELETE confirmed');
+}
+// Existing file ID update can skip folder discovery only after a fresh
+// path-bound observation in this exact operation. No proof after a 404,
+// an intervening mutation or a different owner.
+for(const mode of ['matched','missing-size','absent','mutated','old-owner']){
+ const f=fixture(),a=f.graph(),path=['payroll','income'];
+ f.state.content={text:'ciphertext-fixture',etag:'income-etag'};
+ let prior;
+ if(mode==='old-owner')await a.withWriteLock(async()=>{prior=await a.read(path,'2026.enc',1000,true);});
+ await a.withWriteLock(async()=>{
+  if(mode!=='old-owner')prior=await a.read(path,'2026.enc',1000,true);
+  assert.equal(f.state.incomeFolderReads,0);
+  if(mode==='missing-size')prior={id:prior.id,etag:prior.etag};
+  if(mode==='absent'){
+   f.state.incomePathAbsent=true;assert.equal(await a.read(path,'2026.enc',1000,true),null);
+   f.state.incomePathAbsent=false;
+  }
+  if(mode==='mutated')await f.write(a);
+  await a.write(path,'2026.enc','new-ciphertext',prior,1000);
+  assert.equal(f.state.incomeFolderReads,mode==='matched'?0:1);
+ });
+ assert.equal(f.state.lock,null);
+}
+console.log('PASS R13: existing income path proof skips parent lookup, missing size/404/mutation/owner change fall back');
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 {
  const f=fixture(),a=f.graph(),b=f.graph(),entered=deferred(),resume=deferred();

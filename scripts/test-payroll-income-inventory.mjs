@@ -89,6 +89,33 @@ assert.deepEqual(calls.write,['payroll/income/2026.enc','payroll/index.enc']);
 const published=JSON.parse(files.get('payroll/income/2026.enc').text);
 assert.deepEqual(published.records.map(r=>r.id),[2026]);
 console.log('PASS: 4 years × 3 checkpoints use 3 fresh folder listings, zero year metadata GETs/body downloads');
+// A no-op projection needs only a fresh identity check after prewrite validation.
+reset();await vault.syncIncome(new Set(['2026']));
+assert.equal(calls.read.filter(p=>p==='payroll/income/2026.enc').length,1);
+assert.equal(calls.meta.filter(p=>p==='payroll/income/2026.enc').length,1);
+assert.equal(calls.read.filter(p=>p==='payroll/index.enc').length,3,'registered income needs no separate index registration read');
+assert.equal(calls.write.length,0);
+// A changed identity must fall back to authenticated readback and repair.
+const priorMetadata=graph.metadata.bind(graph);let replaced=false;
+graph.metadata=async(parts,name)=>{
+ if(!replaced&&path(parts,name)==='payroll/income/2026.enc'){
+  replaced=true;put(parts,name,{...published,records:[]});
+ }
+ return priorMetadata(parts,name);
+};
+reset();await vault.syncIncome(new Set(['2026']));graph.metadata=priorMetadata;
+assert.ok(replaced);assert.deepEqual(JSON.parse(files.get('payroll/income/2026.enc').text),published);
+assert.equal(calls.write.filter(p=>p==='payroll/income/2026.enc').length,1);
+assert.ok(calls.read.filter(p=>p==='payroll/income/2026.enc').length>=3);
+// Unknown size is not sufficient proof even if both metadata responses omit it.
+const priorRead=graph.read.bind(graph);
+graph.read=async(parts,name)=>{const f=await priorRead(parts,name);return f&&path(parts,name)==='payroll/income/2026.enc'?{...f,size:undefined}:f;};
+graph.metadata=async(parts,name)=>{const f=await priorMetadata(parts,name);return f&&path(parts,name)==='payroll/income/2026.enc'?{...f,size:undefined}:f;};
+reset();await vault.syncIncome(new Set(['2026']));graph.read=priorRead;graph.metadata=priorMetadata;
+assert.equal(calls.read.filter(p=>p==='payroll/income/2026.enc').length,2,'incomplete identity requires authenticated readback');
+assert.equal(calls.write.length,0);
+console.log('PASS: no-op income verifies identity, changed identity forces authenticated readback and repair');
+
 // A source changed after the first source check but BEFORE the income read.
 // The prewrite listing catches it, retries, and publishes the new source.
 initial();unlock();await vault.refresh({forceFresh:true});reset();

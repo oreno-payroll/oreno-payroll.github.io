@@ -128,12 +128,14 @@ try{
   globalThis.sessionStorage={getItem:k=>k==='payroll-perf-diagnostics'?'1':null};
   console.info=(...args)=>logs.push(args);
   const op=beginPerfOperation('finance-income-sync');
-  observeGraphTransfer('graph-api',4);observeGraphTransfer('encrypted-download',8);
+  observeGraphTransfer('graph-api',4,'GET',200,true);observeGraphTransfer('encrypted-download',8,'GET',200,true);
   await op.measure('income-read',async()=>wait(1));op.finish(true);
-  assert.equal(logs.length,1);
-  assert.equal(logs[0][1].graphRequests,1);assert.equal(logs[0][1].encryptedDownloads,1);
+  assert.equal(logs.length,3);
+  assert.deepEqual(logs.slice(0,2).map(entry=>entry[0]),['[Payroll transfer]','[Payroll transfer]']);
+  const summary=JSON.parse(logs[2][1]);
+  assert.equal(summary.graphRequests,1);assert.equal(summary.encryptedDownloads,1);
   const upload=beginPerfOperation('payroll-upload');upload.mark('save-lock');await wait(1);upload.mark('save-inventory');upload.mark('save-inventory');await wait(1);upload.finish(true);upload.finish(false);
-  assert.equal(logs.length,2);assert.equal(logs[1][1].operation,'payroll-upload');assert.equal(logs[1][1].phases['save-inventory'].calls,1);assert.ok(logs[1][1].phases['save-lock'].ms>=0);
+  assert.equal(logs.length,4);const saved=JSON.parse(logs[3][1]);assert.equal(saved.operation,'payroll-upload');assert.equal(saved.phases['save-inventory'].calls,1);assert.ok(saved.phases['save-lock'].ms>=0);
   assert.doesNotMatch(JSON.stringify(logs),/accessToken|fileName|targetMonth|paymentDate|Authorization|https?:\/\//);
 }finally{
   console.info=originalInfo;

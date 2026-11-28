@@ -121,11 +121,12 @@ const vaultApi=runInNewContext(strip(read('src/cloud/vault.ts'))+'\n({PayrollVau
  fiscalYearOfTargetMonth:m=>Number(m.slice(0,4)),payrollPeriodKey:r=>r.form.paymentDate,
  isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||/^emp_[0-9a-f]{32}$/.test(v),toPublicIncomeRecord:()=>({}),
  clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
+ validateEmployerDirectory:entries=>entries,
  PayrollPartialSuccessError:class extends Error{},
 });
 const emptyDoc=()=>({format:'payroll-annual-v1',records:[],deleted:[]});
 const vaultIndex=(year)=>({format:'payroll-index-v1',years:year?['2026']:[],incomeYears:[]});
-const simulate=async({existing,conflict})=>{
+const simulate=async({existing,conflict,known=false})=>{
  const state={indexReads:0,yearReads:0,writes:0,registered:0,existing,conflicted:false,record:emptyDoc()};
  const g={async write(_parts,name){state.writes++;
     if(name==='2026.enc'&&conflict&&!state.conflicted){state.conflicted=true;throw new Error('simulated 412 collision');}
@@ -134,12 +135,18 @@ const simulate=async({existing,conflict})=>{
  v.readIndex=async()=>{state.indexReads++;return {index:vaultIndex(state.registered?true:existing),file:{id:'root',etag:'root-etag',text:'synthetic'}};};
  v.readYear=async()=>{state.yearReads++;return {doc:state.record,file:state.existing?{id:'year',etag:'year-etag',text:JSON.stringify(state.record)}:null};};
  v.registerYear=async()=>{state.registered++;};
- await v.commit('2026',emptyDoc());return state;
+ await v.commit('2026',emptyDoc(),undefined,undefined,known);return state;
 };
 const existing=await simulate({existing:true,conflict:false});
 assert.equal(existing.indexReads,3,'registered year must validate root before and after annual write');
 assert.equal(existing.yearReads,2,'existing year still requires prewrite year GET and postwrite readback');
 console.log('PASS: existing-year commit validates root at preparation, pre-write and readback');
+const known=await simulate({existing:true,conflict:false,known:true});
+assert.equal(known.indexReads,2,'verified existing year skips only the duplicate preparation read');
+assert.equal(known.yearReads,2,'verified existing year still checks live year and readback');
+const knownRetry=await simulate({existing:true,conflict:true,known:true});
+assert.equal(knownRetry.indexReads,4,'conflict still rechecks index on retry');
+
 const created=await simulate({existing:false,conflict:false});
 assert.equal(created.indexReads,4,'new year must recheck after registration and around annual write');
 assert.equal(created.registered,1);
@@ -166,6 +173,13 @@ await assert.rejects(lockedWriter.commit('2026',emptyDoc()),/rotation lock/);
 assert.equal(lockDuringRead.writes,0,'locked generation must not accept annual writes');
 assert.equal(lockDuringRead.reads,2,'the root is rechecked after the annual read');
 console.log('PASS: rotation lock inserted during annual fetch blocks old-year commit');
+lockDuringRead.lock=false;lockDuringRead.reads=0;
+await assert.rejects(lockedWriter.commit('2026',emptyDoc(),undefined,undefined,true),/rotation lock/);
+assert.equal(lockDuringRead.writes,0);assert.equal(lockDuringRead.reads,1);
+lockedWriter.readYear=async()=>({doc:emptyDoc(),file:null});
+await assert.rejects(lockedWriter.commit('2026',emptyDoc(),undefined,undefined,true),/年度ファイルが見つかりません/);
+assert.equal(lockDuringRead.writes,0,'a missing verified annual file must not be recreated as an ordinary update');
+
 
 // If the rotation begins DURING the annual PUT, its read-back must not be
 // reported as success or cached for subsequent edits.
@@ -185,3 +199,32 @@ assert.equal(lockDuringPut.reads,3,'root is rechecked after write verification')
 console.log('PASS: lock appearing during annual PUT refuses an unverified success');
 
 console.log('PASS: YearEnd freshness and Payroll commit dedupe regression');
+
+// Exercise the new verified index path, including generation and rotation guards.
+{
+ let reads=0,probes=0;
+ const rootValue=vaultIndex(true);
+ let current={id:'root',etag:'root-1',size:100,text:JSON.stringify(rootValue)};
+ const g={async read(){reads++;return current?{...current}:null;},async readIfChanged(_path,_name,_limit,proof){probes++;return current&&proof.id===current.id&&proof.etag===current.etag&&proof.size===current.size?undefined:current?{...current}:null;}};
+ const v=new vaultApi.PayrollVault(g);
+ await v.unlockWithKey(key,salt);
+ // Initial display consumes the live unlock proof once, while the strict
+ // default access used for writes always performs a live probe.
+ await v.yearEndAccess(true);assert.equal(probes,0);
+ await v.yearEndAccess(true);assert.equal(probes,1);
+ await v.unlockWithKey(key,salt);await v.yearEndAccess();assert.equal(probes,2);
+ await v.yearEndAccess(true);assert.equal(probes,3,'strict access invalidates the one-shot startup proof');
+ await v.unlockWithKey(key,salt);await v.readEmployerDirectory(true);assert.equal(probes,3);
+ await v.readEmployerDirectory();assert.equal(probes,4);
+ reads=0;probes=0;await v.unlockWithKey(key,salt);
+ const first=await v.readIndex();first.index.years.push('2025');
+ assert.deepEqual([...((await v.readIndex()).index.years)],['2026'],'returned data cannot mutate proof');
+ assert.equal(reads,1);assert.equal(probes,2);
+ current={...current,etag:'root-2',text:JSON.stringify({...rootValue,years:['2025','2026']})};
+ assert.deepEqual([...((await v.readIndex()).index.years)],['2025','2026']);
+ current={...current,etag:'root-3',text:JSON.stringify({...rootValue,generation:'99999999-9999-4999-8999-999999999999'})};
+ await assert.rejects(v.readIndex(),/保存世代/);
+ current=null;await assert.rejects(v.readIndex(),/索引/);
+ v.lock();await assert.rejects(v.readIndex(),/解除/);
+}
+console.log('PASS: unchanged authenticated root version reused; changed root, generation and missing index revalidated');

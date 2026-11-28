@@ -78,12 +78,19 @@ assert.match(incomeSync,/for\(let attempt=0;attempt<8;attempt\+\+\)/);
 // The source-inventory behavior is exercised by test-payroll-income-inventory.mjs.
 // Keep the shared live-source contract, rather than requiring per-year locals.
 assert.match(incomeSync,/const options=\{forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true\}/);
-for(const phase of ['source-refresh','income-prewrite-refresh','income-postwrite-refresh'])
- assert.ok(incomeSync.includes(`await perf.measure('${phase}',()=>this.refresh(options))`));
+// Intermediate source checks remain fresh, but must not serialize a display snapshot.
+for(const phase of ['source-refresh','income-prewrite-refresh'])
+ assert.ok(incomeSync.includes(`await perf.measure('${phase}',()=>this.refresh({...options,rememberNavigation:false}))`),`${phase}: fresh verification without a navigation snapshot`);
+// The final source check still uses all original verification options and can publish the snapshot.
+// Guarded sync additionally captures the exact completed refresh's index observation.
+assert.ok(incomeSync.includes("await perf.measure('income-postwrite-refresh',()=>this.refresh(checkSource?{...options,onVerifiedIndex:value=>{observed=value;}}:options))"),
+ 'postwrite: fresh verification, normal navigation snapshot and guarded index observation');
+assert.match(incomeSync,/const finalIndex=checkSource\?\(observed&&same\(observed\.index,this\.index\)\?observed:await this\.readIndex\(\)\):undefined/,
+ 'guarded sync reuses only the completed refresh observation; otherwise it reads the index again');
 assert.match(incomeSync,/!same\(documents\(years\),expected\)/);
 assert.match(storeCode,/onProgress\?\./);
 // Preserve authorization and the explicit recovery-only cross-month search flag.
-assert.match(upload,/saveRecordsSkippingDuplicates\(records,showSaveProgress,writeState,authorized,recoverAcrossMonths\)/);
+assert.match(upload,/saveRecordsSkippingDuplicates\(records,showSaveProgress,writeState,authorized,recoverAcrossMonths,directory=>/);
 assert.match(upload,/保存・検証しました/);
 assert.match(source('.gitignore'),/!\/public\/payroll-cloud-session\.js/);
 console.log('PASS: 認証画面・同一オリジンの鍵継承・保存進捗・変更年のみの同期');

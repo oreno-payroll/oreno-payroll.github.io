@@ -19,7 +19,8 @@ for(const kind of ['income-sync','duplicate-cleanup','year-move']) {
 const code=path=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
 const vault=code('src/cloud/vault.ts'),store=code('src/storage/payrollStore.ts'),edit=code('src/edit.ts'),home=code('src/main.ts');
 assert.match(vault,/new PayrollPartialSuccessError\('income-sync'/);
-assert.match(store,/new PayrollPartialSuccessError\('duplicate-cleanup'/);
+assert.match(vault,/new PayrollPartialSuccessError\('duplicate-cleanup'/);
+assert.doesNotMatch(store.slice(store.indexOf('export async function updateRecordMetadata'),store.indexOf('export async function deleteRecords')), /vault\.removeBatch/);
 assert.match(edit,/error instanceof PayrollPartialSuccessError/);
 assert.match(edit,/error\.stage==='duplicate-cleanup'/);
 assert.doesNotMatch(edit,/detail\.includes\('保存済みですが'\)|detail\.includes\('削除済みですが'\)/);

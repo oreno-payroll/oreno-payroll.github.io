@@ -37,6 +37,11 @@ const node=()=>({hidden:true,disabled:false,textContent:'',dataset:{},value:'',s
  result=old;await ctx.load(true);assert.equal(ctx.people,old);assert.equal(ctx.peopleLoaded,true);assert.equal(ctx.peopleStale,false);assert.equal(freshness.hidden,true);
  result=null;await assert.rejects(ctx.load(true),/synthetic unavailable/);assert.equal(ctx.people,old);assert.equal(ctx.peopleStale,true);assert.equal(freshness.hidden,false);assert.match(freshness.textContent,/以前の一覧/);assert.equal(renderCount,1);
  result=next;await ctx.load(true);assert.equal(ctx.people,next);assert.equal(ctx.peopleStale,false);assert.equal(freshness.hidden,true);assert.equal(renderCount,2);
+ ctx.peopleLoaded=false;ctx.people=[];ctx.repo.people=async(_read,_force,_progress,preview)=>{
+  preview(old);assert.equal(ctx.people,old);assert.equal(ctx.peopleStale,true);assert.equal(ctx.peopleLoaded,false);
+  throw Error('fixture root verification failed');
+ };
+ await assert.rejects(ctx.load(),/root verification failed/);assert.equal(ctx.people.length,0);assert.equal(ctx.peopleLoaded,false);assert.equal(ctx.peopleStale,true);
 }
 // M03: run the actual directory fetch and the relevant controls from updateSaveState.
 {
@@ -49,21 +54,27 @@ const node=()=>({hidden:true,disabled:false,textContent:'',dataset:{},value:'',s
  fail=false;assert.equal(await ctx.load(),true);assert.equal(employerLoad.hidden,true);assert.equal(employerStatus.textContent,'');
  ctx.employerDirectory=undefined;ctx.tryResumeCloudVault=async()=>undefined;assert.equal(await ctx.load(false),false);assert.equal(employerLoad.hidden,false);assert.equal(employerLoad.textContent,'保管庫を開く');assert.equal(ctx.employerLoading,false);
 }
-// Settings: automatically read only an existing session, retry explicitly, and reject stale authorization.
+// Settings: directory-only reads and explicit organization inventory, with independent failure recovery.
 {
  const backup=read('src/backup.ts'),employerDirectoryLoad=node(),employerDirectoryStatus=node();
- let silent=0,prompt=0,reads=0,refreshes=0,authorized=true,fail=false,changed=false,available=true,selectedOperation,result;
+ let silent=0,prompt=0,reads=0,refreshes=0,authorized=true,fail=false,failInventory=false,changed=false,available=true,selectedOperation,result;
  const list=[{id:'fixture',role:'main'}];const records=[{id:1}];
- const vault={async readEmployerDirectory(){reads++;return changed?[]:list;},async refresh(options){refreshes++;if(fail)throw new Error('fixture');options.onEmployerDirectory(list);return records;}};
- const ctx={noticeReason,busy:false,employers:undefined,legacyDirectory:[],bulkRecords:[],bulkAuthorized:undefined,currentOperation:null,operationResult:null,operationCancelled:false,selectSettingsOperation(code){selectedOperation=code;ctx.operationCancelled=false;result=undefined;},employerDirectoryLoad,employerDirectoryStatus,setEmployerLoadLabel(label){employerDirectoryLoad.textContent=label;},
+ const vault={async readEmployerDirectory(){reads++;if(fail)throw new Error('fixture');return changed?[]:list;},async refresh(options){refreshes++;if(failInventory)throw new Error('fixture inventory');options.onEmployerDirectory(list);return records;}};
+ const bulkDialog={open:false,showModal(){this.open=true;}},bulkTarget={value:'',focus(){}};
+ const ctx={noticeReason,busy:false,employers:undefined,legacyDirectory:[],bulkRecords:[],bulkInventoryLoaded:false,bulkAuthorized:undefined,currentOperation:null,operationResult:null,operationCancelled:false,selectSettingsOperation(code){selectedOperation=code;ctx.operationCancelled=false;result=undefined;},employerDirectoryLoad,employerDirectoryStatus,setEmployerLoadLabel(label){employerDirectoryLoad.textContent=label;},
  captureOperationAuthorization:()=>()=>authorized,renderEmployerDirectory(){},updateButtons(){},finishOperation(status,message,reason){result={status,message,reason};},legacyEmployers:()=>[],employerDirectorySignature:JSON.stringify,
- tryResumeCloudVault:async()=>{silent++;return available?vault:undefined;},cloudVault:async()=>{prompt++;return vault;}};
- execute(section(backup,'async function readEmployerSnapshot(','employerDirectoryLoad.addEventListener'),ctx,'globalThis.load=loadEmployerDirectory;');
+ tryResumeCloudVault:async()=>{silent++;return available?vault:undefined;},cloudVault:async()=>{prompt++;return vault;},
+ bulkPanel:{hidden:false},bulkDialog,bulkTarget,bulkSelected:new Set(),bulkStatus:node(),renderBulkList(){}};
+ execute(section(backup,'async function readEmployerSnapshot(','employerDirectoryLoad.addEventListener')+section(backup,'async function openBulkInventory(','bulkOpen.addEventListener'),ctx,'globalThis.load=loadEmployerDirectory;globalThis.organize=openBulkInventory;');
  available=false;await ctx.load(false);assert.equal(silent,1);assert.equal(prompt,0);assert.equal(reads,0);assert.equal(ctx.busy,false);assert.equal(employerDirectoryLoad.textContent,'保管庫を開く');assert.equal(ctx.operationCancelled,true);
- available=true;const pending=ctx.load(false);await ctx.load(false);await pending;assert.equal(silent,2);assert.equal(prompt,0);assert.equal(reads,1);assert.equal(refreshes,1);assert.equal(ctx.employers,list);assert.equal(ctx.bulkRecords,records);assert.equal(employerDirectoryLoad.textContent,'更新');
+ available=true;const pending=ctx.load(false);await ctx.load(false);await pending;assert.equal(silent,2);assert.equal(prompt,0);assert.equal(reads,1);assert.equal(refreshes,0);assert.equal(ctx.employers,list);assert.equal(ctx.bulkInventoryLoaded,false);assert.equal(employerDirectoryLoad.textContent,'更新');
+ // A failed annual read must not erase a separately verified directory or claim zero records.
+ failInventory=true;await ctx.organize();assert.equal(selectedOperation,'employer-inventory-load');assert.equal(result.status,'error');assert.equal(ctx.employers,list);assert.equal(ctx.bulkInventoryLoaded,false);assert.equal(bulkDialog.open,false);assert.equal(ctx.busy,false);
+ failInventory=false;changed=true;await ctx.organize();assert.equal(result.status,'error');assert.equal(ctx.bulkInventoryLoaded,false);assert.equal(bulkDialog.open,false);
+ changed=false;await ctx.organize();assert.equal(ctx.bulkRecords,records);assert.equal(ctx.bulkInventoryLoaded,true);assert.equal(bulkDialog.open,true);assert.equal(refreshes,3);
+ bulkDialog.open=false;const beforeRefresh=refreshes;await ctx.organize();assert.equal(refreshes,beforeRefresh);assert.equal(bulkDialog.open,true);
  fail=true;await ctx.load(false);assert.equal(selectedOperation,'employer-directory-load');assert.equal(ctx.operationCancelled,false);assert.equal(result.status,'error');assert.match(result.message,/通知履歴/);assert.equal(ctx.employers,undefined);assert.equal(ctx.busy,false);assert.equal(employerDirectoryLoad.textContent,'再読み込み');
- fail=false;reads=0;changed=true;await ctx.load(true);assert.equal(prompt,1);assert.equal(ctx.employers,undefined);assert.equal(ctx.bulkAuthorized,undefined);
- changed=false;await ctx.load(true);assert.equal(prompt,2);assert.equal(ctx.employers,list);
+ fail=false;await ctx.load(true);assert.equal(ctx.employers,list);assert.equal(ctx.bulkInventoryLoaded,false);
  const before=reads;const stale=ctx.load(false);authorized=false;await stale;assert.equal(reads,before);assert.equal(ctx.employers,undefined);assert.equal(ctx.bulkAuthorized,undefined);assert.equal(ctx.busy,false);
 }
 // Bulk assignment: preserve visible failure information and never replay a stale selection.
@@ -73,7 +84,7 @@ const node=()=>({hidden:true,disabled:false,textContent:'',dataset:{},value:'',s
  const vault={async refresh(options){reads++;if(readFails)throw new Error('fixture');options.onEmployerDirectory([entry]);return [{...record,employerId:entry.id}];},async readEmployerDirectory(){return [entry];}};
  class Partial extends Error{}
  const bulkDialog={open:true,close(){this.open=false;},showModal(){this.open=true;}};
- const ctx={noticeReason,Error,busy:false,bulkDialog,bulkRestoreFocus:false,selectSettingsOperation(){},setEmployerLoadLabel(label){employerDirectoryLoad.textContent=label;},employers:[entry],legacyDirectory:[],bulkRecords:[record],bulkAuthorized:()=>authorized,bulkSelected:new Set([1]),bulkTarget:{value:'fixture'},bulkStatus,employerDirectoryStatus,employerDirectoryLoad,tryResumeCloudVault:async()=>vault,bulkSave:{disabled:false,addEventListener(_type,fn){handler=fn;}},bulkCandidates:()=>[record],recordSignature:()=> 'fixture',employerDirectorySignature:JSON.stringify,employerDisplayName:()=> 'Fixture',updateButtons(){},cancelOperation(){},approveSettings:async()=>true,inspectEmployerAssignment:async()=>{if(mode==='preview')throw new Error('同じ期間の明細が重複');return {count:1,signature:'plan'};},assignEmployers:async()=>{writes++;if(mode==='success')return [{...record,employerId:entry.id}];throw new Partial('勤務先設定は一部確定した可能性があります。');},legacyEmployers:()=>[],renderEmployerDirectory(){bulkDialog.close();bulkStatus.textContent='';ctx.bulkSelected.clear();ctx.bulkTarget.value='';},renderBulkList(){},finishOperation(status){result=status;},PayrollPartialSuccessError:Partial};
+ const ctx={noticeReason,Error,busy:false,bulkDialog,bulkRestoreFocus:false,selectSettingsOperation(){},setEmployerLoadLabel(label){employerDirectoryLoad.textContent=label;},employers:[entry],legacyDirectory:[],bulkRecords:[record],bulkInventoryLoaded:true,bulkAuthorized:()=>authorized,bulkSelected:new Set([1]),bulkTarget:{value:'fixture'},bulkStatus,employerDirectoryStatus,employerDirectoryLoad,tryResumeCloudVault:async()=>vault,bulkSave:{disabled:false,addEventListener(_type,fn){handler=fn;}},bulkCandidates:()=>[record],recordSignature:()=> 'fixture',employerDirectorySignature:JSON.stringify,employerDisplayName:()=> 'Fixture',updateButtons(){},cancelOperation(){},approveSettings:async()=>true,inspectEmployerAssignment:async()=>{if(mode==='preview')throw new Error('同じ期間の明細が重複');return {count:1,signature:'plan'};},assignEmployers:async()=>{writes++;if(mode==='success')return [{...record,employerId:entry.id}];throw new Partial('勤務先設定は一部確定した可能性があります。');},legacyEmployers:()=>[],renderEmployerDirectory(){bulkDialog.close();bulkStatus.textContent='';ctx.bulkSelected.clear();ctx.bulkTarget.value='';},renderBulkList(){},finishOperation(status){result=status;},PayrollPartialSuccessError:Partial};
  execute(section(backup,'async function readEmployerSnapshot(','async function loadEmployerDirectory(')+section(backup,"bulkSave.addEventListener('click'",'// Activate navigation'),ctx,'');
  await handler();assert.match(bulkStatus.textContent,/重複/);assert.equal(result,'error');assert.equal(ctx.bulkSelected.size,1);assert.equal(ctx.busy,false);
  mode='success';await handler();assert.equal(result,'success');assert.equal(ctx.employers[0],entry);assert.equal(ctx.bulkRecords[0].employerId,entry.id);assert.equal(ctx.bulkSelected.size,0);assert.equal(ctx.bulkTarget.value,'');assert.equal(bulkDialog.open,false);assert.equal(ctx.busy,false);
@@ -100,7 +111,7 @@ const node=()=>({hidden:true,disabled:false,textContent:'',dataset:{},value:'',s
   const path=new URL(url).pathname;
   if(path.endsWith('/special/approot'))return Response.json({id:'root'});
   if(path.endsWith('/items/root:/persons'))return Response.json({id:'persons',folder:{}});
-  const id=[a,b].find(x=>path.endsWith(`/items/persons:/${x}/profile.enc`));assert.ok(id,`unexpected path ${path}`);
+  const id=[a,b].find(x=>path.endsWith(`/items/persons:/${x}/profile.enc`)||path.endsWith(`/items/persons:/${x}/years/${b}.enc`));assert.ok(id,`unexpected path ${path}`);
   if(id===failId)return new Response('',{status:404});
   if(notModified&&new Headers(init.headers).get('if-none-match')===`tag-${id}`)return new Response(null,{status:304});
   return Response.json({id,eTag:`tag-${id}`,size:oversize?9999:content.length,'@microsoft.graph.downloadUrl':signed});
@@ -113,6 +124,16 @@ const node=()=>({hidden:true,disabled:false,textContent:'',dataset:{},value:'',s
  const count=requests.length;
  for(const [path,name] of [[['persons','../fixture'],'profile.enc'],[['other',a],'profile.enc'],[['persons',a],'other.enc']])await assert.rejects(graph.read(path,name,1000,true),/参照先が不正/);
  assert.equal(requests.length,count);failId='';notModified=false;oversize=true;await assert.rejects(graph.read(['persons',b],'profile.enc',1000,true),/容量が上限/);
+ oversize=false;
+ const beforeAnnual=requests.length;
+ const annual=await graph.read(['persons',a,'years'],b+'.enc',1000,true);
+ assert.equal(annual?.id,a);assert.equal(requests.length-beforeAnnual,3,'direct annual read does not resolve employee/years folders');
+ const beforeProbe=requests.length;
+ assert.equal(await graph.readIfChanged(['persons',a,'years'],b+'.enc',1000,annual,true),undefined);
+ assert.equal(requests.length-beforeProbe,1);
+ const beforeInvalid=requests.length;
+ for(const [path,name] of [[['persons','../fixture','years'],b+'.enc'],[['other',a,'years'],b+'.enc'],[['persons',a,'originals'],b+'.enc'],[['persons',a,'years'],'other.enc']])await assert.rejects(graph.read(path,name,1000,true),/参照先が不正/);
+ assert.equal(requests.length,beforeInvalid);
  authorized=false;await assert.rejects(graph.read(['persons',a],'profile.enc',1000,true),/authorization revoked/);
 }
 // L01-L03: retain accessible markup, no old status selectors and the common modal shell.

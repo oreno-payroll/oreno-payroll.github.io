@@ -57,13 +57,14 @@ export class YearEndRepository {
  private sameAccess(a:Access,b:Access):boolean{
   return a.graph===b.graph&&a.key===b.key&&a.salt===b.salt&&a.path.join('/')===b.path.join('/');
  }
+ private readOnlyIndex:Read<PersonIndex>|null=null;
  private readOnlyProfiles=new Map<string,VerifiedRead>();
  private readOnlyYears=new Map<string,VerifiedRead>();
  private readOnlyScope:{graph:Access['graph'];key:CryptoKey;salt:string;path:string}|null=null;
  private checkReadOnlyScope(a:Access):void {
   const path=a.path.join('/'),old=this.readOnlyScope;
   if(!old||old.graph!==a.graph||old.key!==a.key||old.salt!==a.salt||old.path!==path){
-   this.readOnlyProfiles.clear();this.readOnlyYears.clear();
+   this.readOnlyIndex=null;this.readOnlyProfiles.clear();this.readOnlyYears.clear();
    this.readOnlyScope={graph:a.graph,key:a.key,salt:a.salt,path};
   }
  }
@@ -77,7 +78,18 @@ export class YearEndRepository {
   const cache=kind==='profile'?this.readOnlyProfiles:this.readOnlyYears;
   const cacheKey=path.join('/')+'/'+name;
   const prior=cache.get(cacheKey);
-  if(prior&&typeof a.graph.metadata==='function'){
+  let fresh:Read<T>|null|undefined;
+  if(prior&&typeof a.graph.readIfChanged==='function'){
+   const file=await a.graph.readIfChanged(path,name,max,prior,directChild);
+   if(scope!==this.readOnlyScope)throw new Error('保管庫の接続先または鍵が変更されました。読み直してください。');
+   if(file===undefined){
+    const value=copyReadOnly(prior.value) as T;
+    captureVerified?.({value:copyReadOnly(value),id:prior.id,etag:prior.etag,size:prior.size});
+    return value;
+   }
+   cache.delete(cacheKey);
+   fresh=file?{value:await decryptJson<T>(kinds[kind],file.text,a.key),file}:null;
+  }else if(prior&&typeof a.graph.metadata==='function'){
    const current=await a.graph.metadata(path,name);
    if(scope!==this.readOnlyScope)throw new Error('保管庫の接続先または鍵が変更されました。読み直してください。');
    if(!current){cache.delete(cacheKey);return null;}
@@ -89,10 +101,9 @@ export class YearEndRepository {
     return value;
    }
   }
-  // A new file, changed ETag, or missing cache requires a full authenticated
-  // decrypt+schema validation, never a metadata-only result.
+  // Changed files are decrypted and schema validated, never trusted by metadata alone.
   cache.delete(cacheKey);
-  const fresh=await this.readJson<T>(a,kind,path,name,max,directChild);
+  if(fresh===undefined)fresh=await this.readJson<T>(a,kind,path,name,max,directChild);
   if(scope!==this.readOnlyScope)throw new Error('保管庫の接続先または鍵が変更されました。読み直してください。');
   if(!fresh)return null;
   const validated=validate(fresh.value);
@@ -107,15 +118,40 @@ export class YearEndRepository {
   }
   return validated;
  }
- /** Used only for display. Mutations use profile() and always fetch live index and profile. */
+ /** Read-only index reuse requires a fresh version probe; a missing index
+  * still follows the orphan-directory check. Never supplies a mutation ETag. */
+ private async displayIndex(a:Access):Promise<Read<PersonIndex>>{
+  this.checkReadOnlyScope(a);
+  const scope=this.readOnlyScope,prior=this.readOnlyIndex;
+  let current:Read<PersonIndex>;
+  if(prior?.file&&typeof a.graph.readIfChanged==='function'){
+   const file=await a.graph.readIfChanged(a.path,'index.enc',MAX_INDEX,prior.file,true);
+   if(file===undefined)current=prior;
+   else if(file)current={file,value:validateIndex(await decryptJson<PersonIndex>(kinds.index,file.text,a.key))};
+   else{this.readOnlyIndex=null;current=await this.readIndex(a,true);}
+  }else current=await this.readIndex(a,true);
+  if(scope!==this.readOnlyScope)throw new Error('保管庫の接続先または鍵が変更されました。読み直してください。');
+  this.readOnlyIndex=current.file?{file:{...current.file},value:copyReadOnly(current.value)}:null;
+  return current;
+ }
+ /** Independent display reads. Do not return a profile or its proof unless
+  * the current index identifies an active employee. Writes stay sequential. */
  private async readOnlyProfile(a:Access,id:PersonId,captureVerified?:(entry:VerifiedRead)=>void):Promise<PersonProfile>{
-  await this.assertActive(a,id);
-  const value=await this.readOnlyJson<PersonProfile>(a,'profile',this.personPath(a,id),'profile.enc',MAX_PROFILE,
-   profile=>validateProfile(profile,id),captureVerified);
+  asPersonId(id);this.checkReadOnlyScope(a);
+  const scope=this.readOnlyScope;
+  let proof:VerifiedRead|undefined;
+  const [index,value]=await Promise.all([
+   this.displayIndex(a),
+   this.readOnlyJson<PersonProfile>(a,'profile',this.personPath(a,id),'profile.enc',MAX_PROFILE,
+    profile=>validateProfile(profile,id),entry=>{proof=entry;},true),
+  ]);
+  if(scope!==this.readOnlyScope)throw new Error('保管庫の接続先または鍵が変更されました。読み直してください。');
+  if(!index.value.persons.some(p=>p.id===id&&p.state==='active'))throw new Error('対象の従業員は未登録または削除処理中です。');
   if(!value)throw new Error('従業員プロフィールが見つかりません。');
+  if(proof)captureVerified?.(proof);
   return value;
  }
- private async access():Promise<Access> {const vault=await cloudVault();return vault.yearEndAccess();}
+ private async access(initialDisplay=false):Promise<Access> {const vault=await cloudVault();return vault.yearEndAccess(initialDisplay);}
  private async withMutation<T>(operation:(a:Access)=>Promise<T>,state?:PayrollWriteState,scope?:{id:PersonId;year:number}):Promise<T>{
   const initial=await this.access();
   if(state&&scope)this.recoveryAccess.set(state,{access:initial,...scope});
@@ -143,36 +179,45 @@ export class YearEndRepository {
   if(JSON.stringify(check)!==JSON.stringify(value))throw new Error('暗号化ファイルの保存検証に失敗しました。');
   return saved;
  }
- private async readIndex(a:Access):Promise<Read<PersonIndex>>{
-  const result=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX);
+ private async readIndex(a:Access,display=false):Promise<Read<PersonIndex>>{
+  const result=await this.readJson<PersonIndex>(a,'index',a.path,'index.enc',MAX_INDEX,display);
   if(result)return {...result,value:validateIndex(result.value)};
   const unexpected=await a.graph.listFolder([...a.path,'persons']);
   if(unexpected?.length)throw new Error('暗号化された従業員フォルダーがありますが索引がありません。自動初期化を拒否しました。');
   return {value:emptyIndex(),file:null};
  }
- async people(useNavigation=false,forceFresh=false,onProgress?:(done:number,total:number)=>void):Promise<Array<PersonProfile & {state:'active'|'deleting'}>>{
+ private decodePeopleNavigation(cached:unknown):Array<PersonProfile & {state:'active'|'deleting'}>|null{
+  if(!Array.isArray(cached)||cached.length>2000)return null;
+  try{
+   const ids=new Set<string>();
+   return cached.map(row=>{
+    if(!row||!['active','deleting'].includes(row.state)||ids.has(row.id))throw new Error('invalid employee cache');
+    const profile=validateProfile(row,asPersonId(row.id));ids.add(profile.id);
+    return {...profile,state:row.state as 'active'|'deleting'};
+   });
+  }catch{return null;}
+ }
+ async people(useNavigation=false,forceFresh=false,onProgress?:(done:number,total:number)=>void,
+  onPreview?:(list:Array<PersonProfile & {state:'active'|'deleting'}>)=>void):Promise<Array<PersonProfile & {state:'active'|'deleting'}>>{
   const perf=yearEndPerf('yearend-people');let success=false;
   try{
   const vault=useNavigation?await cloudVault():null;
   const epoch=useNavigation?mutationEpoch():'',authorized=useNavigation?captureOperationAuthorization():()=>true;
-  const a=await perf.measure('yearend-access',()=>vault?vault.yearEndAccess():this.access());
   const guard=()=>authorized()&&(!useNavigation||epoch===mutationEpoch());
-  if(vault&&!forceFresh){
-   const cached=await vault.readPeopleNavigation(a.path);
+  // Paint a cached list while the existing live root verification is pending.
+  // The UI must leave operations disabled until this function returns normally.
+  if(vault&&!forceFresh&&onPreview&&typeof vault.previewPeopleNavigation==='function'){
+   const preview=this.decodePeopleNavigation(await vault.previewPeopleNavigation());
    if(!guard())throw new Error('接続状態が変更されました。読み直してください。');
-   if(Array.isArray(cached)&&cached.length<=2000){
-    try{
-     const ids=new Set<string>();
-     const list=cached.map(row=>{
-      if(!row||!['active','deleting'].includes(row.state)||ids.has(row.id))throw new Error('invalid employee cache');
-      const profile=validateProfile(row,asPersonId(row.id));ids.add(profile.id);
-      return {...profile,state:row.state as 'active'|'deleting'};
-     });
-     success=true;return list;
-    }catch{/* Fall back to authenticated live profiles. */}
-   }
+   if(preview)onPreview(preview);
   }
-  const idx=await perf.measure('yearend-index',()=>this.readIndex(a));
+  const a=await perf.measure('yearend-access',()=>vault?vault.yearEndAccess(!forceFresh):this.access(!forceFresh));
+  if(vault&&!forceFresh){
+   const list=this.decodePeopleNavigation(await vault.readPeopleNavigation(a.path));
+   if(!guard())throw new Error('接続状態が変更されました。読み直してください。');
+   if(list){success=true;return list;}
+  }
+  const idx=await perf.measure('yearend-index',()=>forceFresh?this.readIndex(a):this.displayIndex(a));
   const rows=idx.value.persons.filter(row=>row.state!=='deleted');
   const result:Array<PersonProfile & {state:'active'|'deleting'}|undefined>=new Array(rows.length);
   // Profile GETs are independent. Limit concurrency to avoid Graph throttling, and
@@ -202,9 +247,14 @@ export class YearEndRepository {
   success=true;return list;
   }finally{perf.finish(success);}
  }
- private async assertActive(a:Access,id:PersonId):Promise<void>{
-  const idx=await this.readIndex(a);
-  if(!idx.value.persons.some(p=>p.id===id&&p.state==='active'))throw new Error('対象の従業員は未登録または削除処理中です。');
+ private async assertActive(a:Access,id:PersonId,proof?:Read<PersonIndex>):Promise<void>{
+  let value:PersonIndex;
+  if(proof?.file&&typeof a.graph.readIfChanged==='function'){
+   const file=await a.graph.readIfChanged(a.path,'index.enc',MAX_INDEX,proof.file);
+   if(file===null)throw new Error('従業員索引が見つかりません。');
+   value=file===undefined?proof.value:validateIndex(await decryptJson<PersonIndex>(kinds.index,file.text,a.key));
+  }else value=(await this.readIndex(a)).value;
+  if(!value.persons.some(p=>p.id===id&&p.state==='active'))throw new Error('対象の従業員は未登録または削除処理中です。');
  }
  /** Fetch a fresh active-state index and a validated profile together, once per edit. */
  private async activeProfile(a:Access,id:PersonId):Promise<ActiveWriteProof>{
@@ -242,10 +292,10 @@ export class YearEndRepository {
  async renamePerson(id:PersonId,name:string,alias:string,expectedName?:string):Promise<PersonProfile>{
   return this.withMutation(async a=>{
   asPersonId(id);if(!safeText(name)||alias.length>80||/[\u0000-\u001f]/.test(alias))throw new Error('表示名が不正です。');
-  const current=await this.profile(a,id);
+  const {profile:current,activeIndex}=await this.activeProfile(a,id);
   if(expectedName!==undefined&&(current.value.displayName!==expectedName||current.value.alias!==alias))throw new Error('従業員名が更新されました。最新の一覧を確認してください。');
   const next={...current.value,displayName:clean(name),alias:clean(alias),updatedAt:new Date().toISOString()};
-  await this.assertActive(a,id);await this.writeJson(a,'profile',this.personPath(a,id),'profile.enc',next,current.file,MAX_PROFILE);return next;
+  await this.assertActive(a,id,activeIndex);await this.writeJson(a,'profile',this.personPath(a,id),'profile.enc',next,current.file,MAX_PROFILE);return next;
   });
  }
  private async yearContext(a:Access,id:PersonId,year:number,create:boolean):Promise<{profile:Read<PersonProfile>;activeIndex:Read<PersonIndex>;data:YearData;file:RemoteFile|null;yearFile:string|null}>{
@@ -270,7 +320,7 @@ export class YearEndRepository {
   if(!name)return emptyYear(id,year);
   if(!isUuid(name))throw new Error('年度ファイルIDが不正です。');
   const data=await this.readOnlyJson<YearData>(a,'year',
-   [...this.personPath(a,id),'years'],name+'.enc',MAX_YEAR,value=>validateYear(value,id,year));
+   [...this.personPath(a,id),'years'],name+'.enc',MAX_YEAR,value=>validateYear(value,id,year),undefined,true);
   if(!data)throw new Error('年度ファイルが見つかりません。');
   return data;
  }
@@ -284,7 +334,7 @@ export class YearEndRepository {
   let a:Access,profile:PersonProfile,data:YearData;
   let verified:VerifiedRead|undefined;
   try{
-   a=await perf.measure('yearend-access',()=>this.access());
+   a=await perf.measure('yearend-access',()=>this.access(true));
    profile=await perf.measure('yearend-profile',()=>this.readOnlyProfile(a,id,entry=>{verified=entry;}));
    data=await perf.measure('yearend-context',()=>this.verifiedDisplayYear(a,id,year,profile));
    success=true;
@@ -328,7 +378,7 @@ export class YearEndRepository {
   const perf=yearEndPerf('yearend-year');let success=false;
   try{
    asPersonId(id);if(!validYear(year))throw new Error('暦年が不正です。');
-   const a=await perf.measure('yearend-access',()=>this.access());
+   const a=await perf.measure('yearend-access',()=>this.access(true));
    const profile=await perf.measure('yearend-profile',()=>this.readOnlyProfile(a,id));
    const data=await perf.measure('yearend-context',()=>this.verifiedDisplayYear(a,id,year,profile));
    success=true;return data;

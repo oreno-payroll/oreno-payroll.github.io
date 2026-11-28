@@ -63,7 +63,7 @@ const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 for(const file of ['src/main.ts','src/edit.ts','src/upload.ts'])assert.doesNotMatch(read(file),/window\.(?:confirm|alert)\(/);
 assert.match(read('src/main.ts'),/deletionMatches\(\)&&JSON\.stringify\(targets\)===JSON\.stringify\(pendingDeletion\.snapshot\(\)\)/);
 assert.match(read('src/main.ts'),/saved\.some\(r=>r\.id===record\.id&&recordSignature\(r\)===recordSignature\(record\)\)/);
-assert.match(read('src/edit.ts'),/JSON\.stringify\(applicablePayrollForm\(getValues\(\)\)\)!==JSON\.stringify\(formValues\)/);
+assert.match(read('src/edit.ts'),/JSON\.stringify\(applicablePayrollForm\(effectiveValues\(\)\)\)!==JSON\.stringify\(formValues\)/);
 assert.match(read('src/upload.ts'),/diagnosticAuthorized=\(\)=>authorized\(\)&&selectedEntry\(\)===entry/);
 assert.match(read('src/upload.ts'),/if\(generation!==diagnosticGeneration\)return/);
 assert.match(read('src/upload.ts'),/registerDiagnosticClose\(closeDiagnostic\)/);
@@ -90,13 +90,14 @@ const restore=backup.slice(backup.indexOf("restoreButton.addEventListener('click
 assert.ok(helper.startsWith('async function approveSettings('));
 async function restoreScenario(change,approve=true){
  let click,request,release,writes=0,nav=0,valid=true;
- const context={noticeReason,busy:false,preview:{records:[{id:1}]},ack:{checked:true},initialSnapshot:{physical:'synthetic-record',directory:'[]',count:1,bytes:1},currentCount:1,
+ const context={noticeReason,busy:false,loadedDb:true,preview:{records:[{id:1}]},ack:{checked:true},initialSnapshot:undefined,currentCount:1,
+  exportSummary:{},sizes:String,inspectReplacementRestoreBaseline:async()=>({physical:'synthetic-record',directory:'[]',count:1,bytes:1}),cancelOperation(){},
   restoreButton:{addEventListener:(_event,fn)=>{click=fn;}},captureOperationAuthorization:()=>()=>valid,
   confirmOperation:(req,guard)=>{request=req;assert.equal(guard(),true);return new Promise(resolve=>{release=()=>resolve(approve&&guard());});},
   selectSettingsOperation(code){assert.equal(code,'restore-button');},updateButtons(){},info(){},finishOperation(){},recordNotification(){},replaceAllRecords:async()=>{writes++;},window:{location:{assign(){nav++;}}},
   resetPreview(){},restorePreview:{},refreshCount:async()=>{},};
  runInNewContext(stripTypeScriptTypes(helper+'\n'+restore,{mode:'strip'}),context);
- const pending=click();assert.equal(writes,0);assert.equal(request.tone,'danger');assert.equal(request.acceptLabel,'置き換えて復元');
+ const pending=click();await new Promise(resolve=>setImmediate(resolve));assert.equal(writes,0);assert.equal(request.tone,'danger');assert.equal(request.acceptLabel,'置き換えて復元');
  if(change==='preview')context.preview={records:[]};
  if(change==='ack')context.ack.checked=false;
  if(change==='snapshot')context.initialSnapshot={physical:'changed',directory:'[]',count:1,bytes:1};

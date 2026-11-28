@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import {webcrypto} from 'node:crypto';
+import {validateEmployerDirectory,employerAssignmentSignature,employerDirectorySignature} from '../src/storage/employerDirectory.ts';
 const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const strip=s=>stripTypeScriptTypes(s.replace(/^import\s+[\s\S]*?\s+from\s+['"][^'"]+['"];?\s*$/gm,'').replace(/\bexport\s+/g,''),{mode:'transform'});
 const enc=new TextEncoder(),salt='synthetic-salt',key={opaqueKey:true};
@@ -25,13 +26,13 @@ const graph={
  async listFolder(parts){const p=parts.join('/')+'/';calls.list.push(p);return [...files.entries()].filter(([n])=>n.startsWith(p)&&!n.slice(p.length).includes('/')).map(([name,f])=>({name:name.slice(p.length),folder:false,id:f.id,etag:f.etag,size:f.size}));},
  async write(){throw Error('No real or fake write must happen; commit is explicitly mocked.');}
 };
-const common={crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Promise,Map,Set,WeakMap,structuredClone,performance,
+const common={validateEmployerDirectory,employerAssignmentSignature,employerDirectorySignature,crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,Buffer,Blob,Promise,Map,Set,WeakMap,structuredClone,performance,
  envelopeSalt:()=>salt,parseEnvelope:()=>({salt}),decryptJson:async(_kind,value)=>JSON.parse(value),encryptJson:async(_kind,value)=>JSON.stringify(value),decryptBytes:async()=>new Uint8Array(),
  fiscalYearOfTargetMonth:v=>Number(v.slice(0,4)),isValidPayrollSemantics:()=>true,validEmployerId:v=>v===undefined||(typeof v==='string'&&/^emp_[0-9a-f]{32}$/.test(v)),
  isCollision:()=>false,beginPerfOperation:()=>({measure:async(_,fn)=>fn(),finish(){}}),
  SNAPSHOT_TTL_MS:600_000,mutationEpoch:()=>'fixture-epoch',clearNavigationSnapshot:()=>{},rememberNavigationSnapshot:async()=>{},restoredNavigationSnapshot:async()=>null,
  MAX_RECORDS:2000,MAX_TOTAL_PDF_BYTES:500e6,toPublicIncomeRecord:()=>{},PayrollPartialSuccessError:class extends Error{},setTimeout};
-const {PayrollVault}=runInNewContext(strip(read('src/storage/payrollValidation.ts'))+'\n'+strip(read('src/cloud/vault.ts'))+'\n({PayrollVault})',common);
+const {PayrollVault}=runInNewContext(strip(read('src/storage/payrollValidation.ts'))+'\n'+strip(read('src/cloud/income.ts'))+'\n'+strip(read('src/cloud/vault.ts'))+'\n({PayrollVault})',common);
 const vault=new PayrollVault(graph);vault.key=key;vault.salt=salt;vault.index=index;
 await vault.refresh({forceFresh:true});reset();
 // Only a positively absent previously authenticated unrelated year may be omitted.
@@ -52,11 +53,24 @@ await assert.rejects(vault.refresh(readOptions),/最新版を確認できませ�
 put('payroll/statements/2023.enc',annual([baseRecord(2023,'2023')]));
 await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});reset();
 console.log('PASS: unrelated absence, target absence, ambiguous duplicates and full mutation paths');
+// Ordinary scoped inventory authenticates the locked physical baseline itself.
+const lockedBaseline=vault.records();reset();
+const inventory=await vault.inspectDetachedOriginals(true,['2026-08'],lockedBaseline);
+assert.equal(inventory.originals.length,0);
+assert.equal(calls.read.filter(p=>p.includes('/statements/')).length,0);
+assert.equal(calls.list.filter(p=>p==='payroll/statements/').length,1);
+put('payroll/statements/2023.enc',annual([{...baseRecord(2023,'2023'),originalId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}]));
+await assert.rejects(vault.inspectDetachedOriginals(true,['2026-08'],lockedBaseline),/明細が照合中に変更/);
+put('payroll/statements/2023.enc',annual([baseRecord(2023,'2023')]));
+await vault.refresh({forceFresh:true,reuseVerifiedYears:true,bulkYearMetadata:true});reset();
+console.log('PASS: scoped inventory proves full physical baseline and rejects foreign-year reference change');
+
 let commits=0;
+let reusedIncomeSource,knownExistingYear;
 vault.storeOriginal=async()=>{};
-vault.syncIncomeUnderLock=async()=>{};
-vault.commit=async(year,doc)=>{
- commits++;
+vault.syncIncomeUnderLock=async(_years,_guard,reuse)=>{reusedIncomeSource=reuse;};
+vault.commit=async(year,doc,_checkRemote,_checkIndex,known)=>{
+ knownExistingYear=known;commits++;
  const next=put(`payroll/statements/${year}.enc`,doc),valid=structuredClone(doc);
  vault.shards.set(year,valid);
  vault.shardVersions.set(year,{id:next.id,etag:next.etag,size:next.size});
@@ -65,6 +79,8 @@ const input={...baseRecord(9876,'2026'),fileHash:hash,form:{...baseRecord(9876,'
 delete input.pdfSize;delete input.pdfType;delete input.originalId;delete input.originalMonth;
 await vault.saveBatch([input]);
 assert.equal(commits,1);
+assert.equal(knownExistingYear,true,'batch must reuse just-verified existing year at commit entry');
+assert.equal(reusedIncomeSource,true,'saveBatch passes its verified post-commit source to Finance');
 assert.equal(calls.list.length,2,'one live inventory after originals and one after the annual commit');
 assert.equal(calls.read.filter(p=>p.includes('/statements/')).length,0,'no unchanged annual ciphertext GET across both boundaries');
 assert.equal(calls.read.filter(p=>p==='payroll/index.enc').length,2,'each remaining check must re-read the live root index');
@@ -176,3 +192,176 @@ assert.equal(ycall.writes,0,'missing foreign year must block replacement before 
 yfiles.set(foreignPath,savedForeign);
 console.log('PASS 4: missing foreign-year file stops the replacement before any write');
 console.log('PASS: Payroll second-round four-target synthetic audit completed');
+
+// Real Finance sync with an unchanged registered year. A fresh pre/post
+// source check is still required; the initial source and no-op registration
+// are unnecessary after a verified payroll commit.
+{
+ const financeIndex={...index,incomeYears:['2026']};
+ put('payroll/index.enc',financeIndex);
+ put('payroll/statements/2026.enc',annual([baseRecord(2026,'2026')]));
+ const financeVault=new PayrollVault(graph);financeVault.key=key;financeVault.salt=salt;financeVault.index=financeIndex;
+ await financeVault.refresh({forceFresh:true});
+ const expected={format:'payroll-income-v1',year:'2026',records:[{id:2026,paymentDate:'2026-06-01',targetMonth:'2026-05',job:'main',kind:'salary',netPaymentYen:100,grossPaymentYen:120,revision:1}]};
+ put('payroll/income/2026.enc',expected);
+ const sourceChecks=[];
+ const refreshFinance=financeVault.refresh.bind(financeVault);
+ financeVault.refresh=async options=>{sourceChecks.push({...options});return refreshFinance(options);};
+ reset();await financeVault.syncIncomeUnderLock(new Set(['2026']),undefined,true);
+ assert.equal(sourceChecks.length,2,'only the fresh pre/post source checks remain');
+ for(const opts of sourceChecks){assert.equal(opts.forceFresh,true);assert.equal(opts.reuseVerifiedYears,true);assert.equal(opts.bulkYearMetadata,true);}
+ assert.equal(sourceChecks[0].rememberNavigation,false,'prewrite must not serialize the navigation snapshot');
+ assert.notEqual(sourceChecks[1].rememberNavigation,false,'final verification can publish the navigation snapshot');
+ assert.equal(calls.list.length,2,'Finance pre/post source boundaries remain');
+ assert.equal(calls.read.filter(p=>p==='payroll/index.enc').length,2,'no repeated initial source or registered-index no-op');
+ // Simulate a change while Finance reads its previous projection. The next
+ // source check must catch it before dispatching any stale write.
+ const readGraph=graph.read,writeGraph=graph.write;let raced=false,writes=[];
+ graph.read=async(parts,name)=>{const result=await readGraph(parts,name);if(!raced&&parts.includes('income')){raced=true;const next=baseRecord(2026,'2026');next.revision=2;next.form.gross='130';put('payroll/statements/2026.enc',annual([next]));}return result;};
+ graph.write=async(parts,name,text,prior)=>{const p=[...parts,name].join('/');assert.equal(files.get(p)?.etag,prior?.etag);writes.push(JSON.parse(text));put(p,JSON.parse(text));};
+ try{
+  await financeVault.syncIncomeUnderLock(new Set(['2026']),undefined,true);
+  assert.equal(writes.length,1);assert.equal(writes[0].records[0].revision,2);assert.equal(writes[0].records[0].grossPaymentYen,130);
+ }finally{graph.read=readGraph;graph.write=writeGraph;}
+ console.log('PASS: verified Finance source reuse keeps both fresh boundaries and retries changed source before writing');
+ // Single-year deletion uses the original locked snapshot for its first year.
+ await financeVault.refresh({forceFresh:true});
+ financeVault.commit=async(year,doc,checkRemote,_checkIndex,known)=>{assert.equal(known,true);const current=JSON.parse(files.get(`payroll/statements/${year}.enc`).text);checkRemote(current);put(`payroll/statements/${year}.enc`,doc);};
+ financeVault.syncIncomeUnderLock=async(_years,guard,reuse)=>{assert.equal(reuse,true);guard();};
+ graph.markUploadCheckpoint=async()=>{};
+ reset();await financeVault.removeBatch([{id:2026,matches:row=>row.revision===2}]);
+ assert.equal(calls.list.length,2,'single-year delete needs initial and final full inventory, not a duplicate first inventory');
+ assert.equal(financeVault.records().some(row=>row.id===2026),false);
+ console.log('PASS: deletion reuses its initial locked inventory and retains post-commit validation');
+}
+
+// Actual approval planning, using an in-memory source. An intervening change
+// after preview must stop before entering the write-lock path.
+{
+ const entry={id:'emp_'+'a'.repeat(32),name:'Synthetic employer',role:'main',current:true};
+ const directory=[entry],signature=employerDirectorySignature(directory);
+ let row=baseRecord(2026,'2026'),reads=0,writes=0,authorized=true;
+ const fake={async refresh(options){reads++;assert.equal(options.forceFresh,true);assert.equal(options.rememberNavigation,false);options.onEmployerDirectory(directory);return [structuredClone(row)];},assertEmployerAssignmentConsistency(){},async assignEmployerBatch(){writes++;return [row];}};
+ const start=store.indexOf('export function recordSignature('),end=store.indexOf('const conflicts=',start);
+ const a=store.indexOf('async function planEmployerAssignment('),b=store.indexOf('/** Read-only additive restore plan',a);
+ const c=store.indexOf('const physicalRestoreSnapshot='),d=store.indexOf('async function planAdditiveRestore',c);
+ const api=runInNewContext(strip(store.slice(start,end)+store.slice(a,b)+store.slice(c,d))+'\n({recordSignature,inspectEmployerAssignment,assignEmployers})',{MAX_RECORDS:2000,employerAssignmentSignature,cloudVault:async()=>fake});
+ const targets=[{id:row.id,signature:api.recordSignature(row)}],guard=()=>authorized;
+ const plan=await api.inspectEmployerAssignment(targets,entry.id,signature,guard);
+ assert.equal(reads,1,'one pre-consent inventory');assert.equal(writes,0);
+ row={...row,revision:2};await assert.rejects(api.assignEmployers(targets,entry.id,signature,plan.signature,guard),/対象明細が変更/);assert.equal(writes,0);
+ row=baseRecord(2026,'2026');await api.assignEmployers(targets,entry.id,signature,plan.signature,guard);assert.equal(writes,1);assert.equal(reads,3);
+ authorized=false;await assert.rejects(api.assignEmployers(targets,entry.id,signature,plan.signature,guard),/認証状態/);assert.equal(writes,1);
+ console.log('PASS: one preview refresh, fresh post-consent check, changed revision and authorization refusal');
+}
+// Full real assignment and Finance sync (mock Graph only). Keep the final
+// observation after the Finance identity sweep, but skip intermediate snapshots.
+{
+ const entry={id:'emp_'+'b'.repeat(32),name:'Synthetic employer',role:'main',current:true};
+ const directory=[entry],assignmentIndex={...index,incomeYears:['2026'],employers:directory};
+ put('payroll/index.enc',assignmentIndex);
+ for(const y of years)put(`payroll/statements/${y}.enc`,annual([baseRecord(Number(y),y)]));
+ const assignmentVault=new PayrollVault(graph);assignmentVault.key=key;assignmentVault.salt=salt;assignmentVault.index=assignmentIndex;
+ const initial=await assignmentVault.refresh({forceFresh:true});
+ const observations=[],originalRefresh=assignmentVault.refresh.bind(assignmentVault),originalWrite=graph.write;
+ assignmentVault.refresh=async options=>{observations.push({...options});return originalRefresh(options);};
+ assignmentVault.commit=async(year,doc,checkRemote,checkIndex)=>{
+  const path=`payroll/statements/${year}.enc`;checkRemote(JSON.parse(files.get(path).text));checkIndex(assignmentIndex);
+  const next=put(path,doc);assignmentVault.shards.set(year,structuredClone(doc));assignmentVault.shardVersions.set(year,{id:next.id,etag:next.etag,size:next.size});
+ };
+ graph.write=async(parts,name,text,prior)=>{const p=[...parts,name].join('/');assert.equal(files.get(p)?.etag,prior?.etag);put(p,JSON.parse(text));};
+ try{
+  const result=await assignmentVault.assignEmployerBatch(initial,[2026],entry.id,employerDirectorySignature(directory),()=>true);
+  assert.equal(result.find(r=>r.id===2026).employerId,entry.id);assert.equal(result.find(r=>r.id===2026).revision,2);
+  assert.equal(observations.length,5,'locked baseline, post-commit, Finance pre/postwrite and final observation');
+  assert.ok(observations.slice(0,3).every(o=>o.rememberNavigation===false));assert.notEqual(observations[3].rememberNavigation,false);assert.equal(observations[4].rememberNavigation,true);
+  assert.equal(JSON.parse(files.get('payroll/income/2026.enc').text).records[0].employerId,entry.id);
+  // A legacy writer can change an annual file during the final Finance
+  // identity sweep without changing the root index. The last source check
+  // must still detect it, not report the previous result as successful.
+  put('payroll/statements/2026.enc',annual([baseRecord(2026,'2026')]));
+  const baseline=await assignmentVault.refresh({forceFresh:true});
+  const originalMetadata=graph.metadata;let raced=false,incomeMetadata=0;
+  graph.metadata=async(parts,name)=>{
+   const result=await originalMetadata(parts,name);
+   if(!raced&&parts.includes('income')&&++incomeMetadata===2){
+    raced=true;const path='payroll/statements/2026.enc',live=JSON.parse(files.get(path).text);
+    live.records[0].revision++;live.records[0].form.gross='140';put(path,live);
+   }
+   return result;
+  };
+  try{await assert.rejects(assignmentVault.assignEmployerBatch(baseline,[2026],entry.id,employerDirectorySignature(directory),()=>true));assert.equal(raced,true);}
+  finally{graph.metadata=originalMetadata;}
+ }finally{graph.write=originalWrite;}
+ console.log('PASS: assignment skips intermediate snapshots and retains final authenticated source observation');
+}
+
+// A real existing-year commit keeps a fresh conditional proof, but need not
+// download unchanged annual ciphertext a second time before writing.
+{
+ put('payroll/index.enc',index);
+ for(const y of years)put(`payroll/statements/${y}.enc`,annual([baseRecord(Number(y),y)]));
+ const writer=new PayrollVault(graph);writer.key=key;writer.salt=salt;writer.index=index;
+ await writer.refresh({forceFresh:true});reset();
+ let probes=0,writes=0;
+ const savedWrite=graph.write;
+ graph.readIfChanged=async(parts,name,_limit,proof,direct)=>{
+  if(parts.includes("statements")){assert.equal(direct,true);probes++;}
+  const live=files.get([...parts,name].join('/'));
+  return live&&live.id===proof.id&&live.etag===proof.etag&&live.size===proof.size?undefined:live??null;
+ };
+ graph.write=async(parts,name,text,prior)=>{
+  const p=[...parts,name].join('/');assert.equal(prior.etag,files.get(p).etag);writes++;put(p,JSON.parse(text));
+ };
+ try{
+  const next=annual([{...baseRecord(2026,'2026'),revision:2,form:{...baseRecord(2026,'2026').form,gross:'140'}}]);
+  await writer.commit('2026',next,undefined,undefined,true);
+  assert.equal(probes,1);assert.equal(writes,1);
+  assert.equal(calls.read.filter(p=>p.includes('/statements/')).length,1,'only the mandatory postwrite readback downloads the year');
+  assert.equal(writer.records().find(r=>r.id===2026).form.gross,'140');
+  reset();
+  const live=JSON.parse(files.get('payroll/statements/2026.enc').text);live.records[0].revision=3;put('payroll/statements/2026.enc',live);
+  await assert.rejects(writer.commit('2026',next,remote=>{if(remote.records[0].revision!==2)throw Error('synthetic remote changed');},undefined,true),/synthetic remote changed/);
+  assert.equal(writes,1,'a changed live year is validated before any write');
+ }finally{graph.write=savedWrite;delete graph.readIfChanged;}
+ console.log('PASS: annual commit reuses only a freshly matched version, retains conditional write and authenticated readback');
+}
+
+// R13: actual removal and move source use the existing conditional-year
+// path, and a changed source after the target write must not be removed.
+{
+ const oldWrite=graph.write;
+ try{
+  for(const mode of ['remove','batch','move','move-race']){
+   put('payroll/index.enc',index);
+   for(const y of years)put(`payroll/statements/${y}.enc`,annual([baseRecord(Number(y),y)]));
+   const v=new PayrollVault(graph);v.key=key;v.salt=salt;v.index=index;
+   v.syncIncomeUnderLock=async()=>{};
+   let probes=[],writes=[];
+   graph.readIfChanged=async(parts,name,_limit,proof,direct)=>{
+    if(parts.includes('statements')){assert.equal(direct,true);probes.push(name);}
+    const live=files.get([...parts,name].join('/'));
+    return live&&live.id===proof.id&&live.etag===proof.etag&&live.size===proof.size?undefined:live??null;
+   };
+   graph.write=async(parts,name,text,prior)=>{
+    const path=[...parts,name].join('/');assert.equal(prior.etag,files.get(path).etag);writes.push(name);put(path,JSON.parse(text));
+    if(mode==='move-race'&&name==='2025.enc'){
+     const source=JSON.parse(files.get('payroll/statements/2026.enc').text);source.records[0].revision=9;put('payroll/statements/2026.enc',source);
+    }
+   };
+   const expected=r=>r.revision===1;
+   if(mode==='remove')await v.remove(2026,expected);
+   else if(mode==='batch')await v.removeBatch([{id:2026,matches:expected}]);
+   else{
+    const row=baseRecord(2026,'2026');const next={...row,revision:2,form:{...row.form,targetMonth:'2025-05'}};
+    if(mode==='move-race')await assert.rejects(v.save(next,undefined,expected),/year-move/);
+    else await v.save(next,undefined,expected);
+   }
+   assert.ok(probes.includes('2026.enc'),'source commit uses fresh conditional year observation');
+   const source=JSON.parse(files.get('payroll/statements/2026.enc').text);
+   if(mode==='move-race'){assert.deepEqual(writes,['2025.enc']);assert.equal(source.records[0].revision,9);}
+   else {assert.ok(writes.includes('2026.enc'));assert.equal(source.records.length,0);assert.ok(source.deleted.includes(2026));}
+  }
+ }finally{graph.write=oldWrite;delete graph.readIfChanged;}
+ console.log('PASS R13: actual remove, removeBatch and move source conditional checks, source race preserves changed record');
+}

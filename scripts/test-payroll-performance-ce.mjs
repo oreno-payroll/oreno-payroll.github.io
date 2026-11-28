@@ -168,7 +168,7 @@ const main=readFileSync(new URL('../src/main.ts',import.meta.url),'utf8');
 const edit=readFileSync(new URL('../src/edit.ts',import.meta.url),'utf8');
 const payroll=readFileSync(new URL('../src/storage/payrollStore.ts',import.meta.url),'utf8');
 assert.match(main,/hintYear=\$\{encodeURIComponent\(String\(hintedYear\)\)\}/);
-assert.match(edit,/getRecordSummary\(id,yearHint,directory=>\{employerDirectory=directory;\}\)/);
+assert.match(edit,/getRecordSummary\(id,yearHint,directory=>\{freshDirectory=directory;\}\)/);
 assert.match(payroll,/bulkYearMetadata:true/);
 assert.match(payroll,/await vault\.refresh\(\{forceFresh:true\}\)/,'mutation paths still do full revalidation');
 console.log('PASS: UI hints are advisory; write paths retain full remote verification');

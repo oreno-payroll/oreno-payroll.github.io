@@ -179,3 +179,77 @@ const src=read('src/yearEnd/repository.ts');
 assert.doesNotMatch(src,/indexedDB|localStorage|sessionStorage|console\.log|console\.info/);
 assert.ok(calls.perf.some(x=>x.operation==='yearend-year'));
 console.log('PASS: ETag-validated read-only profile/year snapshots; mutations reload live metadata; stale-tab, 404, key-change and ETag collision fail closed');
+
+// Production Graph uses a combined version comparison / changed-file read.
+// Existing tests above still cover the original mock interface.
+{
+ const originalRead=graph.read.bind(graph),originalMetadata=graph.metadata.bind(graph);
+ let combined=0;
+ graph.readIfChanged=async(path,name,_max,proof,directChild)=>{
+  combined++;
+  if(name==='profile.enc')assert.equal(directChild,true,'profile read uses existing direct-child route');
+  const current=await originalMetadata(path,name);
+  if(!current)return null;
+  if(current.id===proof.id&&current.etag===proof.etag&&current.size===proof.size)return undefined;
+  return originalRead(path,name);
+ };
+ const freshRepo=new api.YearEndRepository();
+ await freshRepo.people();
+ await freshRepo.people();
+ assert.ok(combined>0,'existing display cache uses combined version check');
+ reset();const renamed=await freshRepo.renamePerson(id,'合成名称更新','','合成人物');
+ assert.equal(renamed.displayName,'合成名称更新');
+ assert.equal(count(calls.body,'/index.enc'),1,'rename reuses authenticated index body only after fresh version probe');
+ assert.equal(count(calls.meta,'/index.enc'),1);
+ assert.equal(calls.access,3,'root generation still checked before lock, after lock and before write');
+ assert.equal(count(calls.writes,'/profile.enc'),1);
+ // A state change during the final version probe must block the write.
+ hookMetadata=async key=>{if(key===join(parent,'index.enc')){const changed=idx();changed.persons[0].state='deleting';put(parent,'index.enc',changed);hookMetadata=null;}};
+ reset();await assert.rejects(freshRepo.renamePerson(id,'拒否対象','','合成名称更新'),/未登録または削除処理中/);
+ assert.equal(count(calls.body,'/index.enc'),2,'changed index must be read and validated');assert.equal(calls.writes.length,0);
+ put(parent,'index.enc',idx());
+ hookMetadata=async key=>{if(key===join(parent,'index.enc')){store.delete(key);hookMetadata=null;}};
+ reset();await assert.rejects(freshRepo.renamePerson(id,'拒否対象','','合成名称更新'),/従業員索引が見つかりません/);assert.equal(calls.writes.length,0);
+ put(parent,'index.enc',idx());
+ delete graph.readIfChanged;
+ console.log('PASS: rename uses one live active-index body and one version probe; changed/deleted index blocks mutation');
+}
+
+// Round 7: initial display may paint an authenticated navigation preview,
+// but a failed live root validation must not become a successful list.
+{
+ const oldAccess=navigationVault.yearEndAccess;
+ navigationCache={path:parent.join('/'),data:first.map(p=>({...p}))};
+ navigationVault.previewPeopleNavigation=async()=>structuredClone(navigationCache.data);
+ let previewed=false;
+ navigationVault.yearEndAccess=async()=>{assert.equal(previewed,true);throw Error('synthetic live root failure');};
+ await assert.rejects(new api.YearEndRepository().people(true,false,undefined,list=>{assert.equal(list.length,3);previewed=true;}),/live root failure/);
+ navigationVault.yearEndAccess=oldAccess;delete navigationVault.previewPeopleNavigation;
+ navigationAuthorized=false;let paints=0;
+ navigationVault.previewPeopleNavigation=async()=>structuredClone(navigationCache.data);
+ await assert.rejects(new api.YearEndRepository().people(true,false,undefined,()=>paints++),/接続状態/);
+ assert.equal(paints,0);navigationAuthorized=true;delete navigationVault.previewPeopleNavigation;
+ console.log('PASS: authenticated navigation preview is painted before live root validation; failed/unauthorized reads cannot become success');
+}
+// Parallel profile/index reads and live verified index reuse. The index may
+// change or disappear: no year may be returned for inactive employees.
+{
+ const originalRead=graph.read.bind(graph),originalMeta=graph.metadata.bind(graph);
+ graph.readIfChanged=async(path,name,_max,proof,directChild)=>{
+  if(path.includes('years'))assert.equal(directChild,true);
+  const current=await originalMeta(path,name);
+  if(!current)return null;
+  return current.id===proof.id&&current.etag===proof.etag&&current.size===proof.size?undefined:originalRead(path,name);
+ };
+ const freshRepo=new api.YearEndRepository();
+ let profileStarted=false,indexObservedParallel=false;
+ hookRead=async key=>{if(key.endsWith('/profile.enc'))profileStarted=true;if(key===join(parent,'index.enc')){await wait(10);indexObservedParallel=profileStarted;}};
+ await freshRepo.year(id,2026);hookRead=null;assert.equal(indexObservedParallel,true,'profile read must start before index fetch finishes');
+ reset();await freshRepo.year(id,2026);
+ assert.equal(count(calls.body,'/index.enc'),0);assert.equal(count(calls.meta,'/index.enc'),1);
+ assert.equal(count(calls.body,'/profile.enc'),0);assert.equal(count(calls.meta,'/profile.enc'),1);
+ const deleting=idx();deleting.persons[0].state='deleting';put(parent,'index.enc',deleting);
+ reset();await assert.rejects(freshRepo.year(id,2026),/未登録または削除処理中/);assert.equal(count(calls.body,'/years/'),0);
+ assert.equal(calls.writes.length,0);put(parent,'index.enc',idx());delete graph.readIfChanged;
+ console.log('PASS: live index/profile overlap, unchanged index version reuse, changed employee state blocks annual display');
+}

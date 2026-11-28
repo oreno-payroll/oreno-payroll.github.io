@@ -5,6 +5,7 @@ import { createAppStatus, type AppStatusKind } from './ui/appStatus';
 import {dashboardFreshnessLabel} from './ui/operationFeedback';
 import { safePdfFileName } from './storage/fileNaming';
 import { preparePdfHandoff } from './pdf/handoff';
+import { observePdfSender } from './cloud/perf';
 import {readNavigationParams,replaceNavigationParams,migrateLegacyNavigation} from './ui/navigationParams';
 import { capturePdfHandoffAuthorization,captureOperationAuthorization } from './cloud/auth';
 /** 給与ダッシュボード：OneDrive暗号化保管庫の解析JSONから集計する。 */
@@ -426,12 +427,12 @@ function renderList(job: Job, records: SavedPayrollSummary[], emptyMessage?:stri
     link.href = `./view/index.html#id=${encodeURIComponent(String(record.id))}`;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
-    const handoffPdf = () => preparePdfHandoff(link, record.id, async () => ({
+    const handoffPdf = (event:MouseEvent) => preparePdfHandoff(link, record.id, async () => ({
       fileName: record.fileName,
       pdf: await getOriginalForVerifiedEdit(record.id, recordSignature(record)),
-    }), capturePdfHandoffAuthorization());
-    link.addEventListener('click', event => { if (!event.defaultPrevented) handoffPdf(); });
-    link.addEventListener('auxclick', event => { if (event.button === 1 && !event.defaultPrevented) handoffPdf(); });
+    }), capturePdfHandoffAuthorization(),event,observePdfSender);
+    link.addEventListener('click', event => { if (!event.defaultPrevented) handoffPdf(event); });
+    link.addEventListener('auxclick', event => { if (event.button === 1 && !event.defaultPrevented) handoffPdf(event); });
     // The PDF name already conveys its period/type. Keep only useful figures below it.
     const amounts = document.createElement('span');
     amounts.className = 'statement-item__amounts';

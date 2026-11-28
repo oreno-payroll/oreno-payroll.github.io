@@ -129,7 +129,7 @@ console.log('PASS: actual transition uses the typed result, not the message body
  ctx.bulkSelected=new Set([1,2]);ctx.bulkTarget.value='synthetic-b';assert.notEqual(target('employer-bulk-save'),selection);
  ctx.bulkSelected.clear();assert.equal(target('employer-bulk-save'),undefined);
  assert.equal(target('verify-button'),file);ctx.filePicker.files=[otherFile];assert.notEqual(target('verify-button'),file);
- assert.equal(target('ye-restore-verify'),otherFile);assert.equal(target('employer-directory-load'),'whole-dataset');
+ assert.equal(target('ye-restore-verify'),otherFile);assert.equal(target('employer-directory-load'),'whole-dataset');assert.equal(target('employer-inventory-load'),'whole-dataset');
  assert.equal(target('restore-button'),undefined);assert.equal(target('cloud-cleanup-delete'),undefined);
 }
 console.log('PASS: settings retry identities distinguish employers, new drafts, bulk record sets and file selections');

@@ -228,7 +228,9 @@ test('personal PDF handoff keeps fragment ID, strips ticket and never exposes or
   const channel=new BroadcastChannel('payroll-pdf-handoff-v1-'+ticket);
   window.__syntheticPdfHandoffChannel=channel;
   channel.onmessage=event=>{
-   if(event.data?.action==='ready'&&event.data.id===id)channel.postMessage({action:'pdf',id,ticket,
+   if(event.data?.id!==id||event.data.ticket!==ticket)return;
+   if(event.data.action==='ready')channel.postMessage({action:'loading',id,ticket});
+   if(event.data.action==='start')channel.postMessage({action:'pdf',id,ticket,
     pdf:new Blob(['%PDF-1.7\nsynthetic-only\n%%EOF'],{type:'application/pdf'}),fileName:'synthetic-private-name.pdf'});
   };
  },{id,ticket});
@@ -971,7 +973,14 @@ test('shared loading notification keeps its anchor across save phases',async({pa
   await page.goto('/backup/index.html');
   const list=page.locator('#employer-directory-list'),modal=page.locator('#employer-directory-dialog'),bulk=page.locator('#employer-bulk-dialog');
   await expect(list).toContainText('架空本業');await expect(list).toContainText('2月・8月');
-  await expect(list).toContainText('架空副業');await expect(list).toContainText('名称未登録の勤務先');
+  await expect(list).toContainText('架空副業');
+  expect(await page.evaluate(()=>window.fixture.annualReads)).toBe(0);
+  await expect(page.locator('#employer-bulk-total')).toHaveText('未設定・名称未登録の明細');
+  await expect(list).not.toContainText('名称未登録の勤務先');
+  await page.locator('#employer-bulk-open').click();await expect(bulk).toBeVisible();
+  expect(await page.evaluate(()=>window.fixture.annualReads)).toBe(1);
+  await bulk.locator('#employer-bulk-close').click();await expect(bulk).toBeHidden();
+  await expect(list).toContainText('名称未登録の勤務先');
   await expect(list.locator('details')).not.toHaveAttribute('open','');
   await expect(page.locator('#employer-bulk-total')).toHaveText('勤務先未設定の明細 2件');
   const initialViewport=page.viewportSize(),initialTheme=await page.evaluate(()=>document.documentElement.getAttribute('data-theme'));

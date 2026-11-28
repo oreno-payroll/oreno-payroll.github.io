@@ -93,9 +93,11 @@ const mock=(data=records,originals=[],options={})=>({
 }
 {
  let evidence;const scopes=[];const vault=mock();
- vault.inspectDetachedOriginals=async(_reuse,scope)=>{scopes.push(scope);return {generation:'',indexEtag:'synthetic-index',years:[],originals:[]};};
+ inspections=0;
+ vault.inspectDetachedOriginals=async(_reuse,scope,expected)=>{assert.deepEqual(expected,records);scopes.push(scope);return {generation:'',indexEtag:'synthetic-index',years:[],originals:[]};};
  await inspectUploadRecovery(vault,attempt,signature,undefined,records,value=>{evidence=value;},false,['2026-12']);
  assert.deepEqual(scopes,[['2026-12']]);assert.deepEqual(evidence.scope,['2026-12']);
+ assert.equal(inspections,0,'scoped ordinary inventory owns the physical baseline verification');
 }
 await assert.rejects(()=>inspectUploadRecovery(mock(),[{...attempt[0],fileHash:'INVALID'}],signature),/保存対象を確認できません/);
 assert.equal(writes,0);
@@ -122,3 +124,46 @@ assert.match(edit,/await showOperationMessage\(\{title:'明細削除・一部完
 assert.doesNotMatch(main,/window\.alert\(`明細の削除は完了していますが/);
 assert.doesNotMatch(edit,/window\.alert\(`給与明細の削除は完了しました/);
 console.log('PASS: fail-closed Payroll upload recovery, no writes, real original verification, cross-tab change, double inspection, unified partial-delete messages, upload/ZIP labels');
+
+{
+ inspections=0;let scans=0;
+ const vault=mock(records,[{month:'2026-12',hash:b}]);
+ const original=vault.inspectDetachedOriginals;
+ vault.inspectDetachedOriginals=async(reuse,scope,expected)=>{
+  assert.deepEqual(expected,records);assert.deepEqual(scope,['2026-12']);scans++;return original();
+ };
+ await inspectUploadRecovery(vault,attempt,signature,undefined,records,undefined,false,['2026-12']);
+ assert.equal(scans,2,'both strict inventory boundaries retained');
+ assert.equal(inspections,0,'second strict inventory replaces separate record refresh');
+ console.log('PASS: scoped detached recovery integrates the physical baseline into both inventories');
+}
+
+{
+ let scans=0,evidence;const vault=mock(records,[{month:'2026-12',hash:b}]);
+ const original=vault.inspectDetachedOriginals;
+ vault.inspectDetachedOriginals=async()=>{scans++;return original();};
+ const result=await inspectUploadRecovery(vault,attempt,signature,undefined,records,value=>{evidence=value;},false,['2026-12'],true);
+ assert.equal(result.detached,1);assert.equal(scans,1);assert.equal(evidence.matches.length,1);
+ // Without a match, no saveBatch final scan would run: keep both checks.
+ const unmatched=mock(records,[{month:'2026-12',hash:'d'.repeat(64)}]);scans=0;
+ const scan=unmatched.inspectDetachedOriginals;unmatched.inspectDetachedOriginals=async()=>{scans++;return scan();};
+ await inspectUploadRecovery(unmatched,attempt,signature,undefined,records,()=>{},false,['2026-12'],true);
+ assert.equal(scans,2);
+ console.log('PASS: scoped matched recovery defers only the duplicate inventory to the mandatory saveBatch boundary');
+}
+
+{
+ // The locked strict inventory is the same observation used for ordinary
+ // no-conflict recovery. It must not be repeated before candidate matching.
+ const incoming=[attempt[1]],scope=['2026-12'],vault=mock(records,[]);
+ const inventory=await vault.inspectDetachedOriginals();
+ let scans=0;const scan=vault.inspectDetachedOriginals;vault.inspectDetachedOriginals=async(...args)=>{scans++;return scan(...args);};
+ inspections=0;
+ await inspectUploadRecovery(vault,incoming,signature,undefined,records,()=>{},false,scope,true,inventory);
+ assert.equal(scans,0);assert.equal(inspections,0);
+ // Existing duplicate candidates require their own original verification and
+ // a subsequent fresh strict inventory, not reuse of the earlier observation.
+ await inspectUploadRecovery(vault,attempt,signature,undefined,records,()=>{},false,scope,true,inventory);
+ assert.equal(scans,1);
+ console.log('PASS R14: ordinary locked strict inventory reuse; candidate read retains later boundary');
+}

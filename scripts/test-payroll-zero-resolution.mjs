@@ -7,7 +7,7 @@ import {
   ZERO_OPTIONAL_AMOUNT_LABELS,emptyOptionalAmounts,prepareOptionalZeros,
   isValidPayrollZeroResolution,reconcilePayrollZeroResolution,
 } from '../src/storage/payrollZeroResolution.ts';
-import {PAYROLL_FIELDS,validatePayrollForm} from '../src/storage/payrollValidation.ts';
+import {PAYROLL_FIELDS,validatePayrollForm,applicablePayrollForm,normalizeWorkDays} from '../src/storage/payrollValidation.ts';
 const src=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
 const form=(kind='salary')=>Object.assign(Object.fromEntries(PAYROLL_FIELDS.map(k=>[k,''])),{
  job:'main',kind,targetMonth:'2026-11',paymentDate:'2026-11-27',gross:'250000',net:'220000',
@@ -158,4 +158,22 @@ console.log('PASS: Round 4/B zero-resolution and import provenance regression');
   else{assert.equal(effective.bonusBase,'');assert.equal(effective.performanceBonus,'');assert.equal(effective.yearEndAdjustment,'0');}
  }
  console.log('PASS: editor zero checkbox previews only eligible empty fields without modifying draft inputs');
+}
+
+// The actual edit guard compares what would be persisted, not hidden fields.
+{
+ const edit=src('src/edit.ts'),start=edit.indexOf('function hasUnsavedChanges()'),end=edit.indexOf('function approvalFingerprint()',start);
+ assert.ok(start>=0&&end>start);
+ const previous={...form('salary'),bonusBase:'4000'},employerId='emp_'+'a'.repeat(32);
+ let draft={...previous,bonusBase:'9000'};
+ const ctx={record:{form:previous,employerId},employerInput:{value:employerId},effectiveValues:()=>draft,applicablePayrollForm,normalizeWorkDays};
+ const changed=runInNewContext(stripTypeScriptTypes(edit.slice(start,end),{mode:'strip'})+'\nhasUnsavedChanges',ctx);
+ assert.equal(changed(),false,'inactive salary bonus fields cannot trigger a save');
+ draft={...draft,residentTax:'0'};assert.equal(changed(),true,'blank and explicitly approved zero must differ');
+ draft={...previous};ctx.employerInput.value='';assert.equal(changed(),true,'employer change must be saved');
+ ctx.employerInput.value=employerId;draft={...previous,kind:'bonus'};assert.equal(changed(),true,'kind change must be saved');
+ ctx.record.form={...form('bonus'),workDays:'21'};draft={...ctx.record.form,workDays:'10'};assert.equal(changed(),false,'inactive bonus work days cannot trigger a save');
+ draft={...draft,gross:'260000'};assert.equal(changed(),true,'active money changes must be saved');
+ assert.match(edit,/JSON\.stringify\(applicablePayrollForm\(effectiveValues\(\)\)\)!==JSON\.stringify\(formValues\)/,'final approval compares the same effective draft as the saved payload');
+ console.log('PASS: semantic no-op, blank vs zero, employer/kind/amount edits and final effective-form guard');
 }
